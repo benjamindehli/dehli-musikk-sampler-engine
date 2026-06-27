@@ -12,6 +12,7 @@
 #include <juce_dsp/juce_dsp.h>
 
 #include "audio/VoiceEngine.h"
+#include "audio/FxChain.h"
 
 namespace dm
 {
@@ -46,12 +47,18 @@ public:
 
     int getActiveVoiceCount() const noexcept { return voiceEngine.getActiveVoiceCount(); }
 
+    // --- FX control (thread-safe); addressed like manifest bindings ---
+    void setEffectEnabled (int index, bool enabled)               { fxChain.setEffectEnabled (index, enabled); }
+    void setEffectParam (int index, const juce::String& p, float v) { fxChain.setEffectParam (index, p, v); }
+    int  getNumEffects() const noexcept                            { return fxChain.getNumEffects(); }
+
 private:
     double currentSampleRate { 0.0 };
     int    currentBlockSize  { 0 };
     int    currentNumChannels { 0 };
 
     VoiceEngine voiceEngine;
+    FxChain     fxChain;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SamplerEngine)
 };
