@@ -59,6 +59,7 @@ void FxChain::setEffects (const juce::Array<Effect>& effects, const SampleSource
         {
             slot->kind = Kind::convolution;
             slot->mix.store ((float) (e.wet ? *e.wet : (e.mix ? *e.mix : 0.0)));
+            slot->wetGainDb.store ((float) (e.outputLevel ? *e.outputLevel : 0.0));
             slot->convolution = std::make_unique<juce::dsp::Convolution>();
             if (prepared)
                 slot->convolution->prepare (spec);
@@ -110,17 +111,22 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
             if (mix <= 0.0f)
                 continue; // fully dry — skip the convolution entirely
 
+            const float wetGain = juce::Decibels::decibelsToGain (s.wetGainDb.load());
+
             dryBuffer.makeCopyOf (buffer, true);
 
             juce::dsp::ProcessContextReplacing<float> ctx (block);
             s.convolution->process (ctx); // buffer is now fully wet
 
+            // True dry/wet crossfade (mix=1 → fully wet, no dry). `wetGain` trims
+            // the wet so it can be balanced against the dry (the normalised IR is
+            // otherwise quieter than DecentSampler ran it).
             for (int ch = 0; ch < numCh; ++ch)
             {
                 auto* wet = buffer.getWritePointer (ch);
                 const auto* dry = dryBuffer.getReadPointer (juce::jmin (ch, dryBuffer.getNumChannels() - 1));
                 for (int i = 0; i < numSamples; ++i)
-                    wet[i] = dry[i] * (1.0f - mix) + wet[i] * mix;
+                    wet[i] = dry[i] * (1.0f - mix) + (wet[i] * wetGain) * mix;
             }
         }
     }
@@ -142,9 +148,11 @@ void FxChain::setEffectParam (int index, const juce::String& parameter, float va
         s.frequency.store (value);
     else if (parameter == "FX_MIX")
         s.mix.store (value);
+    else if (parameter == "FX_OUTPUT_LEVEL")   // convolution wet trim, in dB
+        s.wetGainDb.store (value);
     else if (parameter == "ENABLED")
         s.enabled.store (value > 0.5f);
-    // FX_DRIVE / FX_OUTPUT_LEVEL / resonance arrive with their effects later.
+    // FX_DRIVE / resonance arrive with their effects later.
 }
 
 } // namespace dm

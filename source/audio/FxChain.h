@@ -51,7 +51,8 @@ private:
         std::atomic<bool>  enabled { true };
         std::atomic<float> frequency { 20000.0f };  // lowpass cutoff (Hz)
         std::atomic<float> resonance { 0.707f };     // lowpass Q
-        std::atomic<float> mix { 0.0f };             // convolution wet amount 0..1
+        std::atomic<float> mix { 0.0f };             // convolution dry/wet 0..1 (1 = fully wet)
+        std::atomic<float> wetGainDb { 0.0f };       // convolution wet trim (dB, ±) to balance vs dry
 
         juce::dsp::StateVariableTPTFilter<float> filter;
         std::unique_ptr<juce::dsp::Convolution> convolution;
