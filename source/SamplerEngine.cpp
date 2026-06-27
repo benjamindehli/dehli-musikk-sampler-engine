@@ -8,7 +8,7 @@ SamplerEngine::~SamplerEngine() = default;
 
 juce::String SamplerEngine::getVersion()
 {
-    return "dehli-musikk-sampler-engine 0.1.0 (M0 skeleton)";
+    return "dehli-musikk-sampler-engine 0.2.0 (M2)";
 }
 
 void SamplerEngine::prepare (double sampleRate, int maximumBlockSize, int numChannels)
@@ -16,22 +16,28 @@ void SamplerEngine::prepare (double sampleRate, int maximumBlockSize, int numCha
     currentSampleRate  = sampleRate;
     currentBlockSize   = maximumBlockSize;
     currentNumChannels = numChannels;
-    // M2+: prepare voices, FX chain and sample sources here.
+    voiceEngine.prepare (sampleRate, maximumBlockSize, numChannels);
+    // M3+: prepare the FX chain here.
+}
+
+void SamplerEngine::setMode (const Mode& mode, const SampleSource& source)
+{
+    voiceEngine.setMode (mode, source);
 }
 
 void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
                                   juce::MidiBuffer& midi,
                                   juce::AudioPlayHead* playHead)
 {
-    juce::ignoreUnused (midi, playHead);
+    juce::ignoreUnused (playHead);   // M6 reads transport for the auto-strum sequencer
 
-    // M0: silence. Real voice rendering arrives in M2.
-    buffer.clear();
+    voiceEngine.processBlock (buffer, midi);
+    // M3+: run the FX chain (lowpass + convolution) over `buffer` here.
 }
 
 void SamplerEngine::releaseResources()
 {
-    // M2+: free voices/FX state.
+    voiceEngine.releaseResources();
 }
 
 } // namespace dm
