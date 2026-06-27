@@ -64,6 +64,13 @@ private:
         juce::StringArray silencedByTags;
         juce::ADSR adsr;
         juce::uint32 startOrder = 0;
+
+        // Short anti-click ramp, independent of the amp ADSR: fades in on note
+        // start and out when choked/stolen so a mono retrigger never cuts the
+        // waveform at a non-zero value.
+        float declickGain = 1.0f;
+        float declickDelta = 0.0f;   // >0 fading in, <0 fading out
+        bool  fadingOut = false;
     };
 
     void renderChunk (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);

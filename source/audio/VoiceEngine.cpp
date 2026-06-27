@@ -121,18 +121,22 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
     if (zone == nullptr)
         return;
 
-    // Tag choke: stop any active voice that this voice's tags silence.
-    // M2: a hard stop (mono retrigger). A short fade lands in a later milestone.
+    const int fadeOutSamples = juce::jmax (1, (int) (sampleRate * 0.004)); // ~4 ms declick
+
+    // Tag choke: fade out (don't hard-cut) any active voice this voice silences,
+    // so a fast mono retrigger doesn't click. The choked voice keeps rendering in
+    // its own slot until the ramp reaches zero.
     if (! zone->tags.isEmpty())
     {
         for (auto& v : voices)
         {
-            if (! v.active)
+            if (! v.active || v.fadingOut)
                 continue;
             for (const auto& t : zone->tags)
                 if (v.silencedByTags.contains (t))
                 {
-                    v.active = false;
+                    v.fadingOut = true;
+                    v.declickDelta = -1.0f / (float) fadeOutSamples;
                     break;
                 }
         }
@@ -159,6 +163,12 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
     v->adsr.setParameters (zone->adsr);
     v->adsr.noteOn();
     v->startOrder = ++orderCounter;
+
+    // No fade-in — the sample's own start handles the onset. The declick ramp is
+    // only used for the choke/steal fade-out below.
+    v->fadingOut = false;
+    v->declickGain = 1.0f;
+    v->declickDelta = 0.0f;
 }
 
 void VoiceEngine::handleNoteOff (int note)
@@ -192,15 +202,30 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             }
 
             const float env = v.adsr.getNextSample();
+            const float g = env * v.gain * v.declickGain;
 
             for (int ch = 0; ch < outChannels; ++ch)
             {
                 const int srcCh = juce::jmin (ch, srcChannels - 1);
                 const float s = interpolate (v.buffer->audio, srcCh, v.position);
-                buffer.addSample (ch, startSample + i, s * env * v.gain);
+                buffer.addSample (ch, startSample + i, s * g);
             }
 
             v.position += v.rate;
+
+            // Advance the anti-click ramp.
+            v.declickGain += v.declickDelta;
+            if (v.declickDelta > 0.0f && v.declickGain >= 1.0f)
+            {
+                v.declickGain = 1.0f;
+                v.declickDelta = 0.0f;
+            }
+
+            if (v.fadingOut && v.declickGain <= 0.0f)   // choke/steal fade complete
+            {
+                v.active = false;
+                break;
+            }
 
             if (! v.adsr.isActive())             // release finished
             {
