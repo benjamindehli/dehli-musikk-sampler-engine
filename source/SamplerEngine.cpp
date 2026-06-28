@@ -80,12 +80,31 @@ juce::StringArray SamplerEngine::getModeNames() const
     return names;
 }
 
+void SamplerEngine::resetOverrides()
+{
+    for (auto* o : { &ovLowpassEnabled, &ovLowpassFreq, &ovReverbMix, &ovReverbGain,
+                     &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease })
+        o->touched.store (false);
+    for (auto& g : ovGroupVol)
+        g.touched.store (false);
+    for (auto& g : ovGroupEnabled)
+        g.touched.store (false);
+    for (auto& e : ovEffectEnabled)
+        e.touched.store (false);
+    ovSequencerRateTouched.store (false);
+    ovSequencerIndexTouched.store (false);
+}
+
 void SamplerEngine::setActiveMode (int index)
 {
     if (library == nullptr || index < 0 || index >= library->modes.size())
         return;
 
     activeModeIndex = index;
+
+    // Each mode is independent: drop the previous mode's UI overrides so the new
+    // one starts from its own manifest defaults (the editor re-applies its controls).
+    resetOverrides();
 
     if (sampleRate <= 0.0)
         return; // not prepared yet; prepare() will build this mode
@@ -103,9 +122,25 @@ void SamplerEngine::setActiveMode (int index)
 void SamplerEngine::applyFxOverrides (ModeRender& mr)
 {
     if (ovLowpassEnabled.touched.load()) mr.fx.setLowpassEnabled (ovLowpassEnabled.value.load() > 0.5f);
+    for (int i = 0; i < kMaxEffects; ++i)
+        if (ovEffectEnabled[i].touched.load())
+            mr.fx.setEffectEnabled (i, ovEffectEnabled[i].value.load() > 0.5f);
     if (ovLowpassFreq.touched.load())    mr.fx.setLowpassFrequency (ovLowpassFreq.value.load());
     if (ovReverbMix.touched.load())      mr.fx.setReverbMix (ovReverbMix.value.load());
     if (ovReverbGain.touched.load())     mr.fx.setReverbWetGainDb (ovReverbGain.value.load());
+
+    if (ovAmpAttack.touched.load())  mr.voices.setAmpAttack  (ovAmpAttack.value.load());
+    if (ovAmpDecay.touched.load())   mr.voices.setAmpDecay   (ovAmpDecay.value.load());
+    if (ovAmpSustain.touched.load()) mr.voices.setAmpSustain (ovAmpSustain.value.load());
+    if (ovAmpRelease.touched.load()) mr.voices.setAmpRelease (ovAmpRelease.value.load());
+
+    for (int i = 0; i < kMaxGroupVol; ++i)
+        if (ovGroupVol[i].touched.load())
+            mr.voices.setGroupVolume (i, ovGroupVol[i].value.load());
+
+    for (int i = 0; i < kMaxGroupVol; ++i)
+        if (ovGroupEnabled[i].touched.load())
+            mr.voices.setGroupEnabled (i, ovGroupEnabled[i].value.load() > 0.5f);
 }
 
 void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
@@ -161,6 +196,15 @@ void SamplerEngine::setLowpassEnabled (bool enabled)
     ovLowpassEnabled.touched.store (true);
 }
 
+void SamplerEngine::setEffectEnabled (int index, bool enabled)
+{
+    if (index >= 0 && index < kMaxEffects)
+    {
+        ovEffectEnabled[index].value.store (enabled ? 1.0f : 0.0f);
+        ovEffectEnabled[index].touched.store (true);
+    }
+}
+
 void SamplerEngine::setLowpassFrequency (float hz)
 {
     ovLowpassFreq.value.store (hz);
@@ -189,6 +233,29 @@ void SamplerEngine::setSequencerIndexOffset (int offset)
 {
     ovSequencerIndex.store (offset);
     ovSequencerIndexTouched.store (true);
+}
+
+void SamplerEngine::setAmpAttack  (float s) { ovAmpAttack.value.store (s);  ovAmpAttack.touched.store (true); }
+void SamplerEngine::setAmpDecay   (float s) { ovAmpDecay.value.store (s);   ovAmpDecay.touched.store (true); }
+void SamplerEngine::setAmpSustain (float l) { ovAmpSustain.value.store (l); ovAmpSustain.touched.store (true); }
+void SamplerEngine::setAmpRelease (float s) { ovAmpRelease.value.store (s); ovAmpRelease.touched.store (true); }
+
+void SamplerEngine::setGroupVolume (int groupIndex, float volume)
+{
+    if (groupIndex >= 0 && groupIndex < kMaxGroupVol)
+    {
+        ovGroupVol[groupIndex].value.store (volume);
+        ovGroupVol[groupIndex].touched.store (true);
+    }
+}
+
+void SamplerEngine::setGroupEnabled (int groupIndex, bool enabled)
+{
+    if (groupIndex >= 0 && groupIndex < kMaxGroupVol)
+    {
+        ovGroupEnabled[groupIndex].value.store (enabled ? 1.0f : 0.0f);
+        ovGroupEnabled[groupIndex].touched.store (true);
+    }
 }
 
 } // namespace dm

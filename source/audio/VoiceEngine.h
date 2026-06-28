@@ -37,6 +37,20 @@ public:
     void allNotesOff();
     int  getActiveVoiceCount() const noexcept;
 
+    // Runtime amp overrides (from UI controls / automation). Negative = "no
+    // override, use the mode/group value". Applied to new + active voices.
+    void setAmpAttack (float seconds);
+    void setAmpDecay (float seconds);
+    void setAmpSustain (float level);
+    void setAmpRelease (float seconds);
+
+    /** Per-group output volume multiplier (AMP_VOLUME, e.g. Voice1/Voice2). */
+    void setGroupVolume (int groupIndex, float volume);
+
+    /** Enable/disable a group at runtime (group-level ENABLED, e.g. the Keyboard
+        mode's Mono/Poly button switching between a mono and a poly group). */
+    void setGroupEnabled (int groupIndex, bool enabled);
+
 private:
     struct Zone
     {
@@ -70,6 +84,7 @@ private:
         int note = -1;
         int groupIndex = -1;
         float gain = 1.0f;
+        juce::ADSR::Parameters baseAdsr;   // the zone's ADSR, before runtime overrides
 
         bool loopEnabled = false;
         double loopEnd = 0.0, loopLen = 0.0, loopXf = 0.0;
@@ -91,6 +106,7 @@ private:
     void handleNoteOff (int note);
     Voice* allocateVoice();
     const Zone* selectZone (int note);   // applies round-robin; mutates rr state
+    juce::ADSR::Parameters effectiveAdsr (const juce::ADSR::Parameters& base) const;
 
     double sampleRate = 44100.0;
     juce::Array<Zone> zones;
@@ -101,6 +117,11 @@ private:
     juce::Array<int> rrCounter;   // next candidate for round_robin mode
     juce::Array<int> rrLast;      // last pick for random mode (avoid repeats)
     juce::Random rrRandom;
+
+    // Runtime amp overrides (negative = none) + per-group volume multipliers.
+    float ovAttack { -1.0f }, ovDecay { -1.0f }, ovSustain { -1.0f }, ovRelease { -1.0f };
+    juce::Array<float> groupVolume;
+    juce::Array<bool>  groupEnabled;
 };
 
 } // namespace dm

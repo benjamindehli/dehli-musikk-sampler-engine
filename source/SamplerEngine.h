@@ -60,6 +60,7 @@ public:
     // Temporary dev FX controls — mode-aware: applied each block to the active
     // mode's first lowpass/convolution. Replaced by M4's data-driven UI + APVTS.
     void setLowpassEnabled (bool enabled);
+    void setEffectEnabled (int index, bool enabled);   // enable/bypass any effect slot (lowpass, convolution, ...)
     void setLowpassFrequency (float hz);
     void setReverbMix (float amount);
     void setReverbWetGainDb (float db);
@@ -70,6 +71,14 @@ public:
 
     /** Runtime SEQ_INDEX offset for the active mode (e.g. the chord-ordering menu). */
     void setSequencerIndexOffset (int offset);
+
+    // Amp envelope + per-group volume overrides for the active mode (ENV_*, AMP_VOLUME).
+    void setAmpAttack (float seconds);
+    void setAmpDecay (float seconds);
+    void setAmpSustain (float level);
+    void setAmpRelease (float seconds);
+    void setGroupVolume (int groupIndex, float volume);
+    void setGroupEnabled (int groupIndex, bool enabled);
 
 private:
     struct ModeRender
@@ -82,6 +91,7 @@ private:
     ModeRender* buildMode (int index) const;   // message thread
     void setCurrentDirect (ModeRender* mr);     // message thread, audio stopped
     void applyFxOverrides (ModeRender& mr);     // audio thread
+    void resetOverrides();                      // clear per-mode UI overrides
 
     const PresetLibrary* library { nullptr };
     const SampleSource*  source  { nullptr };
@@ -99,6 +109,12 @@ private:
     // manifest defaults (and survive mode switches).
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
+    FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease;
+    static constexpr int kMaxGroupVol = 8;
+    FxOverride ovGroupVol[kMaxGroupVol];
+    FxOverride ovGroupEnabled[kMaxGroupVol];
+    static constexpr int kMaxEffects = 8;
+    FxOverride ovEffectEnabled[kMaxEffects];
 
     std::atomic<bool>  ovSequencerRateTouched { false };
     std::atomic<double> ovSequencerRate { 0.0 };

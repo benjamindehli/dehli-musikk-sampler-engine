@@ -82,6 +82,15 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     rrCounter.clearQuick(); rrCounter.insertMultiple (0, 0, numGroups);
     rrLast.clearQuick();    rrLast.insertMultiple (0, -1, numGroups);
     rrRandom.setSeed (20240101);   // fixed → reproducible variation across sessions
+    groupVolume.clearQuick();  groupVolume.insertMultiple (0, 1.0f, numGroups);
+    groupEnabled.clearQuick(); groupEnabled.insertMultiple (0, true, numGroups);
+
+    // Tags with polyphony 1 make their groups monophonic. Reuse the choke
+    // mechanism: add such a group's own mono tags to its silencedByTags.
+    juce::StringArray monoTags;
+    for (const auto& t : mode.tags)
+        if (t.polyphony && *t.polyphony <= 1)
+            monoTags.add (t.name);
 
     for (int gi = 0; gi < numGroups; ++gi)
     {
@@ -95,6 +104,9 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         proto.tags = g.tags;
         if (g.silencing)
             proto.silencedByTags = g.silencing->byTags;
+        for (const auto& tg : g.tags)               // tag-polyphony 1 → self-choke (mono)
+            if (monoTags.contains (tg) && ! proto.silencedByTags.contains (tg))
+                proto.silencedByTags.add (tg);
         if (g.roundRobin)
         {
             proto.roundRobin = true;
@@ -141,10 +153,12 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
 
 const VoiceEngine::Zone* VoiceEngine::selectZone (int note)
 {
-    // First zone covering the note decides the group.
+    auto groupOn = [this] (int g) { return g < 0 || g >= groupEnabled.size() || groupEnabled[g]; };
+
+    // First enabled zone covering the note decides the group.
     int first = -1;
     for (int i = 0; i < zones.size(); ++i)
-        if (note >= zones[i].loNote && note <= zones[i].hiNote)
+        if (note >= zones[i].loNote && note <= zones[i].hiNote && groupOn (zones[i].groupIndex))
         {
             first = i;
             break;
@@ -253,8 +267,9 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
     const float velGain = 1.0f - zone->velTrack + zone->velTrack * velocity;
     v->gain = zone->gain * velGain;
 
+    v->baseAdsr = zone->adsr;
     v->adsr.setSampleRate (sampleRate);
-    v->adsr.setParameters (zone->adsr);
+    v->adsr.setParameters (effectiveAdsr (v->baseAdsr));
     v->adsr.noteOn();
     v->startOrder = ++orderCounter;
 
@@ -296,7 +311,9 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             }
 
             const float env = v.adsr.getNextSample();
-            const float g = env * v.gain * v.declickGain;
+            const float gv = (v.groupIndex >= 0 && v.groupIndex < groupVolume.size())
+                                 ? groupVolume[v.groupIndex] : 1.0f;
+            const float g = env * v.gain * v.declickGain * gv;
 
             for (int ch = 0; ch < outChannels; ++ch)
             {
@@ -371,6 +388,35 @@ int VoiceEngine::getActiveVoiceCount() const noexcept
         if (v.active)
             ++n;
     return n;
+}
+
+juce::ADSR::Parameters VoiceEngine::effectiveAdsr (const juce::ADSR::Parameters& base) const
+{
+    auto p = base;
+    if (ovAttack  >= 0.0f) p.attack  = ovAttack;
+    if (ovDecay   >= 0.0f) p.decay   = ovDecay;
+    if (ovSustain >= 0.0f) p.sustain = ovSustain;
+    if (ovRelease >= 0.0f) p.release = ovRelease;
+    return p;
+}
+
+// Amp overrides apply to NEW voices only — re-setting a sounding voice's ADSR
+// mid-note can cut it off, so held notes keep the envelope they started with.
+void VoiceEngine::setAmpAttack  (float s) { ovAttack  = s; }
+void VoiceEngine::setAmpDecay   (float s) { ovDecay   = s; }
+void VoiceEngine::setAmpSustain (float l) { ovSustain = l; }
+void VoiceEngine::setAmpRelease (float s) { ovRelease = s; }
+
+void VoiceEngine::setGroupVolume (int groupIndex, float volume)
+{
+    if (groupIndex >= 0 && groupIndex < groupVolume.size())
+        groupVolume.set (groupIndex, volume);
+}
+
+void VoiceEngine::setGroupEnabled (int groupIndex, bool enabled)
+{
+    if (groupIndex >= 0 && groupIndex < groupEnabled.size())
+        groupEnabled.set (groupIndex, enabled);
 }
 
 } // namespace dm
