@@ -333,6 +333,22 @@ Ui parseUi (const var& v)
             if (auto* a = get (t, "controls").getArray()) for (auto& e : *a) tab.controls.add (parseControl (e));
             if (auto* a = get (t, "buttons").getArray())  for (auto& e : *a) tab.buttons.add  (parseButton (e));
             if (auto* a = get (t, "images").getArray())   for (auto& e : *a) tab.images.add   (parseImage (e));
+            if (auto* a = get (t, "menus").getArray())
+                for (auto& e : *a)
+                {
+                    Menu menu;
+                    menu.rect  = parseRect (get (e, "rect"));
+                    menu.value = intg (e, "value", 1);
+                    if (auto* opts = get (e, "options").getArray())
+                        for (auto& o : *opts)
+                        {
+                            MenuOption mo;
+                            mo.name     = str (o, "name");
+                            mo.seqIndex = intg (o, "seqIndex", 0);
+                            menu.options.add (mo);
+                        }
+                    tab.menus.add (menu);
+                }
             ui.tabs.add (tab);
         }
     }
@@ -386,6 +402,20 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
     if (auto* a = get (v, "effects").getArray())    for (auto& e : *a) m.effects.add (parseEffect (e));
     if (auto* a = get (v, "sequences").getArray())  for (auto& e : *a) m.sequences.add (parseSequence (e));
     if (auto* a = get (v, "modulators").getArray()) for (auto& e : *a) m.modulators.add (parseLfo (e));
+
+    if (auto* a = get (v, "sequenceTriggers").getArray())
+        for (auto& t : *a)
+        {
+            SequenceTrigger st;
+            st.note          = intg (t, "note", 60);
+            st.sequence      = intg (t, "sequence", 0);
+            st.transpose     = intg (t, "transpose", 0);
+            st.rate          = dbl (t, "rate", 10.0);
+            st.loop          = boolean (t, "loop", false);
+            st.trackVelocity = boolean (t, "trackVelocity", true);
+            st.swallow       = boolean (t, "swallow", true);
+            m.sequenceTriggers.add (st);
+        }
 
     m.ui = parseUi (get (v, "ui"));
     return m;

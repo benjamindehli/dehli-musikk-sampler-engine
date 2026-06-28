@@ -17,6 +17,7 @@
 
 #include "audio/VoiceEngine.h"
 #include "audio/FxChain.h"
+#include "audio/NoteSequencer.h"
 
 #include <atomic>
 
@@ -63,11 +64,19 @@ public:
     void setReverbMix (float amount);
     void setReverbWetGainDb (float db);
 
+    /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
+        each trigger's own rate. (The future StrumSpeed control.) */
+    void setSequencerRate (double stepsPerSecond);
+
+    /** Runtime SEQ_INDEX offset for the active mode (e.g. the chord-ordering menu). */
+    void setSequencerIndexOffset (int offset);
+
 private:
     struct ModeRender
     {
-        VoiceEngine voices;
-        FxChain     fx;
+        NoteSequencer sequencer;
+        VoiceEngine   voices;
+        FxChain       fx;
     };
 
     ModeRender* buildMode (int index) const;   // message thread
@@ -90,6 +99,13 @@ private:
     // manifest defaults (and survive mode switches).
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
+
+    std::atomic<bool>  ovSequencerRateTouched { false };
+    std::atomic<double> ovSequencerRate { 0.0 };
+    std::atomic<bool>  ovSequencerIndexTouched { false };
+    std::atomic<int>    ovSequencerIndex { 0 };
+
+    juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SamplerEngine)
 };

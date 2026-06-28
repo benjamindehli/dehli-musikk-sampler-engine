@@ -20,6 +20,7 @@ juce::String SamplerEngine::getVersion()
 SamplerEngine::ModeRender* SamplerEngine::buildMode (int index) const
 {
     auto* mr = new ModeRender();
+    mr->sequencer.prepare (sampleRate);
     mr->voices.prepare (sampleRate, maxBlockSize, numChannels);
     mr->fx.prepare (sampleRate, maxBlockSize, numChannels);
 
@@ -27,6 +28,7 @@ SamplerEngine::ModeRender* SamplerEngine::buildMode (int index) const
         && index >= 0 && index < library->modes.size())
     {
         const auto& mode = library->modes.getReference (index);
+        mr->sequencer.configure (mode);
         mr->voices.setMode (mode, *source);
         mr->fx.setEffects (mode.effects, *source);
     }
@@ -127,8 +129,17 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
         return;
     }
 
+    if (ovSequencerRateTouched.load())
+        current->sequencer.setRate (ovSequencerRate.load());
+    if (ovSequencerIndexTouched.load())
+        current->sequencer.setIndexOffset (ovSequencerIndex.load());
+
     applyFxOverrides (*current);
-    current->voices.processBlock (buffer, midi);   // clears + renders voices
+
+    // Sequencer turns trigger keys into the strummed/played notes; non-trigger
+    // keys pass straight through.
+    current->sequencer.process (midi, sequencedMidi, buffer.getNumSamples());
+    current->voices.processBlock (buffer, sequencedMidi);
     current->fx.process (buffer);
 }
 
@@ -166,6 +177,18 @@ void SamplerEngine::setReverbWetGainDb (float db)
 {
     ovReverbGain.value.store (db);
     ovReverbGain.touched.store (true);
+}
+
+void SamplerEngine::setSequencerRate (double stepsPerSecond)
+{
+    ovSequencerRate.store (stepsPerSecond);
+    ovSequencerRateTouched.store (true);
+}
+
+void SamplerEngine::setSequencerIndexOffset (int offset)
+{
+    ovSequencerIndex.store (offset);
+    ovSequencerIndexTouched.store (true);
 }
 
 } // namespace dm

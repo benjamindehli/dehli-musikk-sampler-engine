@@ -303,6 +303,28 @@ var writeUi (const Ui& ui)
         for (const auto& im : t.images) images.add (writeImage (im));
         to.set ("images", fromArray (images));
 
+        if (! t.menus.isEmpty())
+        {
+            juce::Array<var> menus;
+            for (const auto& m : t.menus)
+            {
+                Obj mo;
+                mo.set ("rect", writeRect (m.rect));
+                mo.set ("value", m.value);
+                juce::Array<var> opts;
+                for (const auto& op : m.options)
+                {
+                    Obj oo;
+                    oo.set ("name", op.name);
+                    oo.set ("seqIndex", op.seqIndex);
+                    opts.add (oo.toVar());
+                }
+                mo.set ("options", fromArray (opts));
+                menus.add (mo.toVar());
+            }
+            to.set ("menus", fromArray (menus));
+        }
+
         tabs.add (to.toVar());
     }
     o.set ("tabs", fromArray (tabs));
@@ -357,6 +379,23 @@ var writeMode (const Mode& m)
         juce::Array<var> seqs;
         for (const auto& s : m.sequences) seqs.add (writeSequence (s));
         o.set ("sequences", fromArray (seqs));
+    }
+    if (! m.sequenceTriggers.isEmpty())
+    {
+        juce::Array<var> triggers;
+        for (const auto& t : m.sequenceTriggers)
+        {
+            Obj to;
+            to.set ("note", t.note);
+            to.set ("sequence", t.sequence);
+            to.set ("transpose", t.transpose);
+            to.set ("rate", t.rate);
+            to.set ("loop", t.loop);
+            to.set ("trackVelocity", t.trackVelocity);
+            to.set ("swallow", t.swallow);
+            triggers.add (to.toVar());
+        }
+        o.set ("sequenceTriggers", fromArray (triggers));
     }
     if (! m.modulators.isEmpty())
     {

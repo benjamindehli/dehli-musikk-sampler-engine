@@ -49,6 +49,16 @@ private:
         int groupIndex = -1;
         juce::StringArray tags;
         juce::StringArray silencedByTags;
+
+        // Round-robin: zones sharing a groupIndex with roundRobin set are the
+        // candidates for that group; one is chosen per trigger (see selectZone).
+        bool roundRobin = false;
+        juce::String rrMode;   // "round_robin" cycles; anything else = random
+
+        // Loop (validated against the buffer length at setMode; disabled if the
+        // points fall outside the actual audio).
+        bool loopEnabled = false;
+        int  loopStart = 0, loopEnd = 0, loopLen = 0, loopXf = 0;
     };
 
     struct Voice
@@ -60,6 +70,9 @@ private:
         int note = -1;
         int groupIndex = -1;
         float gain = 1.0f;
+
+        bool loopEnabled = false;
+        double loopEnd = 0.0, loopLen = 0.0, loopXf = 0.0;
         juce::StringArray tags;
         juce::StringArray silencedByTags;
         juce::ADSR adsr;
@@ -77,12 +90,17 @@ private:
     void handleNoteOn (int note, float velocity);
     void handleNoteOff (int note);
     Voice* allocateVoice();
-    const Zone* findZone (int note) const;
+    const Zone* selectZone (int note);   // applies round-robin; mutates rr state
 
     double sampleRate = 44100.0;
     juce::Array<Zone> zones;
     std::vector<Voice> voices;
     juce::uint32 orderCounter = 0;
+
+    // Round-robin state, indexed by groupIndex.
+    juce::Array<int> rrCounter;   // next candidate for round_robin mode
+    juce::Array<int> rrLast;      // last pick for random mode (avoid repeats)
+    juce::Random rrRandom;
 };
 
 } // namespace dm

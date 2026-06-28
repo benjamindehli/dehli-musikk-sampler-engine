@@ -35,6 +35,22 @@ float interpolate (const juce::AudioBuffer<float>& buf, int ch, double pos)
     const float frac = (float) (pos - (double) i0);
     return s0 + frac * (buf.getSample (ch, i1) - s0);
 }
+
+// Loop read with an equal-gain crossfade across the last `xf` frames before
+// loopEnd: blends the approach-to-loopEnd with the matching material before
+// loopStart (pos - loopLen), so the wrap is seamless.
+float readLooped (const juce::AudioBuffer<float>& buf, int ch, double pos,
+                  double loopEnd, double loopLen, double xf)
+{
+    const float base = interpolate (buf, ch, pos);
+    if (xf > 0.0 && pos > loopEnd - xf)
+    {
+        const double t = (pos - (loopEnd - xf)) / xf;        // 0 → 1 across the fade
+        const float prev = interpolate (buf, ch, pos - loopLen);
+        return (float) ((1.0 - t) * base + t * prev);
+    }
+    return base;
+}
 } // namespace
 
 VoiceEngine::VoiceEngine()
@@ -62,7 +78,12 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     allNotesOff();
     zones.clearQuick();
 
-    for (int gi = 0; gi < mode.groups.size(); ++gi)
+    const int numGroups = mode.groups.size();
+    rrCounter.clearQuick(); rrCounter.insertMultiple (0, 0, numGroups);
+    rrLast.clearQuick();    rrLast.insertMultiple (0, -1, numGroups);
+    rrRandom.setSeed (20240101);   // fixed → reproducible variation across sessions
+
+    for (int gi = 0; gi < numGroups; ++gi)
     {
         const auto& g = mode.groups.getReference (gi);
 
@@ -74,6 +95,11 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         proto.tags = g.tags;
         if (g.silencing)
             proto.silencedByTags = g.silencing->byTags;
+        if (g.roundRobin)
+        {
+            proto.roundRobin = true;
+            proto.rrMode = g.roundRobin->mode;
+        }
         const bool groupPitchKeyTrack = g.pitchKeyTrack ? *g.pitchKeyTrack : false;
 
         for (const auto& s : g.samples)
@@ -88,17 +114,80 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
             z.rootNote = s.rootNote;
             z.buffer = buffer;
             z.pitchKeyTrack = s.pitchKeyTrack || groupPitchKeyTrack;
+
+            // Loop, validated against the actual decoded length — out-of-range
+            // points (e.g. authored against a stale .dspreset length) fall back to
+            // one-shot rather than reading past the buffer.
+            if (s.loop.enabled && s.loop.start && s.loop.end)
+            {
+                const int frames = buffer->getNumFrames();
+                const int st = *s.loop.start;
+                const int en = *s.loop.end;
+                if (st >= 0 && en > st && en <= frames)
+                {
+                    z.loopEnabled = true;
+                    z.loopStart = st;
+                    z.loopEnd   = en;
+                    z.loopLen   = en - st;
+                    z.loopXf    = juce::jlimit (0, juce::jmin (z.loopLen, st),
+                                                s.loop.crossfade.value_or (0));
+                }
+            }
+
             zones.add (z);
         }
     }
 }
 
-const VoiceEngine::Zone* VoiceEngine::findZone (int note) const
+const VoiceEngine::Zone* VoiceEngine::selectZone (int note)
 {
-    for (const auto& z : zones)
-        if (note >= z.loNote && note <= z.hiNote)
-            return &z;
-    return nullptr;
+    // First zone covering the note decides the group.
+    int first = -1;
+    for (int i = 0; i < zones.size(); ++i)
+        if (note >= zones[i].loNote && note <= zones[i].hiNote)
+        {
+            first = i;
+            break;
+        }
+    if (first < 0)
+        return nullptr;
+
+    const auto& z0 = zones.getReference (first);
+    if (! z0.roundRobin)
+        return &zones.getReference (first);
+
+    // Round-robin: gather this group's candidates covering the note, pick one.
+    juce::Array<int> candidates;
+    for (int i = 0; i < zones.size(); ++i)
+    {
+        const auto& z = zones.getReference (i);
+        if (z.groupIndex == z0.groupIndex && note >= z.loNote && note <= z.hiNote)
+            candidates.add (i);
+    }
+    if (candidates.size() <= 1)
+        return &zones.getReference (first);
+
+    const int g = z0.groupIndex;
+    int pick = 0;
+
+    if (z0.rrMode == "round_robin" || z0.rrMode == "round-robin")
+    {
+        const int c = (g >= 0 && g < rrCounter.size()) ? rrCounter[g] : 0;
+        pick = c % candidates.size();
+        if (g >= 0 && g < rrCounter.size())
+            rrCounter.set (g, c + 1);
+    }
+    else // "random" (and any unknown mode)
+    {
+        pick = rrRandom.nextInt (candidates.size());
+        if (g >= 0 && g < rrLast.size() && pick == rrLast[g])
+            pick = (pick + 1) % candidates.size();   // avoid immediate repeat
+    }
+
+    if (g >= 0 && g < rrLast.size())
+        rrLast.set (g, pick);
+
+    return &zones.getReference (candidates[pick]);
 }
 
 VoiceEngine::Voice* VoiceEngine::allocateVoice()
@@ -117,7 +206,7 @@ VoiceEngine::Voice* VoiceEngine::allocateVoice()
 
 void VoiceEngine::handleNoteOn (int note, float velocity)
 {
-    const auto* zone = findZone (note);
+    const auto* zone = selectZone (note);
     if (zone == nullptr)
         return;
 
@@ -155,6 +244,11 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
     if (zone->pitchKeyTrack)
         rate *= std::pow (2.0, (note - zone->rootNote) / 12.0);
     v->rate = rate;
+
+    v->loopEnabled = zone->loopEnabled;
+    v->loopEnd = (double) zone->loopEnd;
+    v->loopLen = (double) zone->loopLen;
+    v->loopXf  = (double) zone->loopXf;
 
     const float velGain = 1.0f - zone->velTrack + zone->velTrack * velocity;
     v->gain = zone->gain * velGain;
@@ -195,7 +289,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
         for (int i = 0; i < numSamples; ++i)
         {
-            if (v.position >= (double) frames)   // one-shot reached the end
+            if (! v.loopEnabled && v.position >= (double) frames)   // one-shot end
             {
                 v.active = false;
                 break;
@@ -207,11 +301,16 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             for (int ch = 0; ch < outChannels; ++ch)
             {
                 const int srcCh = juce::jmin (ch, srcChannels - 1);
-                const float s = interpolate (v.buffer->audio, srcCh, v.position);
+                const float s = v.loopEnabled
+                                  ? readLooped (v.buffer->audio, srcCh, v.position,
+                                                v.loopEnd, v.loopLen, v.loopXf)
+                                  : interpolate (v.buffer->audio, srcCh, v.position);
                 buffer.addSample (ch, startSample + i, s * g);
             }
 
             v.position += v.rate;
+            if (v.loopEnabled && v.position >= v.loopEnd)
+                v.position -= v.loopLen;
 
             // Advance the anti-click ramp.
             v.declickGain += v.declickDelta;

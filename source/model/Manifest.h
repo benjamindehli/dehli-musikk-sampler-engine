@@ -203,6 +203,20 @@ struct NoteSequence
     juce::Array<SequenceNote> notes;
 };
 
+/** Binds a played key to a sequence: pressing `note` fires `sequence` (index into
+    Mode.sequences) as timed note events. The engine's NoteSequencer interprets
+    these; "auto-strum" is just this with one trigger per chord key. */
+struct SequenceTrigger
+{
+    int    note = 60;            // the key that starts the sequence
+    int    sequence = 0;         // index into Mode.sequences
+    int    transpose = 0;        // semitones added to the fired notes
+    double rate = 10.0;          // playback rate (steps/second, free-running)
+    bool   loop = false;         // false = one-shot strum, true = repeat
+    bool   trackVelocity = true; // scale fired velocity by the key's velocity
+    bool   swallow = true;       // suppress the trigger key's own note
+};
+
 // ---------------------------------------------------------------------------
 // UI tree.
 // ---------------------------------------------------------------------------
@@ -252,12 +266,28 @@ struct UiImage
     juce::String aspectRatioMode;
 };
 
+/** A dropdown option. `seqIndex` is the SEQ_INDEX it selects (Omni-84's
+    chord-ordering menu maps each option to a 0/84/168/252 sequence-block offset). */
+struct MenuOption
+{
+    juce::String name;
+    int seqIndex = 0;
+};
+
+struct Menu
+{
+    Rect rect;
+    int  value = 1;                 // selected option (1-based, as authored)
+    juce::Array<MenuOption> options;
+};
+
 struct Tab
 {
     juce::String name;
     juce::Array<Control> controls;
     juce::Array<Button>  buttons;
     juce::Array<UiImage> images;
+    juce::Array<Menu>    menus;
 };
 
 struct KeyboardColor
@@ -294,6 +324,7 @@ struct Mode
     juce::Array<Group> groups;
     juce::Array<Effect> effects;
     juce::Array<NoteSequence> sequences;
+    juce::Array<SequenceTrigger> sequenceTriggers;
     juce::Array<Lfo> modulators;
     Ui ui;
 };
