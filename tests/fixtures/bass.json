@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "format": "dmse-manifest",
+  "library": "Omni-84",
+  "modes": [
+    {
+      "name": "Bass",
+      "amp": {
+        "attack": 0.0, "decay": 0.0, "sustain": 1.0, "release": 0.1,
+        "volume": 1.0, "velTrack": 0.0, "enabled": true
+      },
+      "tags": [
+        { "name": "monophonic", "polyphony": 1 }
+      ],
+      "groups": [
+        {
+          "tags": ["monophonic"],
+          "silencing": { "mode": "normal", "byTags": ["monophonic"] },
+          "samples": [
+            { "source": "flac:Bass_0C",  "loNote": 24, "hiNote": 24, "rootNote": 24, "lengthFrames": 805888, "sampleRate": 48000.0, "pitchKeyTrack": false, "start": 0, "loop": { "enabled": false } },
+            { "source": "flac:Bass_1C",  "loNote": 36, "hiNote": 36, "rootNote": 36, "lengthFrames": 805888, "sampleRate": 48000.0, "pitchKeyTrack": false, "start": 0, "loop": { "enabled": false } },
+            { "source": "flac:Bass_1F#", "loNote": 42, "hiNote": 42, "rootNote": 42, "lengthFrames": 805888, "sampleRate": 48000.0, "pitchKeyTrack": false, "start": 0, "loop": { "enabled": false } }
+          ]
+        }
+      ],
+      "effects": [
+        { "type": "lowpass", "frequency": 15000.0, "enabled": false },
+        { "type": "convolution", "ir": "ir:Space", "wet": 0.0 }
+      ],
+      "ui": {
+        "background": "img:background_bass",
+        "width": 812, "height": 375,
+        "layoutMode": "relative", "bgMode": "top_left",
+        "tabs": [
+          {
+            "name": "main",
+            "controls": [
+              {
+                "rect": { "x": 417, "y": 37, "width": 49, "height": 49 },
+                "label": "Sustain", "valueType": "float",
+                "min": 0.03, "max": 0.5, "value": 0.03,
+                "textColor": "FF000000",
+                "style": "custom_skin_vertical_drag",
+                "skin": { "image": "img:Knob", "numFrames": 101, "orientation": "vertical" },
+                "mouseDragSensitivity": 100,
+                "bindings": [
+                  { "type": "amp", "level": "instrument", "parameter": "ENV_RELEASE" }
+                ]
+              },
+              {
+                "rect": { "x": 417, "y": 140, "width": 49, "height": 49 },
+                "label": "Lowpass", "valueType": "float",
+                "min": 150, "max": 15000, "value": 15000.0,
+                "style": "custom_skin_vertical_drag",
+                "skin": { "image": "img:Knob", "numFrames": 101, "orientation": "vertical" },
+                "bindings": [
+                  { "type": "effect", "level": "instrument", "parameter": "FX_FILTER_FREQUENCY", "effectIndex": 0 }
+                ]
+              },
+              {
+                "rect": { "x": 510, "y": 140, "width": 49, "height": 49 },
+                "label": "Reverb", "valueType": "percent",
+                "min": 0, "max": 100, "value": 0.0,
+                "style": "custom_skin_vertical_drag",
+                "skin": { "image": "img:Knob", "numFrames": 101, "orientation": "vertical" },
+                "bindings": [
+                  { "type": "effect", "level": "instrument", "parameter": "FX_MIX", "effectIndex": 1, "factor": 0.01 }
+                ]
+              }
+            ],
+            "buttons": [
+              {
+                "rect": { "x": 323, "y": 145, "width": 45, "height": 41 },
+                "style": "image", "value": 0,
+                "states": [
+                  {
+                    "name": "Off",
+                    "mainImage": "img:button_blue-off", "hoverImage": "img:button_blue-off", "clickImage": "img:button_blue-on",
+                    "bindings": [
+                      { "type": "effect", "level": "instrument", "parameter": "ENABLED", "effectIndex": 0, "translation": "fixed_value", "translationValue": false },
+                      { "type": "control", "level": "ui", "parameter": "PATH", "controlIndex": 4, "translation": "fixed_value", "translationValue": "img:light_off" }
+                    ]
+                  },
+                  {
+                    "name": "On",
+                    "mainImage": "img:button_blue-on", "hoverImage": "img:button_blue-on", "clickImage": "img:button_blue-off",
+                    "bindings": [
+                      { "type": "effect", "level": "instrument", "parameter": "ENABLED", "effectIndex": 0, "translation": "fixed_value", "translationValue": true },
+                      { "type": "control", "level": "ui", "parameter": "PATH", "controlIndex": 4, "translation": "fixed_value", "translationValue": "img:light_on" }
+                    ]
+                  }
+                ]
+              }
+            ],
+            "images": [
+              { "rect": { "x": 302, "y": 119, "width": 15, "height": 15 }, "image": "img:light_off", "aspectRatioMode": "preserve" }
+            ]
+          }
+        ],
+        "keyboard": {
+          "colors": [
+            { "loNote": 24, "hiNote": 42, "color": "FF222222" }
+          ]
+        }
+      }
+    }
+  ]
+}

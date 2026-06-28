@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "format": "dmse-manifest",
+  "library": "Omni-84",
+  "modes": [
+    {
+      "name": "SonicStrings (AutoStrum)",
+      "amp": {
+        "attack": 0.0, "decay": 25.0, "sustain": 0.0, "release": 1.0,
+        "volume": 1.0, "velTrack": 0.0, "enabled": true
+      },
+      "groups": [
+        {
+          "tags": ["strings"],
+          "samples": [
+            { "source": "flac:String_C4", "loNote": 60, "hiNote": 60, "rootNote": 60, "sampleRate": 48000.0, "pitchKeyTrack": false, "loop": { "enabled": false } },
+            { "source": "flac:String_E4", "loNote": 64, "hiNote": 64, "rootNote": 64, "sampleRate": 48000.0, "pitchKeyTrack": false, "loop": { "enabled": false } }
+          ]
+        }
+      ],
+      "effects": [
+        { "type": "lowpass", "frequency": 20000.0 },
+        { "type": "convolution", "ir": "ir:Space", "wet": 0.0 }
+      ],
+      "sequences": [
+        {
+          "name": "CMajor", "length": 13, "rate": 1.0,
+          "notes": [
+            { "position": 0, "note": 48, "velocity": 1.0, "length": 1 },
+            { "position": 1, "note": 52, "velocity": 1.0, "length": 1 },
+            { "position": 2, "note": 43, "velocity": 1.0, "length": 1 }
+          ]
+        },
+        {
+          "name": "C#Major", "length": 13, "rate": 1.0,
+          "notes": [
+            { "position": 0, "note": 49, "velocity": 1.0, "length": 1 },
+            { "position": 1, "note": 53, "velocity": 1.0, "length": 1 }
+          ]
+        }
+      ],
+      "ui": {
+        "background": "img:background_sonicstrings_autostrum",
+        "width": 812, "height": 375,
+        "layoutMode": "relative", "bgMode": "top_left",
+        "tabs": [
+          {
+            "name": "main",
+            "controls": [
+              {
+                "rect": { "x": 300, "y": 80, "width": 49, "height": 49 },
+                "label": "Rate", "valueType": "float",
+                "min": 0, "max": 1, "value": 0.5,
+                "style": "custom_skin_vertical_drag",
+                "bindings": [
+                  { "type": "note_binding", "level": "midi", "parameter": "SEQ_PLAYBACK_RATE", "bindingIndex": 0, "noteIndex": 0, "translation": "linear" }
+                ]
+              },
+              {
+                "rect": { "x": 400, "y": 80, "width": 49, "height": 49 },
+                "label": "Chord", "valueType": "float",
+                "min": 0, "max": 11, "value": 0,
+                "style": "custom_skin_vertical_drag",
+                "bindings": [
+                  { "type": "note_sequence", "level": "midi", "parameter": "SEQ_INDEX", "seqIndex": 0 }
+                ]
+              }
+            ]
+          }
+        ],
+        "keyboard": { "colors": [] }
+      }
+    }
+  ]
+}

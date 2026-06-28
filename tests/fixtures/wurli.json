@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "format": "dmse-manifest",
+  "library": "Midnight Wurli",
+  "modes": [
+    {
+      "name": "Wurli",
+      "amp": {
+        "attack": 0.0, "decay": 0.0, "sustain": 1.0, "release": 0.4,
+        "volume": 1.0, "velTrack": 0.5, "enabled": true
+      },
+      "groups": [
+        {
+          "tags": ["soft"],
+          "velocity": { "lo": 0, "hi": 63 },
+          "loopCrossfadeMode": "linear",
+          "samples": [
+            { "source": "flac:Wurli_soft_C3", "loNote": 48, "hiNote": 48, "rootNote": 48, "lengthFrames": 720000, "sampleRate": 48000.0, "pitchKeyTrack": false, "loop": { "enabled": true, "start": 96000, "end": 600000, "crossfade": 480 } }
+          ]
+        },
+        {
+          "tags": ["hard"],
+          "velocity": { "lo": 64, "hi": 127 },
+          "loopCrossfadeMode": "linear",
+          "samples": [
+            { "source": "flac:Wurli_hard_C3", "loNote": 48, "hiNote": 48, "rootNote": 48, "lengthFrames": 720000, "sampleRate": 48000.0, "pitchKeyTrack": false, "loop": { "enabled": true, "start": 96000, "end": 600000, "crossfade": 480 } }
+          ]
+        }
+      ],
+      "effects": [
+        { "type": "lowpass", "frequency": 18000.0, "enabled": true },
+        { "type": "convolution", "ir": "ir:Spring", "wet": 0.15 }
+      ],
+      "modulators": [
+        {
+          "shape": "sine",
+          "frequency": 5.69,
+          "modAmount": 0.0,
+          "bindings": [
+            { "type": "amp", "level": "group", "position": 0, "parameter": "AMP_VOLUME", "modBehavior": "set", "translation": "linear", "translationOutputMin": 0, "translationOutputMax": 1 },
+            { "type": "amp", "level": "group", "position": 1, "parameter": "AMP_VOLUME", "modBehavior": "set", "translation": "linear", "translationOutputMin": 0, "translationOutputMax": 1 }
+          ]
+        }
+      ],
+      "ui": {
+        "background": "img:background_wurli",
+        "width": 812, "height": 375,
+        "layoutMode": "relative", "bgMode": "top_left",
+        "tabs": [
+          {
+            "name": "main",
+            "controls": [
+              {
+                "rect": { "x": 200, "y": 60, "width": 49, "height": 49 },
+                "label": "Tremolo", "valueType": "percent",
+                "min": 0, "max": 100, "value": 0,
+                "style": "custom_skin_vertical_drag",
+                "bindings": [
+                  { "type": "general", "level": "instrument", "parameter": "MOD_AMOUNT", "factor": 0.01 }
+                ]
+              }
+            ]
+          }
+        ],
+        "keyboard": { "colors": [] }
+      }
+    }
+  ]
+}

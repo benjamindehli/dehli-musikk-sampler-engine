@@ -1,0 +1,68 @@
+{
+  "schema": 1,
+  "format": "dmse-manifest",
+  "library": "MaskinTrommer",
+  "modes": [
+    {
+      "name": "Kit",
+      "amp": {
+        "attack": 0.0, "decay": 0.1, "sustain": 1.0, "release": 0.2,
+        "attackCurve": -100, "decayCurve": 100, "releaseCurve": 0,
+        "volume": 1.0, "velTrack": 1.0, "enabled": true
+      },
+      "groups": [
+        {
+          "tags": ["kick-darkenergy"],
+          "trigger": "attack",
+          "velocity": { "lo": 0, "hi": 127 },
+          "roundRobin": { "mode": "random", "length": 18 },
+          "decay": 0.15,
+          "ampEnvEnabled": true,
+          "samples": [
+            { "source": "flac:Kick_DarkEnergy_01_01", "seqPosition": 1, "loNote": 36, "hiNote": 36, "rootNote": 36, "sampleRate": 48000.0, "pitchKeyTrack": true, "start": 0, "loop": { "enabled": false } },
+            { "source": "flac:Kick_DarkEnergy_01_02", "seqPosition": 2, "loNote": 36, "hiNote": 36, "rootNote": 36, "sampleRate": 48000.0, "pitchKeyTrack": true, "start": 0, "loop": { "enabled": false } },
+            { "source": "flac:Kick_DarkEnergy_01_03", "seqPosition": 3, "loNote": 36, "hiNote": 36, "rootNote": 36, "sampleRate": 48000.0, "pitchKeyTrack": true, "start": 0, "loop": { "enabled": false } }
+          ]
+        },
+        {
+          "tags": ["key-off"],
+          "trigger": "release",
+          "roundRobin": { "mode": "random", "length": 3 },
+          "volume": 1.0,
+          "velTrack": 1.0,
+          "ampEnvEnabled": false,
+          "samples": [
+            { "source": "flac:KeyOff_01", "seqPosition": 1, "loNote": 36, "hiNote": 96, "rootNote": 60, "sampleRate": 48000.0, "pitchKeyTrack": false, "volume": 0.5, "loop": { "enabled": false } }
+          ]
+        }
+      ],
+      "effects": [
+        { "type": "lowpass", "frequency": 20000.0, "resonance": 0.7, "enabled": true },
+        { "type": "gain", "gain": 10.0 },
+        { "type": "convolution", "ir": "ir:Room", "wet": 0.0, "mix": 0.0 }
+      ],
+      "ui": {
+        "background": "img:background_drums",
+        "width": 812, "height": 375,
+        "layoutMode": "relative", "bgMode": "top_left",
+        "tabs": [
+          {
+            "name": "main",
+            "controls": [
+              {
+                "rect": { "x": 100, "y": 40, "width": 49, "height": 49 },
+                "label": "Drive", "valueType": "float",
+                "min": 0, "max": 24, "value": 10,
+                "style": "custom_skin_vertical_drag",
+                "bindings": [
+                  { "type": "effect", "level": "instrument", "parameter": "LEVEL", "effectIndex": 1 }
+                ]
+              }
+            ]
+          }
+        ],
+        "keyboard": { "colors": [] }
+      }
+    }
+  ]
+}
