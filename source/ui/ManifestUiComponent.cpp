@@ -19,6 +19,15 @@ public:
 
     std::function<void (double)> onChange;
 
+    double getValue() const noexcept { return value; }
+
+    /** Set the displayed value WITHOUT firing onChange (used for external sync). */
+    void setValue (double v)
+    {
+        const double nv = juce::jlimit (minVal, maxVal, v);
+        if (nv != value) { value = nv; repaint(); }
+    }
+
     void paint (juce::Graphics& g) override
     {
         if (! film.isValid())
@@ -72,6 +81,12 @@ public:
 
     std::function<void (int)> onChange;
     int getState() const noexcept { return state; }
+
+    /** Set the state WITHOUT firing onChange (used for external sync). */
+    void setState (int s)
+    {
+        if (s >= 0 && s < (int) images.size() && s != state) { state = s; repaint(); }
+    }
 
     void paint (juce::Graphics& g) override
     {
@@ -134,6 +149,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         addAndMakeVisible (light);
         lights.add (light);
         lightRects.add (im.rect);
+        lightControlIndex.add (im.controlIndex.value_or (-1));
     }
 
     for (int i = 0; i < tab.controls.size(); ++i)
@@ -151,6 +167,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         addAndMakeVisible (knob);
         knobs.add (knob);
         knobRects.add (c.rect);
+        knobModels.add (cp);
     }
 
     for (int i = 0; i < tab.buttons.size(); ++i)
@@ -167,18 +184,17 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         addAndMakeVisible (btn);
         buttons.add (btn);
         buttonRects.add (b.rect);
+        buttonModels.add (bp);
     }
 
     // Initialise each indicator light from its button's default state (not the
     // <image>'s authored picture), so the light matches the button on load.
-    for (int i = 0; i < buttons.size() && i < lights.size(); ++i)
+    for (int i = 0; i < tab.buttons.size(); ++i)
     {
         auto& b = tab.buttons.getReference (i);
         const int s = b.value.value_or (0);
-        if (s >= 0 && s < b.states.size() && provider)
-            for (const auto& bind : b.states.getReference (s).bindings)
-                if (bind.parameter == "PATH" && bind.translationValue.isString())
-                    lights[i]->setImage (provider (bind.translationValue.toString()));
+        if (s >= 0 && s < b.states.size())
+            applyLightBindings (b.states.getReference (s));
     }
 
     for (int i = 0; i < tab.menus.size(); ++i)
@@ -197,21 +213,64 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         addAndMakeVisible (combo);
         menus.add (combo);
         menuRects.add (m.rect);
+        menuModels.add (mp);
     }
+}
+
+void ManifestUiComponent::refresh (
+    const std::function<std::optional<double> (const Control&)>& controlValue,
+    const std::function<std::optional<int>    (const Button&)>&  buttonState,
+    const std::function<std::optional<int>    (const Menu&)>&    menuSelection)
+{
+    for (int i = 0; i < knobs.size(); ++i)
+        if (auto v = controlValue (*knobModels[i]))
+            knobs[i]->setValue (*v);
+
+    for (int i = 0; i < buttons.size(); ++i)
+        if (auto s = buttonState (*buttonModels[i]))
+            if (*s != buttons[i]->getState())   // only on change (re-decoding light PNGs is costly)
+            {
+                buttons[i]->setState (*s);
+                const auto& b = *buttonModels[i];
+                if (*s >= 0 && *s < b.states.size())
+                    applyLightBindings (b.states.getReference (*s));   // keep the paired light in sync
+            }
+
+    for (int i = 0; i < menus.size(); ++i)
+        if (auto sel = menuSelection (*menuModels[i]))
+            if (menus[i]->getSelectedId() != *sel + 1)
+                menus[i]->setSelectedId (*sel + 1, juce::dontSendNotification);
 }
 
 ManifestUiComponent::~ManifestUiComponent() = default;
 
 void ManifestUiComponent::handleButton (const Button& b, int index, int stateIndex)
 {
-    // Swap the paired indicator light to the state's PATH image, if any.
-    if (stateIndex >= 0 && stateIndex < b.states.size() && index < lights.size())
-        for (const auto& bind : b.states.getReference (stateIndex).bindings)
-            if (bind.parameter == "PATH" && bind.translationValue.isString() && provider)
-                lights[index]->setImage (provider (bind.translationValue.toString()));
+    juce::ignoreUnused (index);
+    if (stateIndex >= 0 && stateIndex < b.states.size())
+        applyLightBindings (b.states.getReference (stateIndex));
 
     if (onButtonChanged)
         onButtonChanged (b, stateIndex);
+}
+
+void ManifestUiComponent::applyLightBindings (const ButtonState& state)
+{
+    // A button state's PATH bindings each address a light by its controlIndex
+    // (document-order UI index) — one button may drive several lights (e.g. the
+    // Mono/Poly switch lights an upper or lower lamp), so match by index, not pairing.
+    if (! provider)
+        return;
+
+    for (const auto& bind : state.bindings)
+    {
+        if (bind.parameter != "PATH" || ! bind.translationValue.isString() || ! bind.controlIndex)
+            continue;
+
+        const int idx = lightControlIndex.indexOf (*bind.controlIndex);
+        if (idx >= 0)
+            lights[idx]->setImage (provider (bind.translationValue.toString()));
+    }
 }
 
 void ManifestUiComponent::paint (juce::Graphics& g)

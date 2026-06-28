@@ -273,6 +273,7 @@ var writeImage (const UiImage& img)
     o.set ("rect", writeRect (img.rect));
     o.setStr ("image", img.image);
     o.setStr ("aspectRatioMode", img.aspectRatioMode);
+    o.setOpt ("controlIndex", img.controlIndex);
     return o.toVar();
 }
 

@@ -312,6 +312,7 @@ UiImage parseImage (const var& v)
     img.rect            = parseRect (get (v, "rect"));
     img.image           = str (v, "image");
     img.aspectRatioMode = str (v, "aspectRatioMode");
+    img.controlIndex    = optI (v, "controlIndex");
     return img;
 }
 

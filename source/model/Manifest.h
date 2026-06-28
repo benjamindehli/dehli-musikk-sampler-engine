@@ -264,6 +264,8 @@ struct UiImage
     Rect rect;
     juce::String image;          // asset id
     juce::String aspectRatioMode;
+    std::optional<int> controlIndex;   // document-order UI index; PATH bindings
+                                       // target lights by this (e.g. button → light)
 };
 
 /** A dropdown option. `seqIndex` is the SEQ_INDEX it selects (Omni-84's
