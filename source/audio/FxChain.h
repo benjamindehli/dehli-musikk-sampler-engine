@@ -42,6 +42,13 @@ public:
     void setEffectParam (int index, const juce::String& parameter, float value);
     int  getNumEffects() const noexcept { return (int) slots.size(); }
 
+    // Semantic helpers that address the first effect of a kind (mode-agnostic),
+    // used by the temporary dev FX controls.
+    void setLowpassEnabled (bool enabled);
+    void setLowpassFrequency (float hz);
+    void setReverbMix (float amount);
+    void setReverbWetGainDb (float db);
+
 private:
     enum class Kind { passthrough, lowpass, convolution };
 

@@ -155,4 +155,28 @@ void FxChain::setEffectParam (int index, const juce::String& parameter, float va
     // FX_DRIVE / resonance arrive with their effects later.
 }
 
+void FxChain::setLowpassEnabled (bool enabled)
+{
+    for (auto& s : slots)
+        if (s->kind == Kind::lowpass) { s->enabled.store (enabled); return; }
+}
+
+void FxChain::setLowpassFrequency (float hz)
+{
+    for (auto& s : slots)
+        if (s->kind == Kind::lowpass) { s->frequency.store (hz); return; }
+}
+
+void FxChain::setReverbMix (float amount)
+{
+    for (auto& s : slots)
+        if (s->kind == Kind::convolution) { s->mix.store (amount); return; }
+}
+
+void FxChain::setReverbWetGainDb (float db)
+{
+    for (auto& s : slots)
+        if (s->kind == Kind::convolution) { s->wetGainDb.store (db); return; }
+}
+
 } // namespace dm
