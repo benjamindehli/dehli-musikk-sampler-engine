@@ -6,6 +6,7 @@
 
 add_library(dehli_musikk_sampler_engine STATIC
     source/SamplerEngine.cpp
+    source/ManifestPluginProcessor.cpp
     source/model/ManifestLoader.cpp
     source/model/ManifestWriter.cpp
     source/audio/EmbeddedFlacSource.cpp
@@ -13,6 +14,8 @@ add_library(dehli_musikk_sampler_engine STATIC
     source/audio/FxChain.cpp
     source/audio/NoteSequencer.cpp
     source/ui/ManifestUiComponent.cpp
+    source/ui/ManifestEditor.cpp
+    source/params/ManifestParameters.cpp
 )
 
 target_include_directories(dehli_musikk_sampler_engine
@@ -26,7 +29,8 @@ target_link_libraries(dehli_musikk_sampler_engine
         juce::juce_audio_formats     # WAV/FLAC readers
         juce::juce_audio_processors
         juce::juce_dsp               # filter + convolution
-        juce::juce_gui_basics        # data-driven UI renderer (later)
+        juce::juce_gui_basics        # data-driven UI renderer
+        juce::juce_audio_utils       # MidiKeyboardComponent (ManifestEditor / ColouredKeyboard)
     PRIVATE
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
