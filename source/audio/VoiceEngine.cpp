@@ -82,8 +82,9 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     rrCounter.clearQuick(); rrCounter.insertMultiple (0, 0, numGroups);
     rrLast.clearQuick();    rrLast.insertMultiple (0, -1, numGroups);
     rrRandom.setSeed (20240101);   // fixed → reproducible variation across sessions
-    groupVolume.clearQuick();  groupVolume.insertMultiple (0, 1.0f, numGroups);
-    groupEnabled.clearQuick(); groupEnabled.insertMultiple (0, true, numGroups);
+    groupVolume.clearQuick();    groupVolume.insertMultiple (0, 1.0f, numGroups);
+    groupEnabled.clearQuick();   groupEnabled.insertMultiple (0, true, numGroups);
+    groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
 
     // Tags with polyphony 1 make their groups monophonic. Reuse the choke
     // mechanism: add such a group's own mono tags to its silencedByTags.
@@ -101,6 +102,7 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         proto.gain     = (float) (g.volume   ? *g.volume   : mode.amp.volume);
         proto.velTrack = (float) (g.velTrack ? *g.velTrack : mode.amp.velTrack);
         proto.groupIndex = gi;
+        if (g.velocity) { proto.loVel = g.velocity->lo; proto.hiVel = g.velocity->hi; }
         proto.tags = g.tags;
         if (g.silencing)
             proto.silencedByTags = g.silencing->byTags;
@@ -151,14 +153,19 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     }
 }
 
-const VoiceEngine::Zone* VoiceEngine::selectZone (int note)
+const VoiceEngine::Zone* VoiceEngine::selectZone (int note, int velocity)
 {
     auto groupOn = [this] (int g) { return g < 0 || g >= groupEnabled.size() || groupEnabled[g]; };
+    auto covers  = [note, velocity] (const Zone& z)
+    {
+        return note >= z.loNote && note <= z.hiNote
+            && velocity >= z.loVel && velocity <= z.hiVel;   // velocity layer
+    };
 
-    // First enabled zone covering the note decides the group.
+    // First enabled zone covering the note+velocity decides the group/layer.
     int first = -1;
     for (int i = 0; i < zones.size(); ++i)
-        if (note >= zones[i].loNote && note <= zones[i].hiNote && groupOn (zones[i].groupIndex))
+        if (covers (zones[i]) && groupOn (zones[i].groupIndex))
         {
             first = i;
             break;
@@ -170,12 +177,12 @@ const VoiceEngine::Zone* VoiceEngine::selectZone (int note)
     if (! z0.roundRobin)
         return &zones.getReference (first);
 
-    // Round-robin: gather this group's candidates covering the note, pick one.
+    // Round-robin: gather this group's candidates covering the note+velocity, pick one.
     juce::Array<int> candidates;
     for (int i = 0; i < zones.size(); ++i)
     {
         const auto& z = zones.getReference (i);
-        if (z.groupIndex == z0.groupIndex && note >= z.loNote && note <= z.hiNote)
+        if (z.groupIndex == z0.groupIndex && covers (z))
             candidates.add (i);
     }
     if (candidates.size() <= 1)
@@ -220,7 +227,8 @@ VoiceEngine::Voice* VoiceEngine::allocateVoice()
 
 void VoiceEngine::handleNoteOn (int note, float velocity)
 {
-    const auto* zone = selectZone (note);
+    const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
+    const auto* zone = selectZone (note, velMidi);
     if (zone == nullptr)
         return;
 
@@ -257,6 +265,8 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
     double rate = zone->buffer->sampleRate / sampleRate;
     if (zone->pitchKeyTrack)
         rate *= std::pow (2.0, (note - zone->rootNote) / 12.0);
+    if (zone->groupIndex >= 0 && zone->groupIndex < groupTuningMul.size())
+        rate *= groupTuningMul[zone->groupIndex];   // GROUP_TUNING
     v->rate = rate;
 
     v->loopEnabled = zone->loopEnabled;
@@ -426,6 +436,12 @@ void VoiceEngine::setGroupEnabled (int groupIndex, bool enabled)
 {
     if (groupIndex >= 0 && groupIndex < groupEnabled.size())
         groupEnabled.set (groupIndex, enabled);
+}
+
+void VoiceEngine::setGroupTuning (int groupIndex, float semitones)
+{
+    if (groupIndex >= 0 && groupIndex < groupTuningMul.size())
+        groupTuningMul.set (groupIndex, std::pow (2.0, semitones / 12.0));
 }
 
 } // namespace dm

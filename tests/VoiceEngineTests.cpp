@@ -74,6 +74,55 @@ public:
         testRoundRobinRandom();
         testGroupVolume();
         testAmpSustainOverride();
+        testVelocityLayers();
+    }
+
+    void testVelocityLayers()
+    {
+        beginTest ("velocity layer selection");
+
+        auto soft = encodeFlac (makeDc (0.30f, 1000), kSR);
+        auto hard = encodeFlac (makeDc (0.90f, 1000), kSR);
+        dm::EmbeddedFlacSource src;
+        expect (src.addFlac ("flac:soft", soft.getData(), soft.getSize()));
+        expect (src.addFlac ("flac:hard", hard.getData(), hard.getSize()));
+
+        // Two groups on the same note, split by velocity (soft 0..63, hard 64..127).
+        auto m = dm::loadManifestFromJson (R"({
+            "schema": 1,
+            "modes": [{
+                "name": "Vel",
+                "amp": { "attack":0.0,"decay":0.0,"sustain":1.0,"release":0.0,"volume":1.0,"velTrack":0.0 },
+                "groups": [
+                    { "velocity": {"lo":0,"hi":63},   "samples": [ { "source":"flac:soft","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000.0,"pitchKeyTrack":false } ] },
+                    { "velocity": {"lo":64,"hi":127}, "samples": [ { "source":"flac:hard","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000.0,"pitchKeyTrack":false } ] }
+                ]
+            }]
+        })");
+        expect (m.ok, "manifest should load");
+
+        dm::VoiceEngine ve;
+        ve.prepare (kSR, 512, 1);
+        ve.setMode (m.library.modes.getReference (0), src);
+
+        // Low velocity (40) → soft layer (0.30).
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 40), 0);
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 100), 0.30f, 0.03f);
+        }
+
+        // High velocity (100) → hard layer (0.90).
+        ve.allNotesOff();
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 100), 0.90f, 0.03f);
+        }
     }
 
     // One sustained DC sample on note 60, amp sustain 1 (so output == sample × gain).

@@ -54,10 +54,14 @@ public:
     /** Pitch-wheel bend range in semitones (default 2). Re-applied per block. */
     void setPitchBendRange (double semitones) { bendRangeSemitones = semitones; }
 
+    /** Per-group pitch offset in semitones (GROUP_TUNING). Applied to new voices. */
+    void setGroupTuning (int groupIndex, float semitones);
+
 private:
     struct Zone
     {
         int loNote = 0, hiNote = 127, rootNote = 60;
+        int loVel = 0, hiVel = 127;   // velocity layer (group loVel/hiVel)
         const SampleBuffer* buffer = nullptr;
         bool pitchKeyTrack = false;
         juce::ADSR::Parameters adsr;
@@ -109,7 +113,7 @@ private:
     void handleNoteOff (int note);
     void handlePitchWheel (int wheelValue);   // 0..16383, centre 8192 (±2 semitones)
     Voice* allocateVoice();
-    const Zone* selectZone (int note);   // applies round-robin; mutates rr state
+    const Zone* selectZone (int note, int velocity);   // velocity layer + round-robin; mutates rr state
     juce::ADSR::Parameters effectiveAdsr (const juce::ADSR::Parameters& base) const;
 
     double sampleRate = 44100.0;
@@ -128,6 +132,7 @@ private:
     float ovAttack { -1.0f }, ovDecay { -1.0f }, ovSustain { -1.0f }, ovRelease { -1.0f };
     juce::Array<float> groupVolume;
     juce::Array<bool>  groupEnabled;
+    juce::Array<double> groupTuningMul;   // per-group playback-rate multiplier (GROUP_TUNING)
 };
 
 } // namespace dm
