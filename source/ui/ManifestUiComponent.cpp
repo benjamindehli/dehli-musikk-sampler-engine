@@ -201,9 +201,21 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
     {
         auto& m = tab.menus.getReference (i);
         auto* combo = new juce::ComboBox();
-        // Blend into the background: no border or fill (DecentSampler-style menu).
-        combo->setColour (juce::ComboBox::backgroundColourId, juce::Colours::transparentBlack);
-        combo->setColour (juce::ComboBox::outlineColourId,    juce::Colours::transparentBlack);
+        // Manifest-driven styling; defaults reproduce the transparent, left-aligned
+        // overlay used by Omni-84 (so unstyled menus look exactly as before).
+        auto argb = [] (const juce::String& s)
+        {
+            auto c = juce::Colour ((juce::uint32) s.getHexValue32());
+            return c.getAlpha() == 0 ? c.withAlpha (1.0f) : c;   // 6-digit (no alpha) → opaque
+        };
+        combo->setColour (juce::ComboBox::backgroundColourId,
+                          m.backgroundColor.isNotEmpty() ? argb (m.backgroundColor) : juce::Colours::transparentBlack);
+        combo->setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+        if (m.textColor.isNotEmpty())
+            combo->setColour (juce::ComboBox::textColourId, argb (m.textColor));
+        combo->setJustificationType (m.hAlign == "center" ? juce::Justification::centred
+                                   : m.hAlign == "right"  ? juce::Justification::centredRight
+                                                          : juce::Justification::centredLeft);
         for (int o = 0; o < m.options.size(); ++o)
             combo->addItem (m.options.getReference (o).name, o + 1);
         combo->setSelectedId (juce::jlimit (1, juce::jmax (1, m.options.size()), m.value),

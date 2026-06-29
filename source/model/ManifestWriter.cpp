@@ -312,6 +312,9 @@ var writeUi (const Ui& ui)
                 Obj mo;
                 mo.set ("rect", writeRect (m.rect));
                 mo.set ("value", m.value);
+                mo.setStr ("textColor", m.textColor);
+                mo.setStr ("backgroundColor", m.backgroundColor);
+                mo.setStr ("hAlign", m.hAlign);
                 juce::Array<var> opts;
                 for (const auto& op : m.options)
                 {

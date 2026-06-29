@@ -340,6 +340,9 @@ Ui parseUi (const var& v)
                     Menu menu;
                     menu.rect  = parseRect (get (e, "rect"));
                     menu.value = intg (e, "value", 1);
+                    menu.textColor       = str (e, "textColor");
+                    menu.backgroundColor = str (e, "backgroundColor");
+                    menu.hAlign          = str (e, "hAlign");
                     if (auto* opts = get (e, "options").getArray())
                         for (auto& o : *opts)
                         {

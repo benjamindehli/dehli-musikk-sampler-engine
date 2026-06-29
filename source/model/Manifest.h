@@ -281,6 +281,12 @@ struct Menu
     Rect rect;
     int  value = 1;                 // selected option (1-based, as authored)
     juce::Array<MenuOption> options;
+
+    // Optional styling (DecentSampler menu attrs). Empty = renderer default
+    // (transparent background, left-aligned) — keeps unstyled menus as-is.
+    juce::String textColor;         // ARGB hex
+    juce::String backgroundColor;   // ARGB hex
+    juce::String hAlign;            // left | center | right
 };
 
 struct Tab
