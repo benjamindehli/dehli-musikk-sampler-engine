@@ -89,6 +89,8 @@ void SamplerEngine::resetOverrides()
         g.touched.store (false);
     for (auto& g : ovGroupEnabled)
         g.touched.store (false);
+    for (auto& g : ovGroupTuning)
+        g.touched.store (false);
     for (auto& e : ovEffectEnabled)
         e.touched.store (false);
     ovSequencerRateTouched.store (false);
@@ -141,6 +143,10 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupEnabled[i].touched.load())
             mr.voices.setGroupEnabled (i, ovGroupEnabled[i].value.load() > 0.5f);
+
+    for (int i = 0; i < kMaxGroupVol; ++i)
+        if (ovGroupTuning[i].touched.load())
+            mr.voices.setGroupTuning (i, ovGroupTuning[i].value.load());
 }
 
 void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
@@ -256,6 +262,15 @@ void SamplerEngine::setGroupEnabled (int groupIndex, bool enabled)
     {
         ovGroupEnabled[groupIndex].value.store (enabled ? 1.0f : 0.0f);
         ovGroupEnabled[groupIndex].touched.store (true);
+    }
+}
+
+void SamplerEngine::setGroupTuning (int groupIndex, float semitones)
+{
+    if (groupIndex >= 0 && groupIndex < kMaxGroupVol)
+    {
+        ovGroupTuning[groupIndex].value.store (semitones);
+        ovGroupTuning[groupIndex].touched.store (true);
     }
 }
 

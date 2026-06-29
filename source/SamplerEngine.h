@@ -79,6 +79,7 @@ public:
     void setAmpRelease (float seconds);
     void setGroupVolume (int groupIndex, float volume);
     void setGroupEnabled (int groupIndex, bool enabled);
+    void setGroupTuning (int groupIndex, float semitones);   // GROUP_TUNING
 
     /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
     void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }
@@ -113,9 +114,10 @@ private:
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
     FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease;
-    static constexpr int kMaxGroupVol = 8;
+    static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
     FxOverride ovGroupVol[kMaxGroupVol];
     FxOverride ovGroupEnabled[kMaxGroupVol];
+    FxOverride ovGroupTuning[kMaxGroupVol];
     static constexpr int kMaxEffects = 8;
     FxOverride ovEffectEnabled[kMaxEffects];
 
