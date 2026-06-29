@@ -408,6 +408,35 @@ var writeMode (const Mode& m)
         o.set ("modulators", fromArray (mods));
     }
 
+    if (! m.ccBindings.isEmpty())
+    {
+        juce::Array<var> ccs;
+        for (const auto& cb : m.ccBindings)
+        {
+            Obj co;
+            co.set ("cc", cb.cc);
+            co.setStr ("parameter", cb.parameter);
+            co.setOpt ("groupIndex", cb.groupIndex);
+            co.set ("normMin", cb.normMin);
+            co.set ("normMax", cb.normMax);
+            ccs.add (co.toVar());
+        }
+        o.set ("ccBindings", fromArray (ccs));
+    }
+
+    if (! m.menuKeySwitches.isEmpty())
+    {
+        juce::Array<var> keys;
+        for (const auto& ks : m.menuKeySwitches)
+        {
+            Obj ko;
+            ko.set ("note", ks.note);
+            ko.set ("option", ks.option);
+            keys.add (ko.toVar());
+        }
+        o.set ("menuKeySwitches", fromArray (keys));
+    }
+
     o.set ("ui", writeUi (m.ui));
     return o.toVar();
 }

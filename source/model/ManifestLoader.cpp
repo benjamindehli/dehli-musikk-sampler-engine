@@ -421,6 +421,27 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
             m.sequenceTriggers.add (st);
         }
 
+    if (auto* a = get (v, "ccBindings").getArray())
+        for (auto& e : *a)
+        {
+            CcBinding cb;
+            cb.cc         = intg (e, "cc", 1);
+            cb.parameter  = str (e, "parameter");
+            cb.groupIndex = optI (e, "groupIndex");
+            cb.normMin    = dbl (e, "normMin", 0.0);
+            cb.normMax    = dbl (e, "normMax", 1.0);
+            m.ccBindings.add (cb);
+        }
+
+    if (auto* a = get (v, "menuKeySwitches").getArray())
+        for (auto& e : *a)
+        {
+            MenuKeySwitch ks;
+            ks.note   = intg (e, "note", 0);
+            ks.option = intg (e, "option", 0);
+            m.menuKeySwitches.add (ks);
+        }
+
     m.ui = parseUi (get (v, "ui"));
     return m;
 }

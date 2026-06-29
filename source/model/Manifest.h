@@ -323,6 +323,26 @@ struct Tag
     std::optional<int> polyphony;
 };
 
+/** A MIDI CC → control mapping (DecentSampler `<midi><cc>`). The converter resolves
+    the target control's primary engine parameter and pre-computes the normalised
+    value range, so the host can map CC → the matching parameter directly. */
+struct CcBinding
+{
+    int cc = 1;                     // controller number (1 = mod wheel)
+    juce::String parameter;         // engine binding parameter the control drives (e.g. SEQ_PLAYBACK_RATE)
+    std::optional<int> groupIndex;
+    double normMin = 0.0;           // normalised parameter value at CC 0
+    double normMax = 1.0;           // normalised parameter value at CC 127
+};
+
+/** A MIDI note that selects a dropdown-menu option (DecentSampler note→control
+    "VALUE" key-switch on a menu, e.g. low keys choosing the chord order). */
+struct MenuKeySwitch
+{
+    int note = 0;
+    int option = 0;                 // 0-based menu option to select
+};
+
 /** A "preset" in DecentSampler terms = one selectable mode of the plugin. */
 struct Mode
 {
@@ -334,6 +354,8 @@ struct Mode
     juce::Array<NoteSequence> sequences;
     juce::Array<SequenceTrigger> sequenceTriggers;
     juce::Array<Lfo> modulators;
+    juce::Array<CcBinding> ccBindings;
+    juce::Array<MenuKeySwitch> menuKeySwitches;
     Ui ui;
 };
 
