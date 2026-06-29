@@ -51,6 +51,9 @@ public:
         mode's Mono/Poly button switching between a mono and a poly group). */
     void setGroupEnabled (int groupIndex, bool enabled);
 
+    /** Pitch-wheel bend range in semitones (default 2). Re-applied per block. */
+    void setPitchBendRange (double semitones) { bendRangeSemitones = semitones; }
+
 private:
     struct Zone
     {
@@ -104,6 +107,7 @@ private:
     void renderChunk (juce::AudioBuffer<float>& buffer, int startSample, int numSamples);
     void handleNoteOn (int note, float velocity);
     void handleNoteOff (int note);
+    void handlePitchWheel (int wheelValue);   // 0..16383, centre 8192 (±2 semitones)
     Voice* allocateVoice();
     const Zone* selectZone (int note);   // applies round-robin; mutates rr state
     juce::ADSR::Parameters effectiveAdsr (const juce::ADSR::Parameters& base) const;
@@ -112,6 +116,8 @@ private:
     juce::Array<Zone> zones;
     std::vector<Voice> voices;
     juce::uint32 orderCounter = 0;
+    double pitchBendMul = 1.0;        // global playback-rate multiplier from the MIDI pitch wheel
+    double bendRangeSemitones = 2.0;  // pitch-wheel range
 
     // Round-robin state, indexed by groupIndex.
     juce::Array<int> rrCounter;   // next candidate for round_robin mode

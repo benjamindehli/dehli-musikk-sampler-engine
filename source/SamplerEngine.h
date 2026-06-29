@@ -80,6 +80,9 @@ public:
     void setGroupVolume (int groupIndex, float volume);
     void setGroupEnabled (int groupIndex, bool enabled);
 
+    /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
+    void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }
+
 private:
     struct ModeRender
     {
@@ -120,6 +123,8 @@ private:
     std::atomic<double> ovSequencerRate { 0.0 };
     std::atomic<bool>  ovSequencerIndexTouched { false };
     std::atomic<int>    ovSequencerIndex { 0 };
+
+    std::atomic<float> pitchBendRange { 2.0f };   // semitones; applied to current voices per block
 
     juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
 

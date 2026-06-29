@@ -287,6 +287,13 @@ void VoiceEngine::handleNoteOff (int note)
             v.adsr.noteOff();
 }
 
+void VoiceEngine::handlePitchWheel (int wheelValue)
+{
+    // Centre (8192) → no bend → multiplier 1.0. Range is configurable (default ±2).
+    const double semis = (wheelValue - 8192) / 8192.0 * bendRangeSemitones;
+    pitchBendMul = std::pow (2.0, semis / 12.0);
+}
+
 void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
 {
     if (numSamples <= 0)
@@ -325,7 +332,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                 buffer.addSample (ch, startSample + i, s * g);
             }
 
-            v.position += v.rate;
+            v.position += v.rate * pitchBendMul;
             if (v.loopEnabled && v.position >= v.loopEnd)
                 v.position -= v.loopLen;
 
@@ -368,6 +375,8 @@ void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             handleNoteOn (msg.getNoteNumber(), msg.getFloatVelocity());
         else if (msg.isNoteOff())
             handleNoteOff (msg.getNoteNumber());
+        else if (msg.isPitchWheel())
+            handlePitchWheel (msg.getPitchWheelValue());
         else if (msg.isAllNotesOff() || msg.isAllSoundOff())
             allNotesOff();
     }
