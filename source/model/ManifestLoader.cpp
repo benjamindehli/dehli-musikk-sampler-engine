@@ -61,6 +61,8 @@ Binding parseBinding (const var& v)
     b.raw         = v;
     b.type        = str (v, "type");
     b.level       = str (v, "level");
+    b.identifier  = str (v, "identifier");
+    b.translationTable = str (v, "translationTable");
     b.parameter   = str (v, "parameter");
     b.translation = str (v, "translation");
     b.modBehavior = str (v, "modBehavior");

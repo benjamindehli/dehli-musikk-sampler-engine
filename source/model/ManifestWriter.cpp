@@ -32,6 +32,8 @@ var writeBinding (const Binding& b)
     Obj o;
     o.setStr ("type", b.type);
     o.setStr ("level", b.level);
+    o.setStr ("identifier", b.identifier);
+    o.setStr ("translationTable", b.translationTable);
     o.setStr ("parameter", b.parameter);
     o.setStr ("translation", b.translation);
     o.setStr ("modBehavior", b.modBehavior);

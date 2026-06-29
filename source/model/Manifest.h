@@ -33,8 +33,10 @@ struct Binding
     juce::String type;        // amp | effect | control | general | note_binding | note_sequence | ...
     juce::String level;       // instrument | group | tag | ui | midi | <numeric group/tag index>
     juce::String parameter;   // FX_FILTER_FREQUENCY, ENV_RELEASE, SEQ_INDEX, PATH, ...
-    juce::String translation; // fixed_value | linear (empty = none)
+    juce::String translation; // fixed_value | linear | table (empty = none)
     juce::String modBehavior; // set (LFO bindings)
+    juce::String identifier;  // tag name for level="tag" bindings (TAG_VOLUME/TAG_ENABLED)
+    juce::String translationTable; // "in,out;in,out;..." lookup (translation="table")
 
     std::optional<double> factor;     // scales the source value
     std::optional<double> modAmount;
