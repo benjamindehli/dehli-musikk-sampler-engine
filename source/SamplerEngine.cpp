@@ -83,7 +83,7 @@ juce::StringArray SamplerEngine::getModeNames() const
 void SamplerEngine::resetOverrides()
 {
     for (auto* o : { &ovLowpassEnabled, &ovLowpassFreq, &ovReverbMix, &ovReverbGain,
-                     &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease })
+                     &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease, &ovAmpVelTrack })
         o->touched.store (false);
     for (auto& g : ovGroupVol)
         g.touched.store (false);
@@ -135,6 +135,7 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
     if (ovAmpDecay.touched.load())   mr.voices.setAmpDecay   (ovAmpDecay.value.load());
     if (ovAmpSustain.touched.load()) mr.voices.setAmpSustain (ovAmpSustain.value.load());
     if (ovAmpRelease.touched.load()) mr.voices.setAmpRelease (ovAmpRelease.value.load());
+    if (ovAmpVelTrack.touched.load()) mr.voices.setAmpVelTrack (ovAmpVelTrack.value.load());
 
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupVol[i].touched.load())
@@ -246,6 +247,7 @@ void SamplerEngine::setAmpAttack  (float s) { ovAmpAttack.value.store (s);  ovAm
 void SamplerEngine::setAmpDecay   (float s) { ovAmpDecay.value.store (s);   ovAmpDecay.touched.store (true); }
 void SamplerEngine::setAmpSustain (float l) { ovAmpSustain.value.store (l); ovAmpSustain.touched.store (true); }
 void SamplerEngine::setAmpRelease (float s) { ovAmpRelease.value.store (s); ovAmpRelease.touched.store (true); }
+void SamplerEngine::setAmpVelTrack (float a) { ovAmpVelTrack.value.store (a); ovAmpVelTrack.touched.store (true); }
 
 void SamplerEngine::setGroupVolume (int groupIndex, float volume)
 {

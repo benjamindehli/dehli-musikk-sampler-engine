@@ -31,6 +31,7 @@ static const FloatSpec kFloatSpecs[] =
     { "SEQ_PLAYBACK_RATE",   "strumSpeed", "Strum Speed", false },
     { "GROUP_TUNING",        "tuning",     "Tuning",      true  },   // per-group pitch (semitones)
     { "FX_DRIVE",            "drive",      "Drive",       false },   // wave_shaper
+    { "AMP_VEL_TRACK",       "velSens",    "Velocity Sensitivity", false },
 };
 
 // Bool buttons, classified by their state bindings. Order = lane order.
@@ -152,6 +153,7 @@ static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
     else if (p == "ENV_RELEASE")         eng.setAmpRelease ((float) value);
     else if (p == "AMP_VOLUME")          eng.setGroupVolume (b.groupIndex.value_or (0), (float) value);
     else if (p == "GROUP_TUNING")        eng.setGroupTuning (b.groupIndex.value_or (0), (float) value);
+    else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
     else if (p == "ENABLED")
     {
         const bool on = value > 0.5;

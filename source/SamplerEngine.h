@@ -77,6 +77,7 @@ public:
     void setAmpDecay (float seconds);
     void setAmpSustain (float level);
     void setAmpRelease (float seconds);
+    void setAmpVelTrack (float amount);   // global AMP_VEL_TRACK (velocity → volume)
     void setGroupVolume (int groupIndex, float volume);
     void setGroupEnabled (int groupIndex, bool enabled);
     void setGroupTuning (int groupIndex, float semitones);   // GROUP_TUNING
@@ -113,7 +114,7 @@ private:
     // manifest defaults (and survive mode switches).
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
-    FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease;
+    FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
     static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
     FxOverride ovGroupVol[kMaxGroupVol];
     FxOverride ovGroupEnabled[kMaxGroupVol];

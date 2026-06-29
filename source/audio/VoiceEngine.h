@@ -57,6 +57,10 @@ public:
     /** Per-group pitch offset in semitones (GROUP_TUNING). Applied to new voices. */
     void setGroupTuning (int groupIndex, float semitones);
 
+    /** Global amp velocity-tracking override (AMP_VEL_TRACK, 0..1). Negative = use
+        each group's own velTrack. How much note velocity scales voice volume. */
+    void setAmpVelTrack (float amount) { ovVelTrack = amount; }
+
 private:
     struct Zone
     {
@@ -113,7 +117,8 @@ private:
     void handleNoteOff (int note);
     void handlePitchWheel (int wheelValue);   // 0..16383, centre 8192 (±2 semitones)
     Voice* allocateVoice();
-    const Zone* selectZone (int note, int velocity);   // velocity layer + round-robin; mutates rr state
+    const Zone* pickZoneInGroup (int group, int note, int velocity);   // velocity layer + round-robin within one group
+    void startVoice (const Zone& zone, int note, float velocity);
     juce::ADSR::Parameters effectiveAdsr (const juce::ADSR::Parameters& base) const;
 
     double sampleRate = 44100.0;
@@ -130,6 +135,7 @@ private:
 
     // Runtime amp overrides (negative = none) + per-group volume multipliers.
     float ovAttack { -1.0f }, ovDecay { -1.0f }, ovSustain { -1.0f }, ovRelease { -1.0f };
+    float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
     juce::Array<float> groupVolume;
     juce::Array<bool>  groupEnabled;
     juce::Array<double> groupTuningMul;   // per-group playback-rate multiplier (GROUP_TUNING)

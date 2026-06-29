@@ -6,7 +6,7 @@ namespace dm
 
 namespace
 {
-constexpr int kMaxVoices = 32;
+constexpr int kMaxVoices = 64;   // headroom for multi-group layering (drums stack several layers per hit)
 
 // Resolve the effective amp envelope for a group: mode defaults, with the group's
 // own overrides applied where present.
@@ -153,60 +153,50 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     }
 }
 
-const VoiceEngine::Zone* VoiceEngine::selectZone (int note, int velocity)
+const VoiceEngine::Zone* VoiceEngine::pickZoneInGroup (int group, int note, int velocity)
 {
-    auto groupOn = [this] (int g) { return g < 0 || g >= groupEnabled.size() || groupEnabled[g]; };
-    auto covers  = [note, velocity] (const Zone& z)
+    auto covers = [note, velocity] (const Zone& z)
     {
         return note >= z.loNote && note <= z.hiNote
             && velocity >= z.loVel && velocity <= z.hiVel;   // velocity layer
     };
 
-    // First enabled zone covering the note+velocity decides the group/layer.
-    int first = -1;
-    for (int i = 0; i < zones.size(); ++i)
-        if (covers (zones[i]) && groupOn (zones[i].groupIndex))
-        {
-            first = i;
-            break;
-        }
-    if (first < 0)
-        return nullptr;
-
-    const auto& z0 = zones.getReference (first);
-    if (! z0.roundRobin)
-        return &zones.getReference (first);
-
-    // Round-robin: gather this group's candidates covering the note+velocity, pick one.
+    // This group's zones covering the note+velocity.
     juce::Array<int> candidates;
+    bool roundRobin = false;
+    juce::String rrMode;
     for (int i = 0; i < zones.size(); ++i)
     {
         const auto& z = zones.getReference (i);
-        if (z.groupIndex == z0.groupIndex && covers (z))
+        if (z.groupIndex == group && covers (z))
+        {
             candidates.add (i);
+            roundRobin = z.roundRobin;
+            rrMode     = z.rrMode;
+        }
     }
-    if (candidates.size() <= 1)
-        return &zones.getReference (first);
+    if (candidates.isEmpty())
+        return nullptr;
+    if (candidates.size() == 1 || ! roundRobin)
+        return &zones.getReference (candidates[0]);
 
-    const int g = z0.groupIndex;
     int pick = 0;
-
-    if (z0.rrMode == "round_robin" || z0.rrMode == "round-robin")
+    if (rrMode == "round_robin" || rrMode == "round-robin")
     {
-        const int c = (g >= 0 && g < rrCounter.size()) ? rrCounter[g] : 0;
+        const int c = (group >= 0 && group < rrCounter.size()) ? rrCounter[group] : 0;
         pick = c % candidates.size();
-        if (g >= 0 && g < rrCounter.size())
-            rrCounter.set (g, c + 1);
+        if (group >= 0 && group < rrCounter.size())
+            rrCounter.set (group, c + 1);
     }
     else // "random" (and any unknown mode)
     {
         pick = rrRandom.nextInt (candidates.size());
-        if (g >= 0 && g < rrLast.size() && pick == rrLast[g])
+        if (group >= 0 && group < rrLast.size() && pick == rrLast[group])
             pick = (pick + 1) % candidates.size();   // avoid immediate repeat
     }
 
-    if (g >= 0 && g < rrLast.size())
-        rrLast.set (g, pick);
+    if (group >= 0 && group < rrLast.size())
+        rrLast.set (group, pick);
 
     return &zones.getReference (candidates[pick]);
 }
@@ -228,22 +218,34 @@ VoiceEngine::Voice* VoiceEngine::allocateVoice()
 void VoiceEngine::handleNoteOn (int note, float velocity)
 {
     const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
-    const auto* zone = selectZone (note, velMidi);
-    if (zone == nullptr)
-        return;
 
+    // Start a voice for EVERY enabled group covering this note+velocity — drums
+    // layer several groups on one note (and velocity layers are separate groups);
+    // round-robin picks within each group.
+    const int numGroups = groupEnabled.size();
+    for (int g = 0; g < numGroups; ++g)
+    {
+        if (! groupEnabled[g])
+            continue;
+        if (const auto* zone = pickZoneInGroup (g, note, velMidi))
+            startVoice (*zone, note, velocity);
+    }
+}
+
+void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
+{
     const int fadeOutSamples = juce::jmax (1, (int) (sampleRate * 0.004)); // ~4 ms declick
 
     // Tag choke: fade out (don't hard-cut) any active voice this voice silences,
     // so a fast mono retrigger doesn't click. The choked voice keeps rendering in
     // its own slot until the ramp reaches zero.
-    if (! zone->tags.isEmpty())
+    if (! zone.tags.isEmpty())
     {
         for (auto& v : voices)
         {
             if (! v.active || v.fadingOut)
                 continue;
-            for (const auto& t : zone->tags)
+            for (const auto& t : zone.tags)
                 if (v.silencedByTags.contains (t))
                 {
                     v.fadingOut = true;
@@ -255,29 +257,30 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
 
     Voice* v = allocateVoice();
     v->active = true;
-    v->buffer = zone->buffer;
+    v->buffer = zone.buffer;
     v->position = 0.0;
     v->note = note;
-    v->groupIndex = zone->groupIndex;
-    v->tags = zone->tags;
-    v->silencedByTags = zone->silencedByTags;
+    v->groupIndex = zone.groupIndex;
+    v->tags = zone.tags;
+    v->silencedByTags = zone.silencedByTags;
 
-    double rate = zone->buffer->sampleRate / sampleRate;
-    if (zone->pitchKeyTrack)
-        rate *= std::pow (2.0, (note - zone->rootNote) / 12.0);
-    if (zone->groupIndex >= 0 && zone->groupIndex < groupTuningMul.size())
-        rate *= groupTuningMul[zone->groupIndex];   // GROUP_TUNING
+    double rate = zone.buffer->sampleRate / sampleRate;
+    if (zone.pitchKeyTrack)
+        rate *= std::pow (2.0, (note - zone.rootNote) / 12.0);
+    if (zone.groupIndex >= 0 && zone.groupIndex < groupTuningMul.size())
+        rate *= groupTuningMul[zone.groupIndex];   // GROUP_TUNING
     v->rate = rate;
 
-    v->loopEnabled = zone->loopEnabled;
-    v->loopEnd = (double) zone->loopEnd;
-    v->loopLen = (double) zone->loopLen;
-    v->loopXf  = (double) zone->loopXf;
+    v->loopEnabled = zone.loopEnabled;
+    v->loopEnd = (double) zone.loopEnd;
+    v->loopLen = (double) zone.loopLen;
+    v->loopXf  = (double) zone.loopXf;
 
-    const float velGain = 1.0f - zone->velTrack + zone->velTrack * velocity;
-    v->gain = zone->gain * velGain;
+    const float vt = (ovVelTrack >= 0.0f) ? ovVelTrack : zone.velTrack;   // global sensitivity override
+    const float velGain = 1.0f - vt + vt * velocity;
+    v->gain = zone.gain * velGain;
 
-    v->baseAdsr = zone->adsr;
+    v->baseAdsr = zone.adsr;
     v->adsr.setSampleRate (sampleRate);
     v->adsr.setParameters (effectiveAdsr (v->baseAdsr));
     v->adsr.noteOn();
