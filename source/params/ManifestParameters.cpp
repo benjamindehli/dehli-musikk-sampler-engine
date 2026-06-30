@@ -26,13 +26,19 @@ static const FloatSpec kFloatSpecs[] =
     { "ENV_DECAY",           "decay",      "Decay",       false },
     { "ENV_ATTACK",          "attack",     "Attack",      false },
     { "ENV_SUSTAIN",         "sustain",    "Sustain",     false },
-    { "FX_OUTPUT_LEVEL",     "reverbGain", "Reverb Gain", false },
+    { "FX_OUTPUT_LEVEL",     "fxOutput",   "Output Level", false },   // convolution wet trim OR wave_shaper output
     { "AMP_VOLUME",          "voice",      "Voice",       true  },
     { "SEQ_PLAYBACK_RATE",   "strumSpeed", "Strum Speed", false },
     { "GROUP_TUNING",        "tuning",     "Tuning",      true  },   // per-group pitch (semitones)
     { "FX_DRIVE",            "drive",      "Drive",       false },   // wave_shaper
     { "AMP_VEL_TRACK",       "velSens",    "Velocity Sensitivity", false },
+    { "LEVEL",               "level",      "Level",       false },   // gain effect
+    { "MOD_AMOUNT",          "modAmount",  "Mod Amount",  false },   // LFO depth (engine wiring: feature #3)
 };
+
+// With per-control keying the baseId/perGroup/baseName fields are vestigial — each
+// control now owns one param keyed by its label (see controlKey). The registry is
+// kept only as the set of float engine parameters applyBinding knows how to route.
 
 // Bool buttons, classified by their state bindings. Order = lane order.
 struct BoolSpec { const char* id; const char* name; };
@@ -49,13 +55,6 @@ static const FloatSpec* floatSpecFor (const juce::String& parameter)
         if (parameter == s.engineParam)
             return &s;
     return nullptr;
-}
-
-static juce::String floatId (const FloatSpec& s, std::optional<int> groupIndex)
-{
-    if (s.perGroup)
-        return juce::String (s.baseId) + juce::String (groupIndex.value_or (0) + 1);
-    return s.baseId;
 }
 
 // Index into kBoolSpecs for a button, or -1.
@@ -78,26 +77,25 @@ static double normOf (const Control& c)
     return mx > mn ? juce::jlimit (0.0, 1.0, (v - mn) / (mx - mn)) : 0.0;
 }
 
-static bool controlHasFloatSpec (const Control& c)
+static bool bindingIsTag (const Binding& b)
+{
+    return b.parameter == "TAG_VOLUME" || b.parameter == "TAG_ENABLED";
+}
+
+// A control "drives the engine" if it has any binding the engine acts on — a float
+// engine parameter (registry) or a tag mixer/selector. Such controls each get ONE
+// automatable param, keyed by the control's label (controlKey). UI-only controls
+// (e.g. VISIBLE/OPACITY-only) get none.
+static bool controlDrivesEngine (const Control& c)
 {
     for (const auto& b : c.bindings)
-        if (floatSpecFor (b.parameter) != nullptr)
+        if (floatSpecFor (b.parameter) != nullptr || bindingIsTag (b))
             return true;
     return false;
 }
 
-// Tag/selector controls (TAG_VOLUME mixers, TAG_ENABLED selectors) get one param
-// per knob, keyed by a stable id from the control's label.
-static bool controlIsTag (const Control& c)
-{
-    if (controlHasFloatSpec (c))
-        return false;
-    for (const auto& b : c.bindings)
-        if (b.parameter == "TAG_VOLUME" || b.parameter == "TAG_ENABLED")
-            return true;
-    return false;
-}
-
+// Stable param id from a control's label. Controls with the same label across modes
+// share one param (a knob's lane stays put when you switch modes).
 static juce::String controlKey (const juce::String& label)
 {
     return "ctl_" + label.toLowerCase().replaceCharacters (" :-/.,()#&", "__________");
@@ -106,8 +104,43 @@ static juce::String controlKey (const juce::String& label)
 // Map a normalised knob value to the engine value: a binding's explicit output
 // range (DecentSampler translationOutputMin/Max) if present, else the control's
 // own min..max range times the factor.
+// "in,out;in,out;..." lookup — piecewise-linear interpolation between the points
+// (DecentSampler curve tables, e.g. a Saturation knob's FX_DRIVE / FX_OUTPUT_LEVEL).
+// Clamps to the first/last output outside the table's input range.
+static double evalTableLinear (const juce::String& table, double x)
+{
+    double prevIn = 0.0, prevOut = 0.0; bool havePrev = false;
+    int start = 0;
+    while (start < table.length())
+    {
+        int semi = table.indexOfChar (start, ';');
+        if (semi < 0) semi = table.length();
+        const int comma = table.indexOfChar (start, ',');
+        if (comma > start && comma < semi)
+        {
+            const double in  = table.substring (start, comma).getDoubleValue();
+            const double out = table.substring (comma + 1, semi).getDoubleValue();
+            if (x <= in)
+            {
+                if (! havePrev || ! (in > prevIn)) return out;   // before first point / vertical step
+                const double t = (x - prevIn) / (in - prevIn);
+                return prevOut + t * (out - prevOut);
+            }
+            prevIn = in; prevOut = out; havePrev = true;
+        }
+        start = semi + 1;
+    }
+    return havePrev ? prevOut : 0.0;   // past the last point → last output
+}
+
 static double outputValue (const Binding& b, float norm, double mn, double mx)
 {
+    if (b.translationTable.isNotEmpty())
+    {
+        double in = mn + (double) norm * (mx - mn);          // the control's actual value
+        if (b.translationReversed) in = mx + mn - in;        // reverse the input (max↔min)
+        return evalTableLinear (b.translationTable, in);
+    }
     if (b.translationOutputMin && b.translationOutputMax)
         return *b.translationOutputMin + (double) norm * (*b.translationOutputMax - *b.translationOutputMin);
     return (mn + (double) norm * (mx - mn)) * b.factor.value_or (1.0);
@@ -143,17 +176,30 @@ static double evalTable (const juce::String& table, double x)
 static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
 {
     const auto& p = b.parameter;
+    const bool  groupLevel = b.level == "group" && b.groupIndex.has_value();
+
     if      (p == "FX_FILTER_FREQUENCY") eng.setLowpassFrequency ((float) value);
-    else if (p == "FX_MIX")              eng.setReverbMix ((float) value);
-    else if (p == "FX_OUTPUT_LEVEL")     eng.setReverbWetGainDb ((float) value);
+    // Effect params: address a specific instrument effect by index when known;
+    // FxChain routes FX_OUTPUT_LEVEL by the slot's kind (wave_shaper vs convolution).
+    else if (p == "FX_MIX")              { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbMix ((float) value); }
+    else if (p == "FX_DRIVE")            { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setWaveShaperDrive ((float) value); }
+    else if (p == "FX_OUTPUT_LEVEL")     { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbWetGainDb ((float) value); }
+    else if (p == "LEVEL")
+    {
+        // group-level `gain` effect → per-group output gain; instrument gain → by index.
+        if      (groupLevel)    eng.setGroupGain (*b.groupIndex, (float) value);
+        else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value);
+        else                    eng.setGain ((float) value);
+    }
     else if (p == "SEQ_PLAYBACK_RATE")   eng.setSequencerRate (value);
     else if (p == "ENV_ATTACK")          eng.setAmpAttack ((float) value);
     else if (p == "ENV_DECAY")           eng.setAmpDecay ((float) value);
     else if (p == "ENV_SUSTAIN")         eng.setAmpSustain ((float) value);
     else if (p == "ENV_RELEASE")         eng.setAmpRelease ((float) value);
-    else if (p == "AMP_VOLUME")          eng.setGroupVolume (b.groupIndex.value_or (0), (float) value);
+    else if (p == "AMP_VOLUME")          { if (b.groupIndex) eng.setGroupVolume (*b.groupIndex, (float) value); else eng.setMasterVolume ((float) value); }
     else if (p == "GROUP_TUNING")        eng.setGroupTuning (b.groupIndex.value_or (0), (float) value);
     else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
+    else if (p == "MOD_AMOUNT")          eng.setLfoDepth ((float) value);
     else if (p == "ENABLED")
     {
         const bool on = value > 0.5;
@@ -199,19 +245,6 @@ static juce::StringArray firstMenuOptions (const PresetLibrary& lib)
     return names;
 }
 
-// First control across all modes driving (spec, groupIndex) → its default norm.
-static float defaultNorm (const PresetLibrary& lib, const FloatSpec& spec, std::optional<int> groupIndex)
-{
-    for (const auto& m : lib.modes)
-        if (! m.ui.tabs.isEmpty())
-            for (const auto& c : m.ui.tabs.getReference (0).controls)
-                for (const auto& b : c.bindings)
-                    if (b.parameter == spec.engineParam
-                        && (! spec.perGroup || b.groupIndex.value_or (0) == groupIndex.value_or (0)))
-                        return (float) normOf (c);
-    return 0.5f;
-}
-
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLibrary& lib)
 {
     using namespace juce;
@@ -224,42 +257,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
 
     p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendRange, 1 }, "Pitch Bend Range", 1, 12, 2));
 
-    // Float params: registry order; create only targets the library actually uses.
-    auto libraryUses = [&lib] (const FloatSpec& s, std::optional<int> gi) -> bool
-    {
-        for (const auto& m : lib.modes)
-            if (! m.ui.tabs.isEmpty())
-                for (const auto& c : m.ui.tabs.getReference (0).controls)
-                    for (const auto& b : c.bindings)
-                        if (b.parameter == s.engineParam
-                            && (! s.perGroup || ! gi || b.groupIndex.value_or (0) == *gi))
-                            return true;
-        return false;
-    };
-
-    for (const auto& s : kFloatSpecs)
-    {
-        if (s.perGroup)
-        {
-            std::set<int> groups;
-            for (const auto& m : lib.modes)
-                if (! m.ui.tabs.isEmpty())
-                    for (const auto& c : m.ui.tabs.getReference (0).controls)
-                        for (const auto& b : c.bindings)
-                            if (b.parameter == s.engineParam)
-                                groups.insert (b.groupIndex.value_or (0));
-            for (int gi : groups)
-                p.push_back (std::make_unique<AudioParameterFloat> (
-                    ParameterID { floatId (s, gi), 1 }, s.baseName + (" " + String (gi + 1)),
-                    NormalisableRange<float> (0.0f, 1.0f), defaultNorm (lib, s, gi)));
-        }
-        else if (libraryUses (s, {}))
-        {
-            p.push_back (std::make_unique<AudioParameterFloat> (
-                ParameterID { s.baseId, 1 }, s.baseName,
-                NormalisableRange<float> (0.0f, 1.0f), defaultNorm (lib, s, {})));
-        }
-    }
+    // One float param per engine-driving control, keyed by label (deduped across
+    // modes). Stored normalised 0..1; each mode maps it through its own control
+    // range + bindings. The FIRST control seen for a given key sets the default.
+    std::set<juce::String> seen;
+    for (const auto& m : lib.modes)
+        if (! m.ui.tabs.isEmpty())
+            for (const auto& c : m.ui.tabs.getReference (0).controls)
+                if (controlDrivesEngine (c))
+                {
+                    const auto cid = controlKey (c.label);
+                    if (seen.insert (cid).second)
+                        p.push_back (std::make_unique<AudioParameterFloat> (
+                            ParameterID { cid, 1 }, c.label,
+                            NormalisableRange<float> (0.0f, 1.0f), (float) normOf (c)));
+                }
 
     // Bool params: registry order; create only kinds present in the library.
     constexpr int numBoolSpecs = (int) (sizeof (kBoolSpecs) / sizeof (kBoolSpecs[0]));
@@ -279,19 +291,6 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
     auto chordOpts = firstMenuOptions (lib);
     if (! chordOpts.isEmpty())
         p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { id::chordOrder, 1 }, "Chord Order", chordOpts, 0));
-
-    // Tag/selector controls — one float param per knob (TAG_VOLUME mixers, TAG_ENABLED selectors).
-    std::set<juce::String> seenTag;
-    for (const auto& m : lib.modes)
-        if (! m.ui.tabs.isEmpty())
-            for (const auto& c : m.ui.tabs.getReference (0).controls)
-                if (controlIsTag (c))
-                {
-                    const auto cid = controlKey (c.label);
-                    if (seenTag.insert (cid).second)
-                        p.push_back (std::make_unique<AudioParameterFloat> (
-                            ParameterID { cid, 1 }, c.label, NormalisableRange<float> (0.0f, 1.0f), (float) normOf (c)));
-                }
 
     return { p.begin(), p.end() };
 }
@@ -313,44 +312,34 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
 
     for (const auto& c : tab.controls)
     {
-        const double mn = c.min.value_or (0.0), mx = c.max.value_or (1.0);
+        if (! controlDrivesEngine (c))
+            continue;
 
-        // Float-spec control: each matching binding drives its engine target.
-        if (controlHasFloatSpec (c))
+        // One param per control (keyed by label); every binding maps that same
+        // knob position through its own translation to its engine target.
+        const double mn = c.min.value_or (0.0), mx = c.max.value_or (1.0);
+        const float  norm = raw (controlKey (c.label));
+
+        for (const auto& b : c.bindings)
         {
-            for (const auto& b : c.bindings)
+            if (floatSpecFor (b.parameter) != nullptr)
             {
-                const auto* spec = floatSpecFor (b.parameter);
-                if (spec == nullptr)
-                    continue;
-                const float norm = spec->perGroup ? raw (floatId (*spec, b.groupIndex))
-                                                  : raw (juce::StringRef (spec->baseId));
                 applyBinding (engine, b, outputValue (b, norm, mn, mx));
             }
-            continue;
-        }
-
-        // Tag/selector control: one knob param drives its tag bindings.
-        if (controlIsTag (c))
-        {
-            const float norm = raw (controlKey (c.label));
-            for (const auto& b : c.bindings)
+            else if (b.parameter == "TAG_VOLUME")
             {
-                if (b.parameter == "TAG_VOLUME")
-                {
-                    const float v = (float) outputValue (b, norm, mn, mx);
-                    for (int gi = 0; gi < mode.groups.size(); ++gi)
-                        if (mode.groups.getReference (gi).tags.contains (b.identifier))
-                            engine.setGroupVolume (gi, v);
-                }
-                else if (b.parameter == "TAG_ENABLED")
-                {
-                    const double sel = mn + (double) norm * (mx - mn);   // selector value in control range
-                    const bool on = evalTable (b.translationTable, sel) > 0.5;
-                    for (int gi = 0; gi < mode.groups.size(); ++gi)
-                        if (mode.groups.getReference (gi).tags.contains (b.identifier))
-                            engine.setGroupEnabled (gi, on);
-                }
+                const float v = (float) outputValue (b, norm, mn, mx);
+                for (int gi = 0; gi < mode.groups.size(); ++gi)
+                    if (mode.groups.getReference (gi).tags.contains (b.identifier))
+                        engine.setGroupTagVolume (gi, v);
+            }
+            else if (b.parameter == "TAG_ENABLED")
+            {
+                const double sel = mn + (double) norm * (mx - mn);   // selector value in control range
+                const bool on = evalTable (b.translationTable, sel) > 0.5;
+                for (int gi = 0; gi < mode.groups.size(); ++gi)
+                    if (mode.groups.getReference (gi).tags.contains (b.identifier))
+                        engine.setGroupEnabled (gi, on);
             }
         }
     }
@@ -368,7 +357,21 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
         if (! menu.options.isEmpty())
         {
             const int sel = juce::jlimit (0, menu.options.size() - 1, (int) raw (id::chordOrder));
-            engine.setSequencerIndexOffset (menu.options.getReference (sel).seqIndex);
+            const auto& opt = menu.options.getReference (sel);
+            engine.setSequencerIndexOffset (opt.seqIndex);   // chord-order menu (Omni)
+
+            // Amp/cabinet-style menu: apply the option's cheap effect bindings here.
+            // FX_IR_FILE (heavy IR reload) is applied on the message thread instead.
+            for (const auto& b : opt.bindings)
+            {
+                if (! b.effectIndex)
+                    continue;
+                const int ei = *b.effectIndex;
+                if (b.parameter == "ENABLED")
+                    engine.setEffectEnabled (ei, bindingIsTrue (b));
+                else if (b.parameter == "FX_MIX" || b.parameter == "FX_DRIVE" || b.parameter == "FX_OUTPUT_LEVEL")
+                    engine.setEffectParam (ei, b.parameter, b.translationValue.toString().getFloatValue());
+            }
             break;
         }
 }
@@ -392,10 +395,20 @@ void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
         {
             if (cb.cc != cc)
                 continue;
-            const auto* spec = floatSpecFor (cb.parameter);
-            if (spec == nullptr)
+            // Find the control this CC targets (by its engine parameter + group) and
+            // drive that control's param. The converter precomputed normMin/normMax.
+            if (mode.ui.tabs.isEmpty())
                 continue;
-            const auto pid = floatId (*spec, cb.groupIndex);
+            juce::String pid;
+            for (const auto& c : mode.ui.tabs.getReference (0).controls)
+            {
+                if (! controlDrivesEngine (c)) continue;
+                for (const auto& b : c.bindings)
+                    if (b.parameter == cb.parameter
+                        && (! cb.groupIndex || b.groupIndex.value_or (0) == *cb.groupIndex))
+                    { pid = controlKey (c.label); break; }
+                if (pid.isNotEmpty()) break;
+            }
             const float norm = juce::jlimit (0.0f, 1.0f,
                                              (float) (cb.normMin + v * (cb.normMax - cb.normMin)));
             if (auto* prm = apvts.getParameter (pid))
@@ -426,11 +439,8 @@ void applyNoteSwitches (const juce::MidiBuffer& midi, const Mode& mode,
 juce::StringArray controlParamIds (const Control& c)
 {
     juce::StringArray ids;
-    for (const auto& b : c.bindings)
-        if (const auto* spec = floatSpecFor (b.parameter))
-            ids.addIfNotAlreadyThere (floatId (*spec, b.groupIndex));
-    if (ids.isEmpty() && controlIsTag (c))
-        ids.add (controlKey (c.label));   // TAG_VOLUME / TAG_ENABLED knob → its own param
+    if (controlDrivesEngine (c))
+        ids.add (controlKey (c.label));   // one param per control, keyed by label
     return ids;
 }
 
