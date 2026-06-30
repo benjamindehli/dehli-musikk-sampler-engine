@@ -63,6 +63,7 @@ Binding parseBinding (const var& v)
     b.level       = str (v, "level");
     b.identifier  = str (v, "identifier");
     b.translationTable = str (v, "translationTable");
+    b.translationReversed = boolean (v, "translationReversed", false);
     b.parameter   = str (v, "parameter");
     b.translation = str (v, "translation");
     b.modBehavior = str (v, "modBehavior");
@@ -139,6 +140,8 @@ Sample parseSample (const var& v, ManifestParseResult& res, const juce::String& 
     s.volume        = optD (v, "volume");
     s.seqPosition   = optI (v, "seqPosition");
     s.ampEnvEnabled = optB (v, "ampEnvEnabled");
+    s.onLoCC64      = optI (v, "onLoCC64");
+    s.onHiCC64      = optI (v, "onHiCC64");
 
     auto loop = get (v, "loop");
     if (! loop.isVoid())
@@ -218,6 +221,7 @@ Effect parseEffect (const var& v)
     e.wet         = optD (v, "wet");
     e.outputLevel = optD (v, "outputLevel");
     e.ir          = str (v, "ir");
+    e.normalizeIr = boolean (v, "normalizeIr", true);
     return e;
 }
 
@@ -351,6 +355,7 @@ Ui parseUi (const var& v)
                             MenuOption mo;
                             mo.name     = str (o, "name");
                             mo.seqIndex = intg (o, "seqIndex", 0);
+                            mo.bindings = parseBindings (o);
                             menu.options.add (mo);
                         }
                     tab.menus.add (menu);
@@ -463,6 +468,7 @@ ManifestParseResult loadManifest (const var& root)
     res.library.schema  = intg (root, "schema", 0);
     res.library.format  = str (root, "format");
     res.library.library = str (root, "library");
+    res.library.gainDb  = optD (root, "gainDb").value_or (0.0);
 
     if (res.library.schema == 0)
         res.warnings.add ("manifest has no \"schema\" version; assuming "

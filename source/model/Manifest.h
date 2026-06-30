@@ -37,6 +37,7 @@ struct Binding
     juce::String modBehavior; // set (LFO bindings)
     juce::String identifier;  // tag name for level="tag" bindings (TAG_VOLUME/TAG_ENABLED)
     juce::String translationTable; // "in,out;in,out;..." lookup (translation="table")
+    bool translationReversed = false; // reverse the table input (max↔min)
 
     std::optional<double> factor;     // scales the source value
     std::optional<double> modAmount;
@@ -107,6 +108,12 @@ struct Sample
     std::optional<int>    seqPosition;   // round-robin slot (1-based, per group seqMode)
     std::optional<bool>   ampEnvEnabled; // per-sample override
 
+    // Sustain-pedal (CC64) gate: when present (and loNote=-1), the sample is NOT
+    // note-triggered — it fires when CC64 transitions into [onLoCC64, onHiCC64]
+    // (e.g. damper-lift noise on pedal down, damper-drop on pedal up).
+    std::optional<int>    onLoCC64;
+    std::optional<int>    onHiCC64;
+
     SampleLoop loop;
 };
 
@@ -169,6 +176,7 @@ struct Effect
     std::optional<double> wet;           // convolution (from "wetLevel")
     std::optional<double> outputLevel;
     juce::String ir;                     // convolution IR asset id (from "irFile")
+    bool normalizeIr = true;             // normalise the IR's energy (off = use it as recorded, like DS)
 
     juce::var raw;                       // full original object
 };
@@ -276,6 +284,9 @@ struct MenuOption
 {
     juce::String name;
     int seqIndex = 0;
+    // Effect bindings applied when this option is selected (e.g. an amp/cabinet
+    // selector: ENABLED / FX_DRIVE / FX_OUTPUT_LEVEL / FX_MIX / FX_IR_FILE).
+    juce::Array<Binding> bindings;
 };
 
 struct Menu
@@ -367,6 +378,7 @@ struct PresetLibrary
     int schema = 0;              // manifest schema version
     juce::String format;         // "dmse-manifest"
     juce::String library;        // human name, e.g. "Omni-84"
+    double gainDb = 0.0;         // pre-FX level trim applied to all modes (matches DS signal level)
     juce::Array<Mode> modes;
 };
 

@@ -34,6 +34,7 @@ var writeBinding (const Binding& b)
     o.setStr ("level", b.level);
     o.setStr ("identifier", b.identifier);
     o.setStr ("translationTable", b.translationTable);
+    if (b.translationReversed) o.set ("translationReversed", true);
     o.setStr ("parameter", b.parameter);
     o.setStr ("translation", b.translation);
     o.setStr ("modBehavior", b.modBehavior);
@@ -96,6 +97,8 @@ var writeSample (const Sample& s)
     o.setOpt ("volume", s.volume);
     o.setOpt ("seqPosition", s.seqPosition);
     o.setOpt ("ampEnvEnabled", s.ampEnvEnabled);
+    o.setOpt ("onLoCC64", s.onLoCC64);
+    o.setOpt ("onHiCC64", s.onHiCC64);
 
     if (s.loop.enabled)
     {
@@ -177,6 +180,7 @@ var writeEffect (const Effect& e)
     o.setOpt ("wet", e.wet);
     o.setOpt ("outputLevel", e.outputLevel);
     o.setStr ("ir", e.ir);
+    if (! e.normalizeIr) o.set ("normalizeIr", false);
     return o.toVar();
 }
 
@@ -323,6 +327,8 @@ var writeUi (const Ui& ui)
                     Obj oo;
                     oo.set ("name", op.name);
                     oo.set ("seqIndex", op.seqIndex);
+                    if (! op.bindings.isEmpty())
+                        oo.set ("bindings", writeBindings (op.bindings));
                     opts.add (oo.toVar());
                 }
                 mo.set ("options", fromArray (opts));
@@ -450,6 +456,8 @@ var manifestToVar (const PresetLibrary& library)
     o.set ("schema", library.schema > 0 ? library.schema : kManifestSchemaVersion);
     o.setStr ("format", library.format.isNotEmpty() ? library.format : juce::String ("dmse-manifest"));
     o.setStr ("library", library.library);
+    if (library.gainDb != 0.0)
+        o.set ("gainDb", library.gainDb);
 
     juce::Array<var> modes;
     for (const auto& m : library.modes)
