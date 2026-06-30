@@ -42,15 +42,23 @@ public:
     void setEffectParam (int index, const juce::String& parameter, float value);
     int  getNumEffects() const noexcept { return (int) slots.size(); }
 
+    /** Reload a convolution slot's impulse response at runtime (e.g. a cabinet
+        selector). MESSAGE THREAD only — juce::dsp::Convolution loads the IR on its
+        own background thread and swaps atomically, so it's safe alongside process(). */
+    void setEffectIr (int index, const SampleSource& source, const juce::String& irId);
+
     // Semantic helpers that address the first effect of a kind (mode-agnostic),
     // used by the temporary dev FX controls.
     void setLowpassEnabled (bool enabled);
     void setLowpassFrequency (float hz);
     void setReverbMix (float amount);
     void setReverbWetGainDb (float db);
+    void setGain (float db);                 // gain effect (level in dB)
+    void setWaveShaperDrive (float drive);   // wave_shaper input drive
+    void setWaveShaperOutput (float level);  // wave_shaper output level (clamped 0..1)
 
 private:
-    enum class Kind { passthrough, lowpass, convolution };
+    enum class Kind { passthrough, lowpass, convolution, gain, waveShaper };
 
     struct Slot
     {
@@ -60,6 +68,10 @@ private:
         std::atomic<float> resonance { 0.707f };     // lowpass Q
         std::atomic<float> mix { 0.0f };             // convolution dry/wet 0..1 (1 = fully wet)
         std::atomic<float> wetGainDb { 0.0f };       // convolution wet trim (dB, ±) to balance vs dry
+        std::atomic<float> gainLinear { 1.0f };      // gain effect (linear)
+        std::atomic<float> drive { 1.0f };           // wave_shaper input gain
+        std::atomic<float> output { 1.0f };          // wave_shaper output level (0..1)
+        bool normalize { true };                     // convolution: normalise the IR (off = as recorded)
 
         juce::dsp::StateVariableTPTFilter<float> filter;
         std::unique_ptr<juce::dsp::Convolution> convolution;
