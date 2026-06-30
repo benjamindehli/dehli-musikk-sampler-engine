@@ -4,6 +4,38 @@
 namespace dm
 {
 
+namespace
+{
+// "in,out;in,out;..." piecewise-linear lookup (clamped to the end outputs).
+// Used for VISIBLE (0/1 step tables) and OPACITY (continuous ramps); at integer
+// selector values a step table returns its exact 0/1, matching the knob frame.
+double evalTableLinear (const juce::String& table, double x)
+{
+    double prevIn = 0.0, prevOut = 0.0; bool havePrev = false;
+    int start = 0;
+    while (start < table.length())
+    {
+        int semi = table.indexOfChar (start, ';');
+        if (semi < 0) semi = table.length();
+        const int comma = table.indexOfChar (start, ',');
+        if (comma > start && comma < semi)
+        {
+            const double in  = table.substring (start, comma).getDoubleValue();
+            const double out = table.substring (comma + 1, semi).getDoubleValue();
+            if (x <= in)
+            {
+                if (! havePrev || ! (in > prevIn)) return out;
+                const double t = (x - prevIn) / (in - prevIn);
+                return prevOut + t * (out - prevOut);
+            }
+            prevIn = in; prevOut = out; havePrev = true;
+        }
+        start = semi + 1;
+    }
+    return havePrev ? prevOut : 0.0;
+}
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Filmstrip rotary knob: a vertical strip of `frames` images; the frame shown is
 // chosen by the normalised value. Vertical drag changes the value.
@@ -118,14 +150,25 @@ class ManifestUiComponent::SwappableImage : public juce::Component
 public:
     void setImage (juce::Image img) { image = img; repaint(); }
 
+    /** OPACITY binding: 0..1 alpha (e.g. crossfading LED up/down indicators). */
+    void setImageAlpha (float a)
+    {
+        const float na = juce::jlimit (0.0f, 1.0f, a);
+        if (na != alpha) { alpha = na; repaint(); }
+    }
+
     void paint (juce::Graphics& g) override
     {
         if (image.isValid())
+        {
+            g.setOpacity (alpha);
             g.drawImage (image, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
+        }
     }
 
 private:
     juce::Image image;
+    float alpha { 1.0f };
 };
 
 // ---------------------------------------------------------------------------
@@ -163,7 +206,11 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
                                         c.min.value_or (0.0), c.max.value_or (1.0),
                                         c.value.value_or (c.min.value_or (0.0)));
         const Control* cp = &c;
-        knob->onChange = [this, cp] (double v) { if (onControlChanged) onControlChanged (*cp, v); };
+        knob->onChange = [this, cp] (double v)
+        {
+            if (onControlChanged) onControlChanged (*cp, v);
+            applyVisibilityBindings (*cp, v);   // drive any LED segment images
+        };
         addAndMakeVisible (knob);
         knobs.add (knob);
         knobRects.add (c.rect);
@@ -227,6 +274,10 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         menuRects.add (m.rect);
         menuModels.add (mp);
     }
+
+    // Set the initial visibility/opacity of any binding-driven images (so the LED
+    // displays start matching their selector instead of all segments stacked on).
+    applyAllVisibility();
 }
 
 void ManifestUiComponent::refresh (
@@ -252,6 +303,37 @@ void ManifestUiComponent::refresh (
         if (auto sel = menuSelection (*menuModels[i]))
             if (menus[i]->getSelectedId() != *sel + 1)
                 menus[i]->setSelectedId (*sel + 1, juce::dontSendNotification);
+
+    applyAllVisibility();   // selector knobs may have moved → resync LED displays
+}
+
+void ManifestUiComponent::applyVisibilityBindings (const Control& c, double value)
+{
+    for (const auto& b : c.bindings)
+    {
+        if (b.type != "control" || ! b.controlIndex)
+            continue;
+        const bool isOpacity = b.parameter == "OPACITY";
+        if (! isOpacity && b.parameter != "VISIBLE")
+            continue;
+
+        const int idx = lightControlIndex.indexOf (*b.controlIndex);
+        if (idx < 0)
+            continue;
+
+        const double out = b.translationTable.isNotEmpty()
+                             ? evalTableLinear (b.translationTable, value) : value;
+        if (isOpacity)
+            lights[idx]->setImageAlpha ((float) out);
+        else
+            lights[idx]->setVisible (out > 0.5);
+    }
+}
+
+void ManifestUiComponent::applyAllVisibility()
+{
+    for (int i = 0; i < knobs.size(); ++i)
+        applyVisibilityBindings (*knobModels[i], knobs[i]->getValue());
 }
 
 ManifestUiComponent::~ManifestUiComponent() = default;

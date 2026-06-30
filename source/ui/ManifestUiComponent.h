@@ -52,6 +52,12 @@ private:
     void handleButton (const Button& b, int index, int stateIndex);
     void applyLightBindings (const ButtonState& state);   // PATH swaps, addressed by controlIndex
 
+    // VISIBLE/OPACITY: a control's value drives the visibility/alpha of images
+    // addressed by controlIndex (e.g. the LED segment displays — pitch up/down
+    // crossfade via OPACITY, sustain digit selection via VISIBLE).
+    void applyVisibilityBindings (const Control& c, double value);
+    void applyAllVisibility();   // re-evaluate every source control (load + refresh)
+
     Ui uiData;                          // owned copy (widgets reference it)
     ImageProvider provider;
     juce::Image background;

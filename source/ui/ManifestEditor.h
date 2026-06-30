@@ -13,6 +13,7 @@
 #include "ManifestUiComponent.h"
 #include "ColouredKeyboard.h"
 #include "WheelLookAndFeel.h"
+#include "LevelMeter.h"
 #include <functional>
 #include <memory>
 
@@ -33,6 +34,10 @@ public:
     virtual void setPitchWheel (int value14) = 0;            // 0..16383
     virtual void setModWheel   (int value7)  = 0;            // CC1, 0..127
     virtual juce::Image loadImage (const juce::String& id) = 0;   // resolve a manifest image id
+
+    /** Output peak (max |sample|) since the previous call, for the level meter; the
+        implementation reads-and-resets. Default 0 = no meter (host opts in). */
+    virtual float readOutputPeak() { return 0.0f; }
 
     /** The editor installs this; the host invokes it (message thread) after the
         active mode actually changes, so the editor can rebuild its face. */
@@ -72,6 +77,8 @@ private:
     WheelLookAndFeel wheelLnf;
     juce::Slider bendRangeSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bendRangeAttachment;
+    LevelMeter outputMeter;
+    juce::Label meterLabel;
 
     int keyOctave { 6 };
     int lowestVisibleKey { 36 };

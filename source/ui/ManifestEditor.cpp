@@ -92,6 +92,11 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     bendRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         host.getApvts(), params::id::pitchBendRange, bendRangeSlider);
 
+    meterLabel.setText ("Out", juce::dontSendNotification);
+    meterLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (meterLabel);
+    addAndMakeVisible (outputMeter);   // click the meter to reset its clip indicator
+
     host.onModeChanged = [this]
     {
         modeSelector.setSelectedId (host.getActiveModeIndex() + 1, juce::dontSendNotification);
@@ -213,6 +218,7 @@ void ManifestEditor::refreshWidgets()
 void ManifestEditor::timerCallback()
 {
     refreshWidgets();
+    outputMeter.setLevel (host.readOutputPeak());
 }
 
 bool ManifestEditor::handleKey (const juce::KeyPress& key)
@@ -249,6 +255,10 @@ void ManifestEditor::resized()
     top.removeFromLeft (12);
     bendLabel.setBounds (top.removeFromLeft (40));
     bendRangeSlider.setBounds (top.removeFromLeft (96));
+    // Output meter on the right of the strip (before the version label).
+    auto meterArea = top.removeFromRight (130).reduced (8, 7);
+    meterLabel.setBounds (meterArea.removeFromLeft (28));
+    outputMeter.setBounds (meterArea);
 
     if (uiComponent != nullptr)
         uiComponent->setBounds (area);
