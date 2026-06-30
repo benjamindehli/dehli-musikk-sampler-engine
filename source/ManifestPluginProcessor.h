@@ -81,6 +81,7 @@ public:
         if (i < 0 || i >= library.modes.size()) return nullptr;
         return &library.modes.getReference (i);
     }
+    float readOutputPeak() override { return outputPeak.exchange (0.0f, std::memory_order_relaxed); }
 
 protected:
     SamplerEngine& getEngine() noexcept { return engine; }
@@ -90,6 +91,7 @@ private:
     void loadEmbeddedLibrary();
     void parameterChanged (const juce::String& paramID, float newValue) override;
     void handleAsyncUpdate() override;
+    void applyMenuIrFor (int modeIndex);   // cabinet-menu FX_IR_FILE → engine (message thread)
 
     Assets assets;
 
@@ -103,6 +105,7 @@ private:
 
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };
+    std::atomic<float> outputPeak { 0.0f };   // max |sample| since the editor last read it
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestPluginProcessor)
 };

@@ -13,12 +13,16 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
     apvts = std::make_unique<juce::AudioProcessorValueTreeState> (
         *this, nullptr, "PARAMS", params::createLayout (library));
     apvts->addParameterListener (params::id::mode, this);
+    apvts->addParameterListener (params::id::chordOrder, this);   // menu (e.g. amp/cabinet IR)
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor()
 {
     if (apvts != nullptr)
+    {
         apvts->removeParameterListener (params::id::mode, this);
+        apvts->removeParameterListener (params::id::chordOrder, this);
+    }
 }
 
 void ManifestPluginProcessor::loadEmbeddedLibrary()
@@ -45,6 +49,13 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
         for (const auto& e : m.effects)
             if (e.ir.isNotEmpty())
                 ids.addIfNotAlreadyThere (e.ir);
+        // IRs referenced only by a menu option's FX_IR_FILE binding (cabinet selector).
+        for (const auto& tab : m.ui.tabs)
+            for (const auto& menu : tab.menus)
+                for (const auto& opt : menu.options)
+                    for (const auto& b : opt.bindings)
+                        if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
+                            ids.addIfNotAlreadyThere (b.translationValue.toString());
     }
 
     for (const auto& id : ids)
@@ -95,7 +106,9 @@ bool ManifestPluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 
 void ManifestPluginProcessor::parameterChanged (const juce::String& paramID, float)
 {
-    if (paramID == params::id::mode)
+    // Mode switch (rebuild) and the cabinet menu (IR reload) are both heavy +
+    // message-thread work, coalesced onto the async update.
+    if (paramID == params::id::mode || paramID == params::id::chordOrder)
         triggerAsyncUpdate();
 }
 
@@ -105,11 +118,42 @@ void ManifestPluginProcessor::handleAsyncUpdate()
         return;
 
     const int requested = (int) apvts->getRawParameterValue (params::id::mode)->load();
-    if (requested != engine.getActiveModeIndex())
+    const bool modeChanged = requested != engine.getActiveModeIndex();
+
+    // Set the cabinet IR selection BEFORE (re)building the mode, so a freshly built
+    // mode picks it up in buildMode (and a pure menu change applies to the live mode).
+    applyMenuIrFor (requested);
+
+    if (modeChanged)
         engine.setActiveMode (requested);
 
-    if (onModeChanged)
+    // Only rebuild the editor UI on an actual mode change — not on a menu (IR) change.
+    if (modeChanged && onModeChanged)
         onModeChanged();
+}
+
+void ManifestPluginProcessor::applyMenuIrFor (int modeIndex)
+{
+    if (apvts == nullptr || modeIndex < 0 || modeIndex >= library.modes.size())
+        return;
+
+    const auto& m = library.modes.getReference (modeIndex);
+    if (m.ui.tabs.isEmpty())
+        return;
+
+    const auto* sel = apvts->getRawParameterValue (params::id::chordOrder);
+    const int selected = sel != nullptr ? (int) sel->load() : 0;
+
+    for (const auto& menu : m.ui.tabs.getReference (0).menus)
+    {
+        if (menu.options.isEmpty())
+            continue;
+        const int s = juce::jlimit (0, menu.options.size() - 1, selected);
+        for (const auto& b : menu.options.getReference (s).bindings)
+            if (b.parameter == "FX_IR_FILE" && b.effectIndex && b.translationValue.isString())
+                engine.setEffectIr (*b.effectIndex, b.translationValue.toString());
+        break;
+    }
 }
 
 void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
@@ -139,6 +183,11 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     }
 
     engine.processBlock (buffer, midi, getPlayHead());
+
+    // Output peak for the editor's level meter (max-since-read; meter resets it).
+    const float blockPeak = buffer.getMagnitude (0, buffer.getNumSamples());
+    if (blockPeak > outputPeak.load (std::memory_order_relaxed))
+        outputPeak.store (blockPeak, std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* ManifestPluginProcessor::createEditor()
