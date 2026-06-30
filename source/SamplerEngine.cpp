@@ -31,6 +31,11 @@ SamplerEngine::ModeRender* SamplerEngine::buildMode (int index) const
         mr->sequencer.configure (mode);
         mr->voices.setMode (mode, *source);
         mr->fx.setEffects (mode.effects, *source);
+
+        // Re-apply any cabinet-menu IR selection so it survives a mode (re)build.
+        for (int ei = 0; ei < kMaxEffects; ++ei)
+            if (desiredIr[ei].isNotEmpty())
+                mr->fx.setEffectIr (ei, *source, desiredIr[ei]);
     }
     return mr;
 }
@@ -60,6 +65,7 @@ void SamplerEngine::setLibrary (const PresetLibrary& lib, const SampleSource& sr
 {
     library = &lib;
     source  = &src;
+    libraryPreGain = juce::Decibels::decibelsToGain ((float) lib.gainDb);   // pre-FX level trim
     activeModeIndex = juce::jlimit (0, juce::jmax (0, lib.modes.size() - 1), activeModeIndex);
 
     if (sampleRate > 0.0)
@@ -83,16 +89,27 @@ juce::StringArray SamplerEngine::getModeNames() const
 void SamplerEngine::resetOverrides()
 {
     for (auto* o : { &ovLowpassEnabled, &ovLowpassFreq, &ovReverbMix, &ovReverbGain,
+                     &ovGain, &ovWaveDrive, &ovWaveOutput, &ovMasterVol, &ovLfoDepth,
                      &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease, &ovAmpVelTrack })
         o->touched.store (false);
     for (auto& g : ovGroupVol)
+        g.touched.store (false);
+    for (auto& g : ovGroupTagVol)
+        g.touched.store (false);
+    for (auto& g : ovGroupGain)
         g.touched.store (false);
     for (auto& g : ovGroupEnabled)
         g.touched.store (false);
     for (auto& g : ovGroupTuning)
         g.touched.store (false);
-    for (auto& e : ovEffectEnabled)
-        e.touched.store (false);
+    for (int i = 0; i < kMaxEffects; ++i)
+    {
+        ovEffectEnabled[i].touched.store (false);
+        ovEffectMix[i].touched.store (false);
+        ovEffectDrive[i].touched.store (false);
+        ovEffectLevel[i].touched.store (false);
+        ovEffectOutput[i].touched.store (false);
+    }
     ovSequencerRateTouched.store (false);
     ovSequencerIndexTouched.store (false);
 }
@@ -125,21 +142,39 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
 {
     if (ovLowpassEnabled.touched.load()) mr.fx.setLowpassEnabled (ovLowpassEnabled.value.load() > 0.5f);
     for (int i = 0; i < kMaxEffects; ++i)
-        if (ovEffectEnabled[i].touched.load())
-            mr.fx.setEffectEnabled (i, ovEffectEnabled[i].value.load() > 0.5f);
+    {
+        if (ovEffectEnabled[i].touched.load()) mr.fx.setEffectEnabled (i, ovEffectEnabled[i].value.load() > 0.5f);
+        if (ovEffectMix[i].touched.load())     mr.fx.setEffectParam (i, "FX_MIX",          ovEffectMix[i].value.load());
+        if (ovEffectDrive[i].touched.load())   mr.fx.setEffectParam (i, "FX_DRIVE",        ovEffectDrive[i].value.load());
+        if (ovEffectLevel[i].touched.load())   mr.fx.setEffectParam (i, "LEVEL",           ovEffectLevel[i].value.load());
+        if (ovEffectOutput[i].touched.load())  mr.fx.setEffectParam (i, "FX_OUTPUT_LEVEL", ovEffectOutput[i].value.load());
+    }
     if (ovLowpassFreq.touched.load())    mr.fx.setLowpassFrequency (ovLowpassFreq.value.load());
     if (ovReverbMix.touched.load())      mr.fx.setReverbMix (ovReverbMix.value.load());
     if (ovReverbGain.touched.load())     mr.fx.setReverbWetGainDb (ovReverbGain.value.load());
+    if (ovGain.touched.load())           mr.fx.setGain (ovGain.value.load());
+    if (ovWaveDrive.touched.load())      mr.fx.setWaveShaperDrive (ovWaveDrive.value.load());
+    if (ovWaveOutput.touched.load())     mr.fx.setWaveShaperOutput (ovWaveOutput.value.load());
 
     if (ovAmpAttack.touched.load())  mr.voices.setAmpAttack  (ovAmpAttack.value.load());
     if (ovAmpDecay.touched.load())   mr.voices.setAmpDecay   (ovAmpDecay.value.load());
     if (ovAmpSustain.touched.load()) mr.voices.setAmpSustain (ovAmpSustain.value.load());
     if (ovAmpRelease.touched.load()) mr.voices.setAmpRelease (ovAmpRelease.value.load());
     if (ovAmpVelTrack.touched.load()) mr.voices.setAmpVelTrack (ovAmpVelTrack.value.load());
+    if (ovMasterVol.touched.load())   masterGain = ovMasterVol.value.load();   // applied post-FX in processBlock
+    if (ovLfoDepth.touched.load())    mr.voices.setLfoDepth (ovLfoDepth.value.load());
 
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupVol[i].touched.load())
             mr.voices.setGroupVolume (i, ovGroupVol[i].value.load());
+
+    for (int i = 0; i < kMaxGroupVol; ++i)
+        if (ovGroupTagVol[i].touched.load())
+            mr.voices.setGroupTagVolume (i, ovGroupTagVol[i].value.load());
+
+    for (int i = 0; i < kMaxGroupVol; ++i)
+        if (ovGroupGain[i].touched.load())
+            mr.voices.setGroupGain (i, ovGroupGain[i].value.load());
 
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupEnabled[i].touched.load())
@@ -183,7 +218,15 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     // keys pass straight through.
     current->sequencer.process (midi, sequencedMidi, buffer.getNumSamples());
     current->voices.processBlock (buffer, sequencedMidi);
+
+    // Per-library trim into the FX (matches DecentSampler's signal level feeding the
+    // drive/amp), then master volume AFTER the FX (DecentSampler topology: the master
+    // is an output control, so it sets level without changing the drive's distortion).
+    if (libraryPreGain != 1.0f)
+        buffer.applyGain (libraryPreGain);
     current->fx.process (buffer);
+    if (masterGain != 1.0f)
+        buffer.applyGain (masterGain);
 }
 
 void SamplerEngine::releaseResources()
@@ -229,6 +272,65 @@ void SamplerEngine::setReverbWetGainDb (float db)
 {
     ovReverbGain.value.store (db);
     ovReverbGain.touched.store (true);
+}
+
+void SamplerEngine::setGain (float db)            { ovGain.value.store (db);          ovGain.touched.store (true); }
+void SamplerEngine::setWaveShaperDrive (float d)  { ovWaveDrive.value.store (d);       ovWaveDrive.touched.store (true); }
+void SamplerEngine::setWaveShaperOutput (float l) { ovWaveOutput.value.store (l);      ovWaveOutput.touched.store (true); }
+
+void SamplerEngine::setEffectParam (int effectIndex, const juce::String& parameter, float value)
+{
+    if (effectIndex < 0 || effectIndex >= kMaxEffects)
+        return;
+    FxOverride* o = parameter == "FX_MIX"          ? &ovEffectMix[effectIndex]
+                  : parameter == "FX_DRIVE"        ? &ovEffectDrive[effectIndex]
+                  : parameter == "LEVEL"           ? &ovEffectLevel[effectIndex]
+                  : parameter == "FX_OUTPUT_LEVEL" ? &ovEffectOutput[effectIndex]
+                                                   : nullptr;
+    if (o != nullptr) { o->value.store (value); o->touched.store (true); }
+}
+
+void SamplerEngine::setMasterVolume (float volume)
+{
+    ovMasterVol.value.store (volume);
+    ovMasterVol.touched.store (true);
+}
+
+void SamplerEngine::setLfoDepth (float depth)
+{
+    ovLfoDepth.value.store (depth);
+    ovLfoDepth.touched.store (true);
+}
+
+void SamplerEngine::setEffectIr (int effectIndex, const juce::String& irId)
+{
+    // Message thread: remember the selection (so a (re)built mode picks it up in
+    // buildMode) and load it into the live mode's FX now. The convolution swaps the
+    // IR on its own background thread; `current` is only reassigned during a mode
+    // switch, which also runs on the message thread, so it won't change under us.
+    if (effectIndex < 0 || effectIndex >= kMaxEffects)
+        return;
+    desiredIr[effectIndex] = irId;
+    if (current != nullptr && source != nullptr)
+        current->fx.setEffectIr (effectIndex, *source, irId);
+}
+
+void SamplerEngine::setGroupTagVolume (int groupIndex, float volume)
+{
+    if (groupIndex >= 0 && groupIndex < kMaxGroupVol)
+    {
+        ovGroupTagVol[groupIndex].value.store (volume);
+        ovGroupTagVol[groupIndex].touched.store (true);
+    }
+}
+
+void SamplerEngine::setGroupGain (int groupIndex, float db)
+{
+    if (groupIndex >= 0 && groupIndex < kMaxGroupVol)
+    {
+        ovGroupGain[groupIndex].value.store (db);
+        ovGroupGain[groupIndex].touched.store (true);
+    }
 }
 
 void SamplerEngine::setSequencerRate (double stepsPerSecond)

@@ -64,6 +64,23 @@ public:
     void setLowpassFrequency (float hz);
     void setReverbMix (float amount);
     void setReverbWetGainDb (float db);
+    void setGain (float db);                 // gain effect (LEVEL, dB) — first gain slot
+    void setWaveShaperDrive (float drive);   // wave_shaper FX_DRIVE — first wave_shaper slot
+    void setWaveShaperOutput (float level);  // wave_shaper FX_OUTPUT_LEVEL — first wave_shaper slot
+
+    /** Set a parameter on a specific instrument effect by its index (FX_MIX,
+        FX_DRIVE, LEVEL, FX_OUTPUT_LEVEL). Lets several same-type effects (e.g. Echo
+        + Room convolutions) be addressed independently. */
+    void setEffectParam (int effectIndex, const juce::String& parameter, float value);
+
+    /** Reload a convolution effect's IR (cabinet selector). MESSAGE THREAD only. */
+    void setEffectIr (int effectIndex, const juce::String& irId);
+
+    /** Per-group output gain in dB (group-level `gain` effect). */
+    void setGroupGain (int groupIndex, float db);
+
+    /** LFO tremolo depth 0..1 (MOD_AMOUNT). */
+    void setLfoDepth (float depth);
 
     /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
         each trigger's own rate. (The future StrumSpeed control.) */
@@ -78,7 +95,9 @@ public:
     void setAmpSustain (float level);
     void setAmpRelease (float seconds);
     void setAmpVelTrack (float amount);   // global AMP_VEL_TRACK (velocity → volume)
+    void setMasterVolume (float volume);                     // instrument-level AMP_VOLUME
     void setGroupVolume (int groupIndex, float volume);
+    void setGroupTagVolume (int groupIndex, float volume);   // TAG_VOLUME mixer knobs
     void setGroupEnabled (int groupIndex, bool enabled);
     void setGroupTuning (int groupIndex, float semitones);   // GROUP_TUNING
 
@@ -114,13 +133,24 @@ private:
     // manifest defaults (and survive mode switches).
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
+    FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol, ovLfoDepth;
     FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
     static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
     FxOverride ovGroupVol[kMaxGroupVol];
+    FxOverride ovGroupTagVol[kMaxGroupVol];   // TAG_VOLUME mixer knobs
+    FxOverride ovGroupGain[kMaxGroupVol];     // group-level gain effect (dB)
     FxOverride ovGroupEnabled[kMaxGroupVol];
     FxOverride ovGroupTuning[kMaxGroupVol];
     static constexpr int kMaxEffects = 8;
     FxOverride ovEffectEnabled[kMaxEffects];
+    // Per-effect-index params, so several same-type instrument effects are independent.
+    FxOverride ovEffectMix[kMaxEffects];
+    FxOverride ovEffectDrive[kMaxEffects];
+    FxOverride ovEffectLevel[kMaxEffects];
+    FxOverride ovEffectOutput[kMaxEffects];
+    // Selected convolution IR per effect (cabinet menu); message-thread only.
+    // Re-applied when a mode is (re)built so the selection survives mode switches.
+    juce::String desiredIr[kMaxEffects];
 
     std::atomic<bool>  ovSequencerRateTouched { false };
     std::atomic<double> ovSequencerRate { 0.0 };
@@ -128,6 +158,12 @@ private:
     std::atomic<int>    ovSequencerIndex { 0 };
 
     std::atomic<float> pitchBendRange { 2.0f };   // semitones; applied to current voices per block
+
+    // Gain stages applied in processBlock (audio thread): a per-library trim BEFORE
+    // the FX (so the drive/amp sees DecentSampler's signal level) and the master
+    // volume AFTER the FX (instrument AMP_VOLUME — an output control, like DS).
+    float libraryPreGain { 1.0f };
+    float masterGain { 1.0f };
 
     juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
 

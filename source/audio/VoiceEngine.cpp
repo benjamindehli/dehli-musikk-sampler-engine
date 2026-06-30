@@ -10,13 +10,18 @@ constexpr int kMaxVoices = 64;   // headroom for multi-group layering (drums sta
 
 // Resolve the effective amp envelope for a group: mode defaults, with the group's
 // own overrides applied where present.
-juce::ADSR::Parameters resolveAdsr (const AmpEnvelope& amp, const Group& g)
+CurvedAdsr::Parameters resolveAdsr (const AmpEnvelope& amp, const Group& g)
 {
-    juce::ADSR::Parameters p;
+    CurvedAdsr::Parameters p;
     p.attack  = (float) amp.attack;
     p.decay   = (float) (g.decay   ? *g.decay   : amp.decay);
     p.sustain = (float) amp.sustain;
     p.release = (float) (g.release ? *g.release : amp.release);
+    // Curve shape: manifest value if present, else DecentSampler defaults
+    // (CurvedAdsr::Parameters already defaults to attack -100, decay/release +100).
+    if (amp.attackCurve)  p.attackCurve  = (float) *amp.attackCurve;
+    if (amp.decayCurve)   p.decayCurve   = (float) *amp.decayCurve;
+    if (amp.releaseCurve) p.releaseCurve = (float) *amp.releaseCurve;
     return p;
 }
 
@@ -58,9 +63,10 @@ VoiceEngine::VoiceEngine()
     voices.resize (kMaxVoices);
 }
 
-void VoiceEngine::prepare (double newSampleRate, int /*maxBlockSize*/, int /*numChannels*/)
+void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int /*numChannels*/)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
+    tremBuf.assign ((size_t) juce::jmax (1, maxBlockSize), 1.0f);
     for (auto& v : voices)
     {
         v.active = false;
@@ -83,8 +89,15 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     rrLast.clearQuick();    rrLast.insertMultiple (0, -1, numGroups);
     rrRandom.setSeed (20240101);   // fixed → reproducible variation across sessions
     groupVolume.clearQuick();    groupVolume.insertMultiple (0, 1.0f, numGroups);
+    groupTagVolume.clearQuick(); groupTagVolume.insertMultiple (0, 1.0f, numGroups);
+    groupGain.clearQuick();      groupGain.insertMultiple (0, 1.0f, numGroups);
     groupEnabled.clearQuick();   groupEnabled.insertMultiple (0, true, numGroups);
+    groupReleaseTrigger.clearQuick(); groupReleaseTrigger.insertMultiple (0, false, numGroups);
+    groupCcLo.clearQuick();  groupCcLo.insertMultiple (0, -1, numGroups);
+    groupCcHi.clearQuick();  groupCcHi.insertMultiple (0, -1, numGroups);
     groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
+    sustainValue = 0; sustainActive = false;
+    for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
 
     // Tags with polyphony 1 make their groups monophonic. Reuse the choke
     // mechanism: add such a group's own mono tags to its silencedByTags.
@@ -99,6 +112,8 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
 
         Zone proto;
         proto.adsr     = resolveAdsr (mode.amp, g);
+        proto.releaseTrigger = (g.trigger == "release");
+        groupReleaseTrigger.set (gi, proto.releaseTrigger);
         proto.gain     = (float) (g.volume   ? *g.volume   : mode.amp.volume);
         proto.velTrack = (float) (g.velTrack ? *g.velTrack : mode.amp.velTrack);
         proto.groupIndex = gi;
@@ -121,6 +136,12 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
             const auto* buffer = source.get (s.source);
             if (buffer == nullptr || buffer->getNumFrames() <= 0)
                 continue; // unresolved/empty sample — skip rather than crash
+
+            if (s.onLoCC64 && s.onHiCC64)   // sustain-pedal-triggered group (damper noise)
+            {
+                groupCcLo.set (gi, *s.onLoCC64);
+                groupCcHi.set (gi, *s.onHiCC64);
+            }
 
             Zone z = proto;
             z.loNote = s.loNote;
@@ -150,6 +171,27 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
 
             zones.add (z);
         }
+    }
+
+    // LFO tremolo: take the first modulator (sine amp-mod). Its bindings name the
+    // groups whose volume it modulates; the Tremolo knob drives the depth at runtime.
+    lfoFreqHz = 0.0;
+    lfoPhase  = 0.0;
+    lfoDepth  = 0.0f;
+    lfoTargetGroup.clearQuick();
+    lfoTargetGroup.insertMultiple (0, false, numGroups);
+    if (! mode.modulators.isEmpty())
+    {
+        const auto& lfo = mode.modulators.getReference (0);
+        lfoFreqHz = lfo.frequency;
+        lfoDepth  = (float) lfo.modAmount;   // overridden by the MOD_AMOUNT control
+        for (const auto& b : lfo.bindings)
+            if (b.parameter == "AMP_VOLUME" && b.groupIndex)
+            {
+                const int gi = *b.groupIndex;
+                if (gi >= 0 && gi < lfoTargetGroup.size())
+                    lfoTargetGroup.set (gi, true);
+            }
     }
 }
 
@@ -218,14 +260,16 @@ VoiceEngine::Voice* VoiceEngine::allocateVoice()
 void VoiceEngine::handleNoteOn (int note, float velocity)
 {
     const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
+    if (note >= 0 && note < 128)
+        noteOnVelocity[note] = velocity;   // remembered for the release-trigger groups
 
-    // Start a voice for EVERY enabled group covering this note+velocity — drums
-    // layer several groups on one note (and velocity layers are separate groups);
-    // round-robin picks within each group.
+    // Start a voice for EVERY enabled attack group covering this note+velocity —
+    // drums layer several groups on one note (and velocity layers are separate
+    // groups); round-robin picks within each group. Release groups fire on note-off.
     const int numGroups = groupEnabled.size();
     for (int g = 0; g < numGroups; ++g)
     {
-        if (! groupEnabled[g])
+        if (! groupEnabled[g] || groupReleaseTrigger[g])
             continue;
         if (const auto* zone = pickZoneInGroup (g, note, velMidi))
             startVoice (*zone, note, velocity);
@@ -260,6 +304,7 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->buffer = zone.buffer;
     v->position = 0.0;
     v->note = note;
+    v->isRelease = zone.releaseTrigger;
     v->groupIndex = zone.groupIndex;
     v->tags = zone.tags;
     v->silencedByTags = zone.silencedByTags;
@@ -295,9 +340,59 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
 
 void VoiceEngine::handleNoteOff (int note)
 {
+    // Release held (attack) voices — unless the sustain pedal is down, in which case
+    // mark them held so they keep ringing until the pedal lifts. Release-trigger
+    // (key-off) voices are one-shots that ignore note-off and play out.
     for (auto& v : voices)
-        if (v.active && v.note == note)
-            v.adsr.noteOff();
+        if (v.active && v.note == note && ! v.isRelease)
+        {
+            if (sustainActive) v.pedalHeld = true;
+            else               v.adsr.noteOff();
+        }
+
+    // Fire release-trigger groups for this note, at the velocity it was played.
+    const float velocity = (note >= 0 && note < 128) ? noteOnVelocity[note] : 0.8f;
+    const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
+    const int numGroups = groupReleaseTrigger.size();
+    for (int g = 0; g < numGroups; ++g)
+    {
+        if (! groupEnabled[g] || ! groupReleaseTrigger[g])
+            continue;
+        if (const auto* zone = pickZoneInGroup (g, note, velMidi))
+            startVoice (*zone, note, velocity);
+    }
+}
+
+void VoiceEngine::handleSustain (int value)
+{
+    // Damper noise: fire any pedal-triggered group whose CC range the pedal just
+    // entered (e.g. damper-lift on press, damper-drop on release). These groups have
+    // loNote=-1, so pickZoneInGroup(-1) selects/round-robins among their samples; the
+    // voice plays out as a one-shot (note=-1 → never matched by a key note-off), and
+    // damper-drop chokes damper-lift via the normal tag silencing.
+    auto inRange = [] (int v, int lo, int hi) { return v >= lo && v <= hi; };
+    for (int g = 0; g < groupCcLo.size(); ++g)
+    {
+        if (groupCcLo[g] < 0 || ! groupEnabled[g])
+            continue;
+        const bool was = inRange (sustainValue, groupCcLo[g], groupCcHi[g]);
+        const bool now = inRange (value,        groupCcLo[g], groupCcHi[g]);
+        if (now && ! was)
+            if (const auto* zone = pickZoneInGroup (g, -1, 127))
+                startVoice (*zone, -1, 1.0f);
+    }
+
+    // Sustain hold: pedal up releases everything held while it was down.
+    const bool down = value >= 64;
+    if (sustainActive && ! down)
+        for (auto& v : voices)
+            if (v.active && v.pedalHeld)
+            {
+                v.adsr.noteOff();
+                v.pedalHeld = false;
+            }
+    sustainActive = down;
+    sustainValue  = value;
 }
 
 void VoiceEngine::handlePitchWheel (int wheelValue)
@@ -314,6 +409,23 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
     const int outChannels = buffer.getNumChannels();
 
+    // LFO tremolo for this chunk: a free-running sine factor that dips the volume
+    // to (1 - depth) at its trough and peaks at 1 (depth 0 → factor 1 = no effect).
+    // Computed per sample so it stays smooth across the whole block.
+    const bool lfoActive = lfoFreqHz > 0.0 && ! lfoTargetGroup.isEmpty()
+                        && (int) tremBuf.size() >= numSamples;
+    if (lfoActive)
+    {
+        const double inc = lfoFreqHz / sampleRate;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float s = std::sin (juce::MathConstants<double>::twoPi * (lfoPhase + inc * i));
+            tremBuf[(size_t) i] = 1.0f - lfoDepth * (0.5f - 0.5f * s);
+        }
+        lfoPhase += inc * numSamples;
+        lfoPhase -= std::floor (lfoPhase);
+    }
+
     for (auto& v : voices)
     {
         if (! v.active)
@@ -321,6 +433,8 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
         const int srcChannels = v.buffer->getNumChannels();
         const int frames = v.buffer->getNumFrames();
+        const bool applyTrem = lfoActive && v.groupIndex >= 0
+                            && v.groupIndex < lfoTargetGroup.size() && lfoTargetGroup[v.groupIndex];
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -331,9 +445,12 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             }
 
             const float env = v.adsr.getNextSample();
-            const float gv = (v.groupIndex >= 0 && v.groupIndex < groupVolume.size())
-                                 ? groupVolume[v.groupIndex] : 1.0f;
-            const float g = env * v.gain * v.declickGain * gv;
+            const bool hasGroup = v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
+            const float gv  = hasGroup ? groupVolume[v.groupIndex]    : 1.0f;
+            const float gtv = hasGroup ? groupTagVolume[v.groupIndex] : 1.0f;
+            const float gg  = hasGroup ? groupGain[v.groupIndex]      : 1.0f;
+            const float trem = applyTrem ? tremBuf[(size_t) i] : 1.0f;
+            const float g = env * v.gain * v.declickGain * gv * gtv * gg * trem;
 
             for (int ch = 0; ch < outChannels; ++ch)
             {
@@ -390,6 +507,8 @@ void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             handleNoteOff (msg.getNoteNumber());
         else if (msg.isPitchWheel())
             handlePitchWheel (msg.getPitchWheelValue());
+        else if (msg.isController() && msg.getControllerNumber() == 64)
+            handleSustain (msg.getControllerValue());
         else if (msg.isAllNotesOff() || msg.isAllSoundOff())
             allNotesOff();
     }
@@ -412,7 +531,7 @@ int VoiceEngine::getActiveVoiceCount() const noexcept
     return n;
 }
 
-juce::ADSR::Parameters VoiceEngine::effectiveAdsr (const juce::ADSR::Parameters& base) const
+CurvedAdsr::Parameters VoiceEngine::effectiveAdsr (const CurvedAdsr::Parameters& base) const
 {
     auto p = base;
     if (ovAttack  >= 0.0f) p.attack  = ovAttack;
@@ -435,6 +554,12 @@ void VoiceEngine::setGroupVolume (int groupIndex, float volume)
         groupVolume.set (groupIndex, volume);
 }
 
+void VoiceEngine::setGroupTagVolume (int groupIndex, float volume)
+{
+    if (groupIndex >= 0 && groupIndex < groupTagVolume.size())
+        groupTagVolume.set (groupIndex, volume);
+}
+
 void VoiceEngine::setGroupEnabled (int groupIndex, bool enabled)
 {
     if (groupIndex >= 0 && groupIndex < groupEnabled.size())
@@ -445,6 +570,12 @@ void VoiceEngine::setGroupTuning (int groupIndex, float semitones)
 {
     if (groupIndex >= 0 && groupIndex < groupTuningMul.size())
         groupTuningMul.set (groupIndex, std::pow (2.0, semitones / 12.0));
+}
+
+void VoiceEngine::setGroupGain (int groupIndex, float db)
+{
+    if (groupIndex >= 0 && groupIndex < groupGain.size())
+        groupGain.set (groupIndex, juce::Decibels::decibelsToGain (db));
 }
 
 } // namespace dm
