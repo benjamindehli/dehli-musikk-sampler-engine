@@ -7,6 +7,7 @@
 #include <model/ManifestLoader.h>
 #include <juce_core/juce_core.h>
 #include <iostream>
+#include <map>
 
 namespace
 {
@@ -44,6 +45,7 @@ public:
         testDrums();
         testWurli();
         testAutostrum();
+        testSplitManifest();
         testErrors();
     }
 
@@ -213,6 +215,80 @@ public:
         expect (rate.noteIndex.has_value() && rate.noteIndex.value() == 0);
         const auto& chord = tab.controls.getReference (1).bindings.getReference (0);
         expectEquals (chord.parameter, juce::String ("SEQ_INDEX"));
+    }
+
+    void testSplitManifest()
+    {
+        beginTest ("split manifest — $use / $ref merge + cycle detection");
+
+        auto parse = [] (const char* json) { juce::var v; juce::JSON::parse (json, v); return v; };
+
+        std::map<juce::String, juce::var> partials;
+        // A shared convolution reverb, reused by both modes.
+        partials["std-reverb"] = parse (R"({"type":"convolution","ir":"ir:hall","mix":0.5})");
+        // A shared amp block pulled in via $use.
+        partials["soft-amp"]   = parse (R"({"amp":{"attack":0.01,"release":0.4}})");
+
+        std::map<juce::String, juce::var> modes;
+        // Full: $use the amp block, and splice the reverb via $ref with a mix override.
+        modes["full"] = parse (R"({
+            "name":"Full", "$use":["soft-amp"],
+            "groups":[{"samples":[{"source":"flac:a"}]}],
+            "effects":[{"$ref":"std-reverb","mix":0.3}]
+        })");
+        // Lite: same reverb, unmodified.
+        modes["lite"] = parse (R"({
+            "name":"Lite",
+            "groups":[{"samples":[{"source":"flac:a"}]}],
+            "effects":[{"$ref":"std-reverb"}]
+        })");
+
+        auto index = parse (R"({"schema":1,"library":"Split","modes":["full","lite"]})");
+
+        auto modeLoader    = [&] (const juce::String& n) { auto it = modes.find (n);    return it == modes.end()    ? juce::var() : it->second; };
+        auto partialLoader = [&] (const juce::String& n) { auto it = partials.find (n); return it == partials.end() ? juce::var() : it->second; };
+
+        juce::StringArray errors;
+        auto merged = dm::resolveSplitManifest (index, modeLoader, partialLoader, errors);
+        expect (errors.isEmpty(), "resolve should succeed: " + errors.joinIntoString ("; "));
+
+        auto r = dm::loadManifest (merged);
+        expect (r.ok, "merged split manifest should parse: " + r.errors.joinIntoString ("; "));
+        expectEquals (r.library.library, juce::String ("Split"));
+        expectEquals (r.library.modes.size(), 2);
+
+        const auto& full = r.library.modes.getReference (0);
+        expectEquals (full.name, juce::String ("Full"));
+        expectWithinAbsoluteError (full.amp.attack, 0.01, 1.0e-9);   // from $use soft-amp
+        expectWithinAbsoluteError (full.amp.release, 0.4, 1.0e-9);
+        expectEquals (full.effects.size(), 1);
+        expectEquals (full.effects.getReference (0).type, juce::String ("convolution"));  // from $ref
+        expectEquals (full.effects.getReference (0).ir, juce::String ("ir:hall"));
+        expect (full.effects.getReference (0).mix.has_value());
+        expectWithinAbsoluteError (full.effects.getReference (0).mix.value(), 0.3, 1.0e-9); // override won
+
+        const auto& lite = r.library.modes.getReference (1);
+        expectWithinAbsoluteError (lite.effects.getReference (0).mix.value(), 0.5, 1.0e-9); // partial's own value
+
+        // Unknown partial → error.
+        {
+            juce::StringArray e2;
+            auto bad = parse (R"({"schema":1,"modes":[{"name":"M","effects":[{"$ref":"nope"}]}]})");
+            dm::resolveSplitManifest (bad, modeLoader, partialLoader, e2);
+            expect (! e2.isEmpty(), "unknown partial should report an error");
+        }
+
+        // Import cycle a → b → a → error (not infinite recursion).
+        {
+            std::map<juce::String, juce::var> cyc;
+            cyc["a"] = parse (R"({"$use":["b"]})");
+            cyc["b"] = parse (R"({"$use":["a"]})");
+            auto cycLoader = [&] (const juce::String& n) { auto it = cyc.find (n); return it == cyc.end() ? juce::var() : it->second; };
+            juce::StringArray e3;
+            auto idx = parse (R"({"schema":1,"modes":[{"name":"M","$use":["a"],"groups":[{"samples":[{"source":"flac:x"}]}]}]})");
+            dm::resolveSplitManifest (idx, modeLoader, cycLoader, e3);
+            expect (! e3.isEmpty(), "import cycle should be reported");
+        }
     }
 
     void testErrors()
