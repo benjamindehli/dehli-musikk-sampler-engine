@@ -10,8 +10,10 @@
 
 #include "SampleSource.h"
 #include "CurvedAdsr.h"
+#include "FxChain.h"
 #include <model/Manifest.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <memory>
 #include <vector>
 
 namespace dm
@@ -39,11 +41,18 @@ public:
     int  getActiveVoiceCount() const noexcept;
 
     // Runtime amp overrides (from UI controls / automation). Negative = "no
-    // override, use the mode/group value". Applied to new + active voices.
+    // override, use the mode/group value". Applied to new voices.
     void setAmpAttack (float seconds);
     void setAmpDecay (float seconds);
     void setAmpSustain (float level);
     void setAmpRelease (float seconds);
+
+    // Per-group amp overrides (e.g. an organ "loudness" that lengthens only the reed
+    // groups' attack, not the key-noise groups). Take precedence over the global ones.
+    void setGroupAmpAttack (int groupIndex, float seconds);
+    void setGroupAmpDecay (int groupIndex, float seconds);
+    void setGroupAmpSustain (int groupIndex, float level);
+    void setGroupAmpRelease (int groupIndex, float seconds);
 
     /** Per-group output volume multiplier (AMP_VOLUME, e.g. Voice1/Voice2). */
     void setGroupVolume (int groupIndex, float volume);
@@ -53,9 +62,12 @@ public:
         AMP_VOLUME master can affect the same group without fighting. */
     void setGroupTagVolume (int groupIndex, float volume);
 
-    /** LFO tremolo depth 0..1 (MOD_AMOUNT). 0 = no modulation. The LFO shape/rate
-        and which groups it affects come from the mode's modulator (setMode). */
+    /** LFO depth 0..1 (MOD_AMOUNT). 0 = no modulation. The LFO shape/targets come
+        from the mode's modulator (setMode). */
     void setLfoDepth (float depth) { lfoDepth = depth; }
+
+    /** LFO rate in Hz (FREQUENCY / Tremulant Rate). Overrides the modulator's default. */
+    void setLfoRate (float hz) { if (hz > 0.0f) lfoFreqHz = hz; }
 
     /** Enable/disable a group at runtime (group-level ENABLED, e.g. the Keyboard
         mode's Mono/Poly button switching between a mono and a poly group). */
@@ -66,6 +78,10 @@ public:
 
     /** Per-group pitch offset in semitones (GROUP_TUNING). Applied to new voices. */
     void setGroupTuning (int groupIndex, float semitones);
+
+    /** Set a parameter on one of a group's per-group insert effects (by effectIndex):
+        FX_FILTER_FREQUENCY / LEVEL / FX_MIX etc. (e.g. an organ swell filter). */
+    void setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value);
 
     /** Per-group output gain in dB (group-level `gain` effect LEVEL). Independent of
         setGroupVolume — the two multiply, so a tag mixer and a group gain can both
@@ -138,11 +154,19 @@ private:
     Voice* allocateVoice();
     const Zone* pickZoneInGroup (int group, int note, int velocity);   // velocity layer + round-robin within one group
     void startVoice (const Zone& zone, int note, float velocity);
-    CurvedAdsr::Parameters effectiveAdsr (const CurvedAdsr::Parameters& base) const;
+    CurvedAdsr::Parameters effectiveAdsr (const CurvedAdsr::Parameters& base, int groupIndex) const;
 
     double sampleRate = 44100.0;
+    int maxBlock = 512, numChans = 2;   // for sizing per-group scratch buffers
     juce::Array<Zone> zones;
     std::vector<Voice> voices;
+
+    // Per-group insert FX (lowpass/gain chains). Built from each group's effects in
+    // setMode; null where a group has none. When any exist, voices render into
+    // per-group scratch buffers, each group's chain runs, then they sum to output.
+    std::vector<std::unique_ptr<FxChain>> groupChains;
+    std::vector<juce::AudioBuffer<float>> groupBuffers;
+    bool anyGroupFx { false };
     juce::uint32 orderCounter = 0;
     double pitchBendMul = 1.0;        // global playback-rate multiplier from the MIDI pitch wheel
     double bendRangeSemitones = 2.0;  // pitch-wheel range
@@ -154,14 +178,18 @@ private:
 
     // Runtime amp overrides (negative = none) + per-group volume multipliers.
     float ovAttack { -1.0f }, ovDecay { -1.0f }, ovSustain { -1.0f }, ovRelease { -1.0f };
+    juce::Array<float> groupAttack, groupDecay, groupSustain, groupRelease;   // per-group (-1 = none)
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
 
     // LFO tremolo (sine amp modulation on the modulator's target groups).
     double lfoPhase { 0.0 };          // cycles, free-running
     double lfoFreqHz { 0.0 };         // 0 = no LFO configured
     float  lfoDepth { 0.0f };         // 0..1 (MOD_AMOUNT)
-    juce::Array<bool> lfoTargetGroup; // which groups the LFO modulates
-    std::vector<float> tremBuf;       // per-sample tremolo factor scratch
+    double lfoTuningMul { 1.0 };      // GLOBAL_TUNING vibrato → playback-rate multiplier
+    juce::Array<bool> lfoTargetGroup; // groups the LFO amplitude-modulates (AMP_VOLUME bindings)
+    juce::Array<Binding> lfoBindings; // the modulator's bindings (effect params / GLOBAL_TUNING)
+    std::vector<float> tremBuf;       // per-sample amplitude-tremolo factor (block-indexed)
+    void applyLfoBlock (int numSamples);   // advance LFO + apply its modulations (per block)
     juce::Array<float> groupVolume;       // AMP_VOLUME
     juce::Array<float> groupTagVolume;    // TAG_VOLUME (mixer knobs)
     juce::Array<float> groupGain;         // per-group output gain (linear; group-level gain effect)

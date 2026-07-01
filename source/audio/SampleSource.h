@@ -31,8 +31,15 @@ class SampleSource
 public:
     virtual ~SampleSource() = default;
 
-    /** Returns the decoded buffer for an asset id, or nullptr if unknown. */
+    /** Returns the decoded buffer for an asset id, or nullptr if unknown/not decoded. */
     virtual const SampleBuffer* get (const juce::String& id) const = 0;
+
+    /** Pin an asset for use and return its (decoded) buffer; release it when done.
+        Lets a backend keep only in-use assets decoded (lazy per-mode loading, so an
+        unselected mode costs no RAM). Reference-counted per id, MESSAGE THREAD only.
+        Default: eager backends just return get() / no-op. */
+    virtual const SampleBuffer* acquire (const juce::String& id) { return get (id); }
+    virtual void release (const juce::String& id) { juce::ignoreUnused (id); }
 };
 
 } // namespace dm

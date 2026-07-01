@@ -38,7 +38,7 @@ public:
 
     /** Provide the manifest library + sample source (both kept alive by the
         caller). Activates mode 0. Message thread, audio stopped. */
-    void setLibrary (const PresetLibrary& library, const SampleSource& source);
+    void setLibrary (const PresetLibrary& library, SampleSource& source);
 
     int  getNumModes() const noexcept;
     juce::StringArray getModeNames() const;
@@ -79,8 +79,9 @@ public:
     /** Per-group output gain in dB (group-level `gain` effect). */
     void setGroupGain (int groupIndex, float db);
 
-    /** LFO tremolo depth 0..1 (MOD_AMOUNT). */
+    /** LFO depth 0..1 (MOD_AMOUNT) and rate in Hz (FREQUENCY). */
     void setLfoDepth (float depth);
+    void setLfoRate (float hz);
 
     /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
         each trigger's own rate. (The future StrumSpeed control.) */
@@ -100,6 +101,8 @@ public:
     void setGroupTagVolume (int groupIndex, float volume);   // TAG_VOLUME mixer knobs
     void setGroupEnabled (int groupIndex, bool enabled);
     void setGroupTuning (int groupIndex, float semitones);   // GROUP_TUNING
+    void setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value);
+    void setGroupAmp (int groupIndex, const juce::String& parameter, float value);   // per-group ENV_*
 
     /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
     void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }
@@ -110,6 +113,14 @@ private:
         NoteSequencer sequencer;
         VoiceEngine   voices;
         FxChain       fx;
+
+        // Sample/IR asset ids this mode acquired from the source (decoded PCM). The
+        // source frees an id's PCM once no live ModeRender holds it — so RAM tracks
+        // the active mode(s), not the whole library. Released on destruction (message
+        // thread, after this mode is retired), keeping the audio thread's reads valid.
+        SampleSource* src = nullptr;
+        juce::StringArray held;
+        ~ModeRender() { if (src != nullptr) for (const auto& id : held) src->release (id); }
     };
 
     ModeRender* buildMode (int index) const;   // message thread
@@ -118,7 +129,7 @@ private:
     void resetOverrides();                      // clear per-mode UI overrides
 
     const PresetLibrary* library { nullptr };
-    const SampleSource*  source  { nullptr };
+    SampleSource*        source  { nullptr };   // non-const: acquire/release decode/free PCM
 
     double sampleRate { 0.0 };
     int    maxBlockSize { 0 };
@@ -133,7 +144,7 @@ private:
     // manifest defaults (and survive mode switches).
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
-    FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol, ovLfoDepth;
+    FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol, ovLfoDepth, ovLfoRate;
     FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
     static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
     FxOverride ovGroupVol[kMaxGroupVol];

@@ -25,20 +25,69 @@ CurvedAdsr::Parameters resolveAdsr (const AmpEnvelope& amp, const Group& g)
     return p;
 }
 
+// Windowed-sinc (Lanczos) fractional-position resampling. A precomputed kernel
+// table (kSincTaps taps × kSincPhases sub-sample phases) gives clean interpolation
+// for pitch-shifted / sample-rate-mismatched playback; at integer positions it
+// reduces to the exact sample (fast path), so 48k-in-48k playback is untouched.
+namespace
+{
+constexpr int kSincTaps   = 8;             // 4 taps either side
+constexpr int kSincHalf   = kSincTaps / 2;
+constexpr int kSincPhases = 512;           // sub-sample phase resolution
+
+struct SincTable
+{
+    float k[kSincPhases + 1][kSincTaps];
+
+    SincTable()
+    {
+        const double pi = juce::MathConstants<double>::pi;
+        auto sinc = [pi] (double x) { return x == 0.0 ? 1.0 : std::sin (pi * x) / (pi * x); };
+        const double a = (double) kSincHalf;   // Lanczos window half-width
+
+        for (int p = 0; p <= kSincPhases; ++p)
+        {
+            const double frac = (double) p / (double) kSincPhases;
+            double row[kSincTaps], sum = 0.0;
+            for (int t = 0; t < kSincTaps; ++t)
+            {
+                const double x = (double) (t - (kSincHalf - 1)) - frac;
+                const double w = std::abs (x) < a ? sinc (x) * sinc (x / a) : 0.0;
+                row[t] = w;
+                sum   += w;
+            }
+            for (int t = 0; t < kSincTaps; ++t)   // normalise for unity DC gain
+                k[p][t] = (float) (sum != 0.0 ? row[t] / sum : 0.0);
+        }
+    }
+};
+
+const SincTable& sincTable() { static const SincTable t; return t; }
+}
+
 float interpolate (const juce::AudioBuffer<float>& buf, int ch, double pos)
 {
-    const int i0 = (int) pos;
     const int n  = buf.getNumSamples();
+    const int i0 = (int) pos;
     if (i0 < 0 || i0 >= n)
         return 0.0f;
 
-    const float s0 = buf.getSample (ch, i0);
-    const int i1 = i0 + 1;
-    if (i1 >= n)
-        return s0;
+    const double frac = pos - (double) i0;
+    const float* data = buf.getReadPointer (ch);
+    const int p = (int) (frac * (double) kSincPhases + 0.5);
+    if (p == 0)
+        return data[i0];   // integer position → exact sample (no interpolation)
 
-    const float frac = (float) (pos - (double) i0);
-    return s0 + frac * (buf.getSample (ch, i1) - s0);
+    const auto* kr = sincTable().k[p];
+    const int base = i0 - (kSincHalf - 1);
+    float sum = 0.0f;
+    for (int t = 0; t < kSincTaps; ++t)
+    {
+        const int idx = base + t;
+        if (idx >= 0 && idx < n)
+            sum += data[idx] * kr[t];
+    }
+    return sum;
 }
 
 // Loop read with an equal-gain crossfade across the last `xf` frames before
@@ -63,15 +112,22 @@ VoiceEngine::VoiceEngine()
     voices.resize (kMaxVoices);
 }
 
-void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int /*numChannels*/)
+void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int numChannels)
 {
+    sincTable();   // build the interpolation kernel now (message thread), not on first audio callback
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
-    tremBuf.assign ((size_t) juce::jmax (1, maxBlockSize), 1.0f);
+    maxBlock   = juce::jmax (1, maxBlockSize);
+    numChans   = juce::jmax (1, numChannels);
+    tremBuf.assign ((size_t) maxBlock, 1.0f);
     for (auto& v : voices)
     {
         v.active = false;
         v.adsr.setSampleRate (sampleRate);
     }
+    for (auto& gc : groupChains)
+        if (gc) gc->prepare (sampleRate, maxBlock, numChans);
+    for (auto& gb : groupBuffers)
+        gb.setSize (numChans, maxBlock, false, false, true);
 }
 
 void VoiceEngine::releaseResources()
@@ -95,6 +151,10 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupReleaseTrigger.clearQuick(); groupReleaseTrigger.insertMultiple (0, false, numGroups);
     groupCcLo.clearQuick();  groupCcLo.insertMultiple (0, -1, numGroups);
     groupCcHi.clearQuick();  groupCcHi.insertMultiple (0, -1, numGroups);
+    groupAttack.clearQuick();  groupAttack.insertMultiple  (0, -1.0f, numGroups);
+    groupDecay.clearQuick();   groupDecay.insertMultiple   (0, -1.0f, numGroups);
+    groupSustain.clearQuick(); groupSustain.insertMultiple (0, -1.0f, numGroups);
+    groupRelease.clearQuick(); groupRelease.insertMultiple (0, -1.0f, numGroups);
     groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
     sustainValue = 0; sustainActive = false;
     for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
@@ -173,18 +233,48 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         }
     }
 
-    // LFO tremolo: take the first modulator (sine amp-mod). Its bindings name the
-    // groups whose volume it modulates; the Tremolo knob drives the depth at runtime.
+    // Per-group insert FX chains (e.g. organ swell filter + loudness). Built once
+    // per group that declares effects; rendered per-group in processBlock.
+    groupChains.clear();
+    groupBuffers.clear();
+    groupChains.resize ((size_t) numGroups);
+    anyGroupFx = false;
+    for (int gi = 0; gi < numGroups; ++gi)
+    {
+        const auto& g = mode.groups.getReference (gi);
+        if (g.effects.isEmpty())
+            continue;
+        auto chain = std::make_unique<FxChain>();
+        chain->prepare (sampleRate, maxBlock, numChans);
+        chain->setEffects (g.effects, source);
+        groupChains[(size_t) gi] = std::move (chain);
+        anyGroupFx = true;
+    }
+    if (anyGroupFx)
+    {
+        groupBuffers.resize ((size_t) numGroups);
+        for (auto& gb : groupBuffers)
+            gb.setSize (numChans, maxBlock, false, false, true);
+    }
+
+    // LFO (first modulator). Two kinds of target are supported:
+    //  - AMP_VOLUME on a group → smooth per-sample amplitude tremolo (Wurli).
+    //  - effect params / GLOBAL_TUNING → applied per block in applyLfoBlock (elektrisk
+    //    tremulant: gain + filter sweep + slight pitch vibrato).
+    // Depth = MOD_AMOUNT control, rate = FREQUENCY control (both override the defaults).
     lfoFreqHz = 0.0;
     lfoPhase  = 0.0;
     lfoDepth  = 0.0f;
+    lfoTuningMul = 1.0;
     lfoTargetGroup.clearQuick();
     lfoTargetGroup.insertMultiple (0, false, numGroups);
+    lfoBindings.clearQuick();
     if (! mode.modulators.isEmpty())
     {
         const auto& lfo = mode.modulators.getReference (0);
-        lfoFreqHz = lfo.frequency;
-        lfoDepth  = (float) lfo.modAmount;   // overridden by the MOD_AMOUNT control
+        lfoFreqHz   = lfo.frequency;
+        lfoDepth    = (float) lfo.modAmount;   // overridden by the MOD_AMOUNT control
+        lfoBindings = lfo.bindings;
         for (const auto& b : lfo.bindings)
             if (b.parameter == "AMP_VOLUME" && b.groupIndex)
             {
@@ -327,7 +417,7 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
 
     v->baseAdsr = zone.adsr;
     v->adsr.setSampleRate (sampleRate);
-    v->adsr.setParameters (effectiveAdsr (v->baseAdsr));
+    v->adsr.setParameters (effectiveAdsr (v->baseAdsr, zone.groupIndex));
     v->adsr.noteOn();
     v->startOrder = ++orderCounter;
 
@@ -412,19 +502,10 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
     // LFO tremolo for this chunk: a free-running sine factor that dips the volume
     // to (1 - depth) at its trough and peaks at 1 (depth 0 → factor 1 = no effect).
     // Computed per sample so it stays smooth across the whole block.
-    const bool lfoActive = lfoFreqHz > 0.0 && ! lfoTargetGroup.isEmpty()
-                        && (int) tremBuf.size() >= numSamples;
-    if (lfoActive)
-    {
-        const double inc = lfoFreqHz / sampleRate;
-        for (int i = 0; i < numSamples; ++i)
-        {
-            const float s = std::sin (juce::MathConstants<double>::twoPi * (lfoPhase + inc * i));
-            tremBuf[(size_t) i] = 1.0f - lfoDepth * (0.5f - 0.5f * s);
-        }
-        lfoPhase += inc * numSamples;
-        lfoPhase -= std::floor (lfoPhase);
-    }
+    // Amplitude tremolo (tremBuf) is computed once per block in applyLfoBlock and
+    // indexed by absolute block position (startSample + i).
+    const bool tremActive = lfoFreqHz > 0.0 && ! lfoTargetGroup.isEmpty()
+                         && (int) tremBuf.size() >= startSample + numSamples;
 
     for (auto& v : voices)
     {
@@ -433,8 +514,15 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
         const int srcChannels = v.buffer->getNumChannels();
         const int frames = v.buffer->getNumFrames();
-        const bool applyTrem = lfoActive && v.groupIndex >= 0
+        const bool applyTrem = tremActive && v.groupIndex >= 0
                             && v.groupIndex < lfoTargetGroup.size() && lfoTargetGroup[v.groupIndex];
+
+        // Voices in a group with its own FX chain render into that group's scratch
+        // buffer (filtered + gained as a group post-loop); others go straight out.
+        juce::AudioBuffer<float>* target = &buffer;
+        if (anyGroupFx && v.groupIndex >= 0 && (size_t) v.groupIndex < groupChains.size()
+            && groupChains[(size_t) v.groupIndex] != nullptr)
+            target = &groupBuffers[(size_t) v.groupIndex];
 
         for (int i = 0; i < numSamples; ++i)
         {
@@ -449,7 +537,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             const float gv  = hasGroup ? groupVolume[v.groupIndex]    : 1.0f;
             const float gtv = hasGroup ? groupTagVolume[v.groupIndex] : 1.0f;
             const float gg  = hasGroup ? groupGain[v.groupIndex]      : 1.0f;
-            const float trem = applyTrem ? tremBuf[(size_t) i] : 1.0f;
+            const float trem = applyTrem ? tremBuf[(size_t) (startSample + i)] : 1.0f;
             const float g = env * v.gain * v.declickGain * gv * gtv * gg * trem;
 
             for (int ch = 0; ch < outChannels; ++ch)
@@ -459,10 +547,10 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                                   ? readLooped (v.buffer->audio, srcCh, v.position,
                                                 v.loopEnd, v.loopLen, v.loopXf)
                                   : interpolate (v.buffer->audio, srcCh, v.position);
-                buffer.addSample (ch, startSample + i, s * g);
+                target->addSample (ch, startSample + i, s * g);
             }
 
-            v.position += v.rate * pitchBendMul;
+            v.position += v.rate * pitchBendMul * lfoTuningMul;
             if (v.loopEnabled && v.position >= v.loopEnd)
                 v.position -= v.loopLen;
 
@@ -489,14 +577,78 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
     }
 }
 
+void VoiceEngine::applyLfoBlock (int numSamples)
+{
+    if (lfoFreqHz <= 0.0 || numSamples <= 0)
+        return;
+
+    const double inc = lfoFreqHz / sampleRate;
+
+    // Per-sample amplitude tremolo for AMP_VOLUME-target groups (read in renderChunk).
+    if (! lfoTargetGroup.isEmpty() && (int) tremBuf.size() >= numSamples)
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float s = (float) std::sin (juce::MathConstants<double>::twoPi * (lfoPhase + inc * i));
+            tremBuf[(size_t) i] = 1.0f - lfoDepth * (0.5f - 0.5f * s);
+        }
+
+    // Control-rate modulations (mid-block value): a unipolar sine 0..1 scaled by the
+    // depth, mapped through each binding's output range, then SET on its target.
+    const double mid = lfoPhase + inc * (numSamples * 0.5);
+    const double u = (std::sin (juce::MathConstants<double>::twoPi * mid) + 1.0) * 0.5 * (double) lfoDepth;
+
+    // Tuning of the tremulant relative to the preset's binding ranges: the amplitude
+    // (gain) swing is deepened a little (the preset's ~1.25 dB reads as too subtle),
+    // and the pitch vibrato is eased back a touch.
+    constexpr double kGainSwing  = 6.0;   // > 1 = more amplitude tremolo
+    constexpr double kTuneScale  = 0.7;   // < 1 = less pitch vibrato
+
+    lfoTuningMul = 1.0;
+    for (const auto& b : lfoBindings)
+    {
+        const double outMin = b.translationOutputMin.value_or (0.0);
+        const double outMax = b.translationOutputMax.value_or (1.0);
+        const double val = outMin + u * (outMax - outMin);
+
+        if (b.parameter == "GLOBAL_TUNING")
+            lfoTuningMul = std::pow (2.0, (val * kTuneScale) / 12.0);   // val in semitones
+        else if (b.groupIndex && b.effectIndex
+                 && (b.parameter == "FX_FILTER_FREQUENCY" || b.parameter == "LEVEL" || b.parameter == "FX_MIX"))
+        {
+            const double v = (b.parameter == "LEVEL")
+                               ? outMin + u * (outMax - outMin) * kGainSwing   // deeper amplitude swing
+                               : val;
+            setGroupEffectParam (*b.groupIndex, *b.effectIndex, b.parameter, (float) v);
+        }
+    }
+
+    lfoPhase += inc * numSamples;
+    lfoPhase -= std::floor (lfoPhase);
+}
+
 void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     buffer.clear();
 
+    // Advance + apply the LFO once for the whole block (amplitude tremolo, per-group
+    // filter/gain sweep, pitch vibrato).
+    applyLfoBlock (buffer.getNumSamples());
+
+    // Per-group FX: voices render into per-group scratch buffers this block; clear
+    // them to the block length first (no realloc — sized to maxBlock in prepare).
+    const int numSamples = buffer.getNumSamples();
+    if (anyGroupFx)
+        for (size_t g = 0; g < groupBuffers.size(); ++g)
+            if (groupChains[g] != nullptr)
+            {
+                groupBuffers[g].setSize (numChans, numSamples, false, false, true);
+                groupBuffers[g].clear();
+            }
+
     int pos = 0;
     for (const auto meta : midi)
     {
-        const int eventPos = juce::jlimit (0, buffer.getNumSamples(), meta.samplePosition);
+        const int eventPos = juce::jlimit (0, numSamples, meta.samplePosition);
         renderChunk (buffer, pos, eventPos - pos);
         pos = eventPos;
 
@@ -513,7 +665,18 @@ void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             allNotesOff();
     }
 
-    renderChunk (buffer, pos, buffer.getNumSamples() - pos);
+    renderChunk (buffer, pos, numSamples - pos);
+
+    // Run each group's FX chain over its scratch buffer, then sum into the output.
+    if (anyGroupFx)
+        for (size_t g = 0; g < groupBuffers.size(); ++g)
+            if (groupChains[g] != nullptr)
+            {
+                groupChains[g]->process (groupBuffers[g]);
+                for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+                    buffer.addFrom (ch, 0, groupBuffers[g],
+                                    juce::jmin (ch, groupBuffers[g].getNumChannels() - 1), 0, numSamples);
+            }
 }
 
 void VoiceEngine::allNotesOff()
@@ -531,13 +694,21 @@ int VoiceEngine::getActiveVoiceCount() const noexcept
     return n;
 }
 
-CurvedAdsr::Parameters VoiceEngine::effectiveAdsr (const CurvedAdsr::Parameters& base) const
+CurvedAdsr::Parameters VoiceEngine::effectiveAdsr (const CurvedAdsr::Parameters& base, int groupIndex) const
 {
     auto p = base;
     if (ovAttack  >= 0.0f) p.attack  = ovAttack;
     if (ovDecay   >= 0.0f) p.decay   = ovDecay;
     if (ovSustain >= 0.0f) p.sustain = ovSustain;
     if (ovRelease >= 0.0f) p.release = ovRelease;
+    // Per-group overrides take precedence over the global ones.
+    if (groupIndex >= 0 && groupIndex < groupAttack.size())
+    {
+        if (groupAttack [groupIndex] >= 0.0f) p.attack  = groupAttack [groupIndex];
+        if (groupDecay  [groupIndex] >= 0.0f) p.decay   = groupDecay  [groupIndex];
+        if (groupSustain[groupIndex] >= 0.0f) p.sustain = groupSustain[groupIndex];
+        if (groupRelease[groupIndex] >= 0.0f) p.release = groupRelease[groupIndex];
+    }
     return p;
 }
 
@@ -547,6 +718,11 @@ void VoiceEngine::setAmpAttack  (float s) { ovAttack  = s; }
 void VoiceEngine::setAmpDecay   (float s) { ovDecay   = s; }
 void VoiceEngine::setAmpSustain (float l) { ovSustain = l; }
 void VoiceEngine::setAmpRelease (float s) { ovRelease = s; }
+
+void VoiceEngine::setGroupAmpAttack  (int g, float s) { if (g >= 0 && g < groupAttack.size())  groupAttack.set  (g, s); }
+void VoiceEngine::setGroupAmpDecay   (int g, float s) { if (g >= 0 && g < groupDecay.size())   groupDecay.set   (g, s); }
+void VoiceEngine::setGroupAmpSustain (int g, float l) { if (g >= 0 && g < groupSustain.size()) groupSustain.set (g, l); }
+void VoiceEngine::setGroupAmpRelease (int g, float s) { if (g >= 0 && g < groupRelease.size()) groupRelease.set (g, s); }
 
 void VoiceEngine::setGroupVolume (int groupIndex, float volume)
 {
@@ -576,6 +752,14 @@ void VoiceEngine::setGroupGain (int groupIndex, float db)
 {
     if (groupIndex >= 0 && groupIndex < groupGain.size())
         groupGain.set (groupIndex, juce::Decibels::decibelsToGain (db));
+}
+
+void VoiceEngine::setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value)
+{
+    if (groupIndex >= 0 && (size_t) groupIndex < groupChains.size() && groupChains[(size_t) groupIndex])
+        groupChains[(size_t) groupIndex]->setEffectParam (effectIndex, parameter, value);
+    else if (parameter == "LEVEL")
+        setGroupGain (groupIndex, value);   // fallback: group with no chain (e.g. a single gain effect)
 }
 
 } // namespace dm

@@ -28,6 +28,33 @@ SamplerEngine::ModeRender* SamplerEngine::buildMode (int index) const
         && index >= 0 && index < library->modes.size())
     {
         const auto& mode = library->modes.getReference (index);
+
+        // Acquire (decode) this mode's samples + IRs before building; released when
+        // the ModeRender is destroyed. So only the active mode's audio is in RAM.
+        mr->src = source;
+        auto hold = [mr] (const juce::String& id)
+        {
+            if (id.isNotEmpty() && ! mr->held.contains (id)) { mr->held.add (id); mr->src->acquire (id); }
+        };
+        for (const auto& g : mode.groups)
+            for (const auto& s : g.samples)
+                hold (s.source);
+        for (const auto& e : mode.effects)
+            hold (e.ir);
+        for (const auto& tab : mode.ui.tabs)   // runtime-switchable IRs (cabinet / Home-Church)
+        {
+            for (const auto& menu : tab.menus)
+                for (const auto& opt : menu.options)
+                    for (const auto& b : opt.bindings)
+                        if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
+                            hold (b.translationValue.toString());
+            for (const auto& btn : tab.buttons)
+                for (const auto& st : btn.states)
+                    for (const auto& b : st.bindings)
+                        if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
+                            hold (b.translationValue.toString());
+        }
+
         mr->sequencer.configure (mode);
         mr->voices.setMode (mode, *source);
         mr->fx.setEffects (mode.effects, *source);
@@ -61,7 +88,7 @@ void SamplerEngine::prepare (double newSampleRate, int newMaxBlock, int newNumCh
         setCurrentDirect (buildMode (activeModeIndex));
 }
 
-void SamplerEngine::setLibrary (const PresetLibrary& lib, const SampleSource& src)
+void SamplerEngine::setLibrary (const PresetLibrary& lib, SampleSource& src)
 {
     library = &lib;
     source  = &src;
@@ -89,7 +116,7 @@ juce::StringArray SamplerEngine::getModeNames() const
 void SamplerEngine::resetOverrides()
 {
     for (auto* o : { &ovLowpassEnabled, &ovLowpassFreq, &ovReverbMix, &ovReverbGain,
-                     &ovGain, &ovWaveDrive, &ovWaveOutput, &ovMasterVol, &ovLfoDepth,
+                     &ovGain, &ovWaveDrive, &ovWaveOutput, &ovMasterVol, &ovLfoDepth, &ovLfoRate,
                      &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease, &ovAmpVelTrack })
         o->touched.store (false);
     for (auto& g : ovGroupVol)
@@ -163,6 +190,7 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
     if (ovAmpVelTrack.touched.load()) mr.voices.setAmpVelTrack (ovAmpVelTrack.value.load());
     if (ovMasterVol.touched.load())   masterGain = ovMasterVol.value.load();   // applied post-FX in processBlock
     if (ovLfoDepth.touched.load())    mr.voices.setLfoDepth (ovLfoDepth.value.load());
+    if (ovLfoRate.touched.load())     mr.voices.setLfoRate (ovLfoRate.value.load());
 
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupVol[i].touched.load())
@@ -302,6 +330,12 @@ void SamplerEngine::setLfoDepth (float depth)
     ovLfoDepth.touched.store (true);
 }
 
+void SamplerEngine::setLfoRate (float hz)
+{
+    ovLfoRate.value.store (hz);
+    ovLfoRate.touched.store (true);
+}
+
 void SamplerEngine::setEffectIr (int effectIndex, const juce::String& irId)
 {
     // Message thread: remember the selection (so a (re)built mode picks it up in
@@ -376,6 +410,27 @@ void SamplerEngine::setGroupTuning (int groupIndex, float semitones)
         ovGroupTuning[groupIndex].value.store (semitones);
         ovGroupTuning[groupIndex].touched.store (true);
     }
+}
+
+void SamplerEngine::setGroupEffectParam (int groupIndex, int effectIndex,
+                                         const juce::String& parameter, float value)
+{
+    // Applied directly to the live mode's per-group chain. applyToEngine re-applies
+    // these every block (idempotent), so after a mode swap the next block restores
+    // the knob values over the freshly-built mode's manifest defaults.
+    if (current != nullptr)
+        current->voices.setGroupEffectParam (groupIndex, effectIndex, parameter, value);
+}
+
+void SamplerEngine::setGroupAmp (int groupIndex, const juce::String& parameter, float value)
+{
+    if (current == nullptr)
+        return;
+    auto& v = current->voices;
+    if      (parameter == "ENV_ATTACK")  v.setGroupAmpAttack  (groupIndex, value);
+    else if (parameter == "ENV_DECAY")   v.setGroupAmpDecay   (groupIndex, value);
+    else if (parameter == "ENV_SUSTAIN") v.setGroupAmpSustain (groupIndex, value);
+    else if (parameter == "ENV_RELEASE") v.setGroupAmpRelease (groupIndex, value);
 }
 
 } // namespace dm
