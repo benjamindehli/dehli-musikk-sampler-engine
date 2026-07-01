@@ -120,6 +120,8 @@ var writeStringArray (const juce::StringArray& a)
     return fromArray (arr);
 }
 
+var writeEffect (const Effect& e);   // defined below
+
 var writeGroup (const Group& g)
 {
     Obj o;
@@ -158,6 +160,14 @@ var writeGroup (const Group& g)
     o.setOpt ("velTrack", g.velTrack);
     o.setOpt ("ampEnvEnabled", g.ampEnvEnabled);
     o.setOpt ("pitchKeyTrack", g.pitchKeyTrack);
+
+    if (! g.effects.isEmpty())
+    {
+        juce::Array<var> effects;
+        for (const auto& e : g.effects)
+            effects.add (writeEffect (e));
+        o.set ("effects", fromArray (effects));
+    }
 
     juce::Array<var> samples;
     for (const auto& s : g.samples)
@@ -470,6 +480,73 @@ var manifestToVar (const PresetLibrary& library)
 juce::String writeManifestToJson (const PresetLibrary& library, bool oneLine)
 {
     return juce::JSON::toString (manifestToVar (library), oneLine);
+}
+
+namespace
+{
+// A mode name → a lowercase, hyphen-separated filename stem ("Chords (Looped)" →
+// "chords-looped"). Empty names fall back to "mode-<n>".
+juce::String slugify (const juce::String& name, int index)
+{
+    const auto lower = name.toLowerCase();
+    juce::String s;
+    for (int i = 0; i < lower.length(); ++i)
+    {
+        const juce::juce_wchar c = lower[i];
+        if (juce::CharacterFunctions::isLetterOrDigit (c))
+            s << juce::String::charToString (c);
+        else if (! s.endsWithChar ('-'))
+            s << '-';
+    }
+    s = s.trimCharactersAtStart ("-").trimCharactersAtEnd ("-");
+    return s.isEmpty() ? ("mode-" + juce::String (index + 1)) : s;
+}
+} // namespace
+
+bool writeSplitManifest (const PresetLibrary& library, const juce::File& manifestDir)
+{
+    const var root = manifestToVar (library);
+    auto* rootObj = root.getDynamicObject();
+    if (rootObj == nullptr)
+        return false;
+
+    auto modesDir = manifestDir.getChildFile ("modes");
+    if (manifestDir.createDirectory().failed() || modesDir.createDirectory().failed())
+        return false;
+    // Drop any stale per-mode files from a previous run (mode renamed/removed).
+    for (auto& f : modesDir.findChildFiles (juce::File::findFiles, false, "*.json"))
+        f.deleteFile();
+
+    juce::Array<var> modeVars;
+    if (auto* modes = root.getProperty ("modes", var()).getArray())
+        modeVars = *modes;
+
+    juce::StringArray stems;
+    for (int i = 0; i < modeVars.size(); ++i)
+    {
+        auto stem = slugify (modeVars[i].getProperty ("name", var()).toString(), i);
+        auto unique = stem;
+        for (int n = 2; stems.contains (unique); ++n)   // de-dup colliding slugs
+            unique = stem + "-" + juce::String (n);
+        stems.add (unique);
+
+        if (! modesDir.getChildFile (unique + ".json")
+                 .replaceWithText (juce::JSON::toString (modeVars[i], false)))
+            return false;
+    }
+
+    // index.json = everything from root except "modes", plus the ordered stem list.
+    auto* index = new juce::DynamicObject();
+    for (auto& p : rootObj->getProperties())
+        if (p.name.toString() != "modes")
+            index->setProperty (p.name, p.value);
+    juce::Array<var> stemVars;
+    for (auto& s : stems)
+        stemVars.add (s);
+    index->setProperty ("modes", var (stemVars));
+
+    return manifestDir.getChildFile ("index.json")
+               .replaceWithText (juce::JSON::toString (var (index), false));
 }
 
 } // namespace dm

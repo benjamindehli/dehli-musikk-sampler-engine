@@ -118,6 +118,29 @@ struct Sample
 };
 
 // ---------------------------------------------------------------------------
+// Effect — an insert effect (lowpass / gain / convolution). Used both for the
+// instrument FX chain (Mode.effects) and per-group chains (Group.effects). All
+// effect-specific fields are optional; only those relevant to `type` are populated.
+// ---------------------------------------------------------------------------
+struct Effect
+{
+    juce::String type;            // lowpass | gain | convolution
+    bool enabled = true;
+
+    std::optional<double> frequency;     // lowpass
+    std::optional<double> resonance;     // lowpass
+    std::optional<double> gain;          // gain (from "level")
+    std::optional<double> drive;
+    std::optional<double> mix;
+    std::optional<double> wet;           // convolution (from "wetLevel")
+    std::optional<double> outputLevel;
+    juce::String ir;                     // convolution IR asset id (from "irFile")
+    bool normalizeIr = true;             // normalise the IR's energy (off = use it as recorded, like DS)
+
+    juce::var raw;                       // full original object
+};
+
+// ---------------------------------------------------------------------------
 // Group — a set of samples sharing voicing, velocity range, round-robin, etc.
 // ---------------------------------------------------------------------------
 struct VelocityRange
@@ -156,29 +179,12 @@ struct Group
     std::optional<bool>   ampEnvEnabled;
     std::optional<bool>   pitchKeyTrack;
 
+    // Per-group insert effects (lowpass/gain), applied to this group's voices before
+    // mixing — e.g. an organ's per-stop swell filter + loudness. Bindings target
+    // these by (groupIndex, effectIndex). Empty for most libraries.
+    juce::Array<Effect> effects;
+
     juce::Array<Sample> samples;
-};
-
-// ---------------------------------------------------------------------------
-// Effect — fixed insert chain (lowpass / gain / convolution). All effect-specific
-// fields are optional; only those relevant to `type` are populated.
-// ---------------------------------------------------------------------------
-struct Effect
-{
-    juce::String type;            // lowpass | gain | convolution
-    bool enabled = true;
-
-    std::optional<double> frequency;     // lowpass
-    std::optional<double> resonance;     // lowpass
-    std::optional<double> gain;          // gain (from "level")
-    std::optional<double> drive;
-    std::optional<double> mix;
-    std::optional<double> wet;           // convolution (from "wetLevel")
-    std::optional<double> outputLevel;
-    juce::String ir;                     // convolution IR asset id (from "irFile")
-    bool normalizeIr = true;             // normalise the IR's energy (off = use it as recorded, like DS)
-
-    juce::var raw;                       // full original object
 };
 
 // ---------------------------------------------------------------------------

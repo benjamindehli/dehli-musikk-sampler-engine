@@ -22,4 +22,14 @@ juce::var manifestToVar (const PresetLibrary& library);
 /** Serialize a manifest to JSON text. `oneLine` packs it without pretty-printing. */
 juce::String writeManifestToJson (const PresetLibrary& library, bool oneLine = false);
 
+/** Write the manifest as a readable SPLIT folder:
+      <manifestDir>/index.json         — schema/format/library/gainDb + ordered mode names
+      <manifestDir>/modes/<name>.json  — one file per mode
+    Per-mode file names come from each mode's name (slugified, de-duplicated). The
+    index lists them in order, so load order is preserved regardless of naming.
+    Round-trips with `loadManifestFromFolder`. Returns false if a file couldn't be
+    written. (Partials/ is a hand-authoring feature; the converter does not extract
+    shared fragments automatically.) */
+bool writeSplitManifest (const PresetLibrary& library, const juce::File& manifestDir);
+
 } // namespace dm

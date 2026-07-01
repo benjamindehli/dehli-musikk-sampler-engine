@@ -154,6 +154,8 @@ Sample parseSample (const var& v, ManifestParseResult& res, const juce::String& 
     return s;
 }
 
+Effect parseEffect (const var& v);   // defined below
+
 Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& where)
 {
     Group g;
@@ -192,6 +194,10 @@ Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& wh
     g.velTrack      = optD (v, "velTrack");
     g.ampEnvEnabled = optB (v, "ampEnvEnabled");
     g.pitchKeyTrack = optB (v, "pitchKeyTrack");
+
+    if (auto* a = get (v, "effects").getArray())
+        for (auto& e : *a)
+            g.effects.add (parseEffect (e));
 
     if (auto* a = get (v, "samples").getArray())
     {
@@ -507,6 +513,200 @@ ManifestParseResult loadManifestFromJson (const juce::String& jsonText)
         return res;
     }
     return loadManifest (root);
+}
+
+// --- split-manifest resolution ($use / $ref) --------------------------------
+namespace
+{
+// Deep copy so merges never mutate a cached partial (var objects are shared refs).
+var cloneVar (const var& v)
+{
+    if (auto* arr = v.getArray())
+    {
+        juce::Array<var> out;
+        for (auto& e : *arr) out.add (cloneVar (e));
+        return var (out);
+    }
+    if (auto* obj = v.getDynamicObject())
+    {
+        auto* clone = new juce::DynamicObject();
+        for (auto& p : obj->getProperties())
+            clone->setProperty (p.name, cloneVar (p.value));
+        return var (clone);
+    }
+    return v;   // primitive — immutable, safe to share
+}
+
+// Objects merge key-by-key recursively; anything else (incl. arrays) → overlay wins.
+var deepMerge (const var& base, const var& overlay)
+{
+    auto* bo = base.getDynamicObject();
+    auto* oo = overlay.getDynamicObject();
+    if (bo == nullptr || oo == nullptr)
+        return cloneVar (overlay);
+
+    auto* out = new juce::DynamicObject();
+    for (auto& p : bo->getProperties())
+        out->setProperty (p.name, cloneVar (p.value));
+    for (auto& p : oo->getProperties())
+    {
+        if (out->hasProperty (p.name))
+            out->setProperty (p.name, deepMerge (out->getProperty (p.name), p.value));
+        else
+            out->setProperty (p.name, cloneVar (p.value));
+    }
+    return var (out);
+}
+
+using PartialLoader = std::function<var (const juce::String&)>;
+
+var resolveNode (const var&, const PartialLoader&, juce::StringArray&, juce::StringArray);
+
+// Load a named partial, resolve its own $use/$ref, guarding against import cycles.
+var expandPartial (const juce::String& name, const PartialLoader& loader,
+                   juce::StringArray& errors, juce::StringArray visiting)
+{
+    if (visiting.contains (name))
+    {
+        errors.add ("partial \"" + name + "\" forms an import cycle ("
+                    + visiting.joinIntoString (" -> ") + " -> " + name + ")");
+        return var (new juce::DynamicObject());
+    }
+    var p = loader (name);
+    if (p.isVoid())
+    {
+        errors.add ("unknown partial \"" + name + "\"");
+        return var (new juce::DynamicObject());
+    }
+    visiting.add (name);   // by-value copy: chain-local, so sibling $refs don't collide
+    return resolveNode (p, loader, errors, visiting);
+}
+
+// Recursively expand $use (whole-partial base) and $ref (splice one partial), with
+// the node's own fields deep-merged last (they win).
+var resolveNode (const var& node, const PartialLoader& loader,
+                 juce::StringArray& errors, juce::StringArray visiting)
+{
+    if (auto* arr = node.getArray())
+    {
+        juce::Array<var> out;
+        for (auto& e : *arr) out.add (resolveNode (e, loader, errors, visiting));
+        return var (out);
+    }
+
+    auto* obj = node.getDynamicObject();
+    if (obj == nullptr)
+        return node;   // primitive
+
+    // { "$ref": "name", ...overrides }  → that partial with the overrides merged on top.
+    if (obj->hasProperty ("$ref"))
+    {
+        var base = expandPartial (obj->getProperty ("$ref").toString(), loader, errors, visiting);
+        auto* overrides = new juce::DynamicObject();
+        for (auto& p : obj->getProperties())
+            if (p.name.toString() != "$ref")
+                overrides->setProperty (p.name, p.value);
+        return deepMerge (base, resolveNode (var (overrides), loader, errors, visiting));
+    }
+
+    // "$use": [...] partials form the base; this node's own keys deep-merge on top.
+    var result (new juce::DynamicObject());
+    if (obj->hasProperty ("$use"))
+    {
+        if (auto* uses = obj->getProperty ("$use").getArray())
+            for (auto& u : *uses)
+                result = deepMerge (result, expandPartial (u.toString(), loader, errors, visiting));
+        else
+            errors.add ("\"$use\" must be an array of partial names");
+    }
+
+    auto* own = new juce::DynamicObject();
+    for (auto& p : obj->getProperties())
+        if (p.name.toString() != "$use")
+            own->setProperty (p.name, resolveNode (p.value, loader, errors, visiting));
+
+    return deepMerge (result, var (own));
+}
+} // namespace
+
+var resolveSplitManifest (const var& index,
+                          const std::function<var (const juce::String&)>& modeLoader,
+                          const std::function<var (const juce::String&)>& partialLoader,
+                          juce::StringArray& errors)
+{
+    auto* indexObj = index.getDynamicObject();
+    if (indexObj == nullptr)
+    {
+        errors.add ("manifest index is not a JSON object");
+        return {};
+    }
+
+    // Root carries everything from the index except "modes" (resolved from files).
+    auto* root = new juce::DynamicObject();
+    for (auto& p : indexObj->getProperties())
+        if (p.name.toString() != "modes")
+            root->setProperty (p.name, cloneVar (p.value));
+
+    juce::Array<var> modesOut;
+    if (auto* modes = index.getProperty ("modes", var()).getArray())
+    {
+        for (auto& entry : *modes)
+        {
+            // A string names modes/<name>.json; an inline object is used as-is.
+            var modeVar = entry.isString() ? modeLoader (entry.toString()) : entry;
+            if (modeVar.isVoid())
+            {
+                errors.add ("mode \"" + entry.toString() + "\" could not be loaded");
+                continue;
+            }
+            modesOut.add (resolveNode (modeVar, partialLoader, errors, {}));
+        }
+    }
+    else
+    {
+        errors.add ("manifest index missing \"modes\" array");
+    }
+
+    root->setProperty ("modes", var (modesOut));
+    return var (root);
+}
+
+ManifestParseResult loadManifestFromFolder (const juce::File& manifestDir)
+{
+    ManifestParseResult res;
+
+    auto indexFile = manifestDir.getChildFile ("index.json");
+    if (! indexFile.existsAsFile())
+    {
+        res.errors.add ("no index.json in " + manifestDir.getFullPathName());
+        return res;
+    }
+
+    var index;
+    if (auto r = juce::JSON::parse (indexFile.loadFileAsString(), index); r.failed())
+    {
+        res.errors.add ("index.json parse error: " + r.getErrorMessage());
+        return res;
+    }
+
+    auto loadJsonFile = [] (const juce::File& f) -> var
+    {
+        if (! f.existsAsFile()) return {};
+        var v;
+        return juce::JSON::parse (f.loadFileAsString(), v).failed() ? var() : v;
+    };
+    auto modeLoader    = [&] (const juce::String& n) { return loadJsonFile (manifestDir.getChildFile ("modes").getChildFile (n + ".json")); };
+    auto partialLoader = [&] (const juce::String& n) { return loadJsonFile (manifestDir.getChildFile ("partials").getChildFile (n + ".json")); };
+
+    juce::StringArray resolveErrors;
+    var merged = resolveSplitManifest (index, modeLoader, partialLoader, resolveErrors);
+    if (! resolveErrors.isEmpty())
+    {
+        res.errors.addArray (resolveErrors);
+        return res;
+    }
+
+    return loadManifest (merged);
 }
 
 } // namespace dm
