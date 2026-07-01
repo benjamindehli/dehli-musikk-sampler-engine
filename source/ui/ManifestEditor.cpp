@@ -149,11 +149,9 @@ void ManifestEditor::rebuildUi()
         for (const auto& pid : params::controlParamIds (c))
             setParam (pid.toRawUTF8(), norm);
     };
-    uiComponent->onButtonChanged = [this] (const Button& b, int stateIndex)
+    uiComponent->onButtonChanged = [this] (const Button&, int buttonIndex, int stateIndex)
     {
-        const auto pid = params::buttonParamId (b);
-        if (pid.isNotEmpty())
-            setParam (pid.toRawUTF8(), stateIndex >= 1 ? 1.0f : 0.0f);
+        setParam (params::buttonParamId (buttonIndex).toRawUTF8(), (float) stateIndex);
     };
     uiComponent->onMenuChanged = [this] (const Menu&, int idx)
     {
@@ -203,11 +201,11 @@ void ManifestEditor::refreshWidgets()
             const double mn = c.min.value_or (0.0), mx = c.max.value_or (1.0);
             return mn + (double) raw (ids[0]) * (mx - mn);
         },
-        [&] (const Button& b) -> std::optional<int>
+        [&] (const Button&, int index) -> std::optional<int>
         {
-            const auto pid = params::buttonParamId (b);
-            if (pid.isEmpty()) return std::nullopt;
-            return raw (pid) > 0.5f ? 1 : 0;
+            const auto pid = params::buttonParamId (index);
+            if (host.getApvts().getParameter (pid) == nullptr) return std::nullopt;
+            return (int) raw (pid);
         },
         [&] (const Menu&) -> std::optional<int>
         {

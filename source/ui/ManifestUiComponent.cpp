@@ -281,16 +281,16 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
 }
 
 void ManifestUiComponent::refresh (
-    const std::function<std::optional<double> (const Control&)>& controlValue,
-    const std::function<std::optional<int>    (const Button&)>&  buttonState,
-    const std::function<std::optional<int>    (const Menu&)>&    menuSelection)
+    const std::function<std::optional<double> (const Control&)>&     controlValue,
+    const std::function<std::optional<int> (const Button&, int idx)>& buttonState,
+    const std::function<std::optional<int> (const Menu&)>&            menuSelection)
 {
     for (int i = 0; i < knobs.size(); ++i)
         if (auto v = controlValue (*knobModels[i]))
             knobs[i]->setValue (*v);
 
     for (int i = 0; i < buttons.size(); ++i)
-        if (auto s = buttonState (*buttonModels[i]))
+        if (auto s = buttonState (*buttonModels[i], i))
             if (*s != buttons[i]->getState())   // only on change (re-decoding light PNGs is costly)
             {
                 buttons[i]->setState (*s);
@@ -340,12 +340,11 @@ ManifestUiComponent::~ManifestUiComponent() = default;
 
 void ManifestUiComponent::handleButton (const Button& b, int index, int stateIndex)
 {
-    juce::ignoreUnused (index);
     if (stateIndex >= 0 && stateIndex < b.states.size())
         applyLightBindings (b.states.getReference (stateIndex));
 
     if (onButtonChanged)
-        onButtonChanged (b, stateIndex);
+        onButtonChanged (b, index, stateIndex);
 }
 
 void ManifestUiComponent::applyLightBindings (const ButtonState& state)

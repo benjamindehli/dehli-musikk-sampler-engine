@@ -28,8 +28,8 @@ public:
 
     /** A control (knob) moved — `value` is in the control's own min..max range. */
     std::function<void (const Control&, double value)> onControlChanged;
-    /** A button changed to `stateIndex`. (Light swaps are handled internally.) */
-    std::function<void (const Button&, int stateIndex)> onButtonChanged;
+    /** A button (its index in the tab) changed to `stateIndex`. (Lights handled internally.) */
+    std::function<void (const Button&, int buttonIndex, int stateIndex)> onButtonChanged;
     /** A dropdown menu selected `optionIndex` (0-based). */
     std::function<void (const Menu&, int optionIndex)> onMenuChanged;
 
@@ -37,9 +37,9 @@ public:
         widgets WITHOUT firing the change callbacks. Each callback is asked, per
         widget model, what it should display; std::nullopt leaves it untouched. The
         renderer stays plugin-agnostic — the host maps params to controls. */
-    void refresh (const std::function<std::optional<double> (const Control&)>& controlValue,
-                  const std::function<std::optional<int>    (const Button&)>&  buttonState,
-                  const std::function<std::optional<int>    (const Menu&)>&    menuSelection);
+    void refresh (const std::function<std::optional<double> (const Control&)>&     controlValue,
+                  const std::function<std::optional<int> (const Button&, int idx)>& buttonState,
+                  const std::function<std::optional<int> (const Menu&)>&            menuSelection);
 
     void paint (juce::Graphics&) override;
     void resized() override;
