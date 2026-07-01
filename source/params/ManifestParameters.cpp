@@ -1,5 +1,6 @@
 #include "ManifestParameters.h"
 #include <set>
+#include <map>
 
 namespace dm::params
 {
@@ -33,21 +34,18 @@ static const FloatSpec kFloatSpecs[] =
     { "FX_DRIVE",            "drive",      "Drive",       false },   // wave_shaper
     { "AMP_VEL_TRACK",       "velSens",    "Velocity Sensitivity", false },
     { "LEVEL",               "level",      "Level",       false },   // gain effect
-    { "MOD_AMOUNT",          "modAmount",  "Mod Amount",  false },   // LFO depth (engine wiring: feature #3)
+    { "MOD_AMOUNT",          "modAmount",  "Mod Amount",  false },   // LFO depth
+    { "FREQUENCY",           "lfoRate",    "LFO Rate",    false },   // LFO rate (Hz)
 };
 
 // With per-control keying the baseId/perGroup/baseName fields are vestigial — each
 // control now owns one param keyed by its label (see controlKey). The registry is
 // kept only as the set of float engine parameters applyBinding knows how to route.
 
-// Bool buttons, classified by their state bindings. Order = lane order.
-struct BoolSpec { const char* id; const char* name; };
-static const BoolSpec kBoolSpecs[] =
-{
-    { "fxEnable", "FX Enable" },       // 0: ENABLED on an effect
-    { "monoPoly", "Mono / Poly" },     // 1: ENABLED on a group
-    { "velTrack", "Velocity Track" },  // 2: AMP_VEL_TRACK
-};
+// Buttons get one param each, keyed by their index in the tab (btn_<i>), an Int
+// 0..numStates-1 so multi-state selectors (e.g. a 3-way stop selector) work, not
+// just on/off. Helpers below.
+static juce::String buttonId (int index) { return "btn_" + juce::String (index); }
 
 static const FloatSpec* floatSpecFor (const juce::String& parameter)
 {
@@ -55,19 +53,6 @@ static const FloatSpec* floatSpecFor (const juce::String& parameter)
         if (parameter == s.engineParam)
             return &s;
     return nullptr;
-}
-
-// Index into kBoolSpecs for a button, or -1.
-static int buttonKindIndex (const Button& b)
-{
-    for (const auto& st : b.states)
-        for (const auto& bd : st.bindings)
-        {
-            if (bd.parameter == "ENABLED" && bd.effectIndex)      return 0; // fxEnable
-            if (bd.parameter == "ENABLED" && bd.level == "group") return 1; // monoPoly
-            if (bd.parameter == "AMP_VEL_TRACK")                  return 2; // velTrack
-        }
-    return -1;
 }
 
 static double normOf (const Control& c)
@@ -135,12 +120,12 @@ static double evalTableLinear (const juce::String& table, double x)
 
 static double outputValue (const Binding& b, float norm, double mn, double mx)
 {
+    // translationReversed flips the knob's sense — apply it once here so it works
+    // for ALL binding kinds (table, explicit output range, and plain linear).
+    if (b.translationReversed) norm = 1.0f - norm;
+
     if (b.translationTable.isNotEmpty())
-    {
-        double in = mn + (double) norm * (mx - mn);          // the control's actual value
-        if (b.translationReversed) in = mx + mn - in;        // reverse the input (max↔min)
-        return evalTableLinear (b.translationTable, in);
-    }
+        return evalTableLinear (b.translationTable, mn + (double) norm * (mx - mn));
     if (b.translationOutputMin && b.translationOutputMax)
         return *b.translationOutputMin + (double) norm * (*b.translationOutputMax - *b.translationOutputMin);
     return (mn + (double) norm * (mx - mn)) * b.factor.value_or (1.0);
@@ -176,30 +161,41 @@ static double evalTable (const juce::String& table, double x)
 static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
 {
     const auto& p = b.parameter;
-    const bool  groupLevel = b.level == "group" && b.groupIndex.has_value();
+    // Group-level effect (level="group" + effectIndex): a per-group insert chain
+    // (organ swell filter, loudness gain, …) — route to that group's chain.
+    const bool groupEffect = b.level == "group" && b.groupIndex && b.effectIndex;
+    const bool groupLevel  = b.level == "group" && b.groupIndex.has_value();
 
-    if      (p == "FX_FILTER_FREQUENCY") eng.setLowpassFrequency ((float) value);
+    if (p == "FX_FILTER_FREQUENCY")
+    {
+        if (groupEffect) eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value);
+        else             eng.setLowpassFrequency ((float) value);   // instrument lowpass
+    }
     // Effect params: address a specific instrument effect by index when known;
     // FxChain routes FX_OUTPUT_LEVEL by the slot's kind (wave_shaper vs convolution).
-    else if (p == "FX_MIX")              { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbMix ((float) value); }
-    else if (p == "FX_DRIVE")            { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setWaveShaperDrive ((float) value); }
+    else if (p == "FX_MIX")              { if (groupEffect) eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value); else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbMix ((float) value); }
+    else if (p == "FX_DRIVE")            { if (groupEffect) eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value); else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setWaveShaperDrive ((float) value); }
     else if (p == "FX_OUTPUT_LEVEL")     { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbWetGainDb ((float) value); }
     else if (p == "LEVEL")
     {
-        // group-level `gain` effect → per-group output gain; instrument gain → by index.
-        if      (groupLevel)    eng.setGroupGain (*b.groupIndex, (float) value);
+        // group-level gain: per-group chain if it has one (else falls back to a
+        // per-group output gain inside the engine); instrument gain → by index.
+        if      (groupLevel)    eng.setGroupEffectParam (*b.groupIndex, b.effectIndex.value_or (0), p, (float) value);
         else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value);
         else                    eng.setGain ((float) value);
     }
     else if (p == "SEQ_PLAYBACK_RATE")   eng.setSequencerRate (value);
-    else if (p == "ENV_ATTACK")          eng.setAmpAttack ((float) value);
-    else if (p == "ENV_DECAY")           eng.setAmpDecay ((float) value);
-    else if (p == "ENV_SUSTAIN")         eng.setAmpSustain ((float) value);
-    else if (p == "ENV_RELEASE")         eng.setAmpRelease ((float) value);
+    // ENV_* with a groupIndex → that group only (e.g. organ "loudness" lengthening
+    // just the reed groups' attack); without → the global amp envelope.
+    else if (p == "ENV_ATTACK")          { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpAttack ((float) value); }
+    else if (p == "ENV_DECAY")           { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpDecay ((float) value); }
+    else if (p == "ENV_SUSTAIN")         { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpSustain ((float) value); }
+    else if (p == "ENV_RELEASE")         { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpRelease ((float) value); }
     else if (p == "AMP_VOLUME")          { if (b.groupIndex) eng.setGroupVolume (*b.groupIndex, (float) value); else eng.setMasterVolume ((float) value); }
     else if (p == "GROUP_TUNING")        eng.setGroupTuning (b.groupIndex.value_or (0), (float) value);
     else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
     else if (p == "MOD_AMOUNT")          eng.setLfoDepth ((float) value);
+    else if (p == "FREQUENCY")           eng.setLfoRate ((float) value);
     else if (p == "ENABLED")
     {
         const bool on = value > 0.5;
@@ -273,19 +269,26 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
                             NormalisableRange<float> (0.0f, 1.0f), (float) normOf (c)));
                 }
 
-    // Bool params: registry order; create only kinds present in the library.
-    constexpr int numBoolSpecs = (int) (sizeof (kBoolSpecs) / sizeof (kBoolSpecs[0]));
-    for (int k = 0; k < numBoolSpecs; ++k)
-    {
-        bool present = false;
-        for (const auto& m : lib.modes)
-            if (! m.ui.tabs.isEmpty())
-                for (const auto& b : m.ui.tabs.getReference (0).buttons)
-                    if (buttonKindIndex (b) == k) { present = true; break; }
-        if (present)
-            p.push_back (std::make_unique<AudioParameterBool> (
-                ParameterID { kBoolSpecs[k].id, 1 }, kBoolSpecs[k].name, false));
-    }
+    // Button params: one Int per button index (0..numStates-1), deduped across
+    // modes (max state count + the authored default). Lane order = button order.
+    std::map<int, int> btnStates, btnDefault;
+    for (const auto& m : lib.modes)
+        if (! m.ui.tabs.isEmpty())
+        {
+            const auto& btns = m.ui.tabs.getReference (0).buttons;
+            for (int i = 0; i < btns.size(); ++i)
+            {
+                const int n = btns.getReference (i).states.size();
+                btnStates[i]  = juce::jmax (btnStates.count (i) ? btnStates[i] : 0, n);
+                if (! btnDefault.count (i))
+                    btnDefault[i] = btns.getReference (i).value.value_or (0);
+            }
+        }
+    for (const auto& [idx, n] : btnStates)
+        if (n >= 2)
+            p.push_back (std::make_unique<AudioParameterInt> (
+                ParameterID { buttonId (idx), 1 }, "Button " + String (idx + 1),
+                0, n - 1, juce::jlimit (0, n - 1, btnDefault[idx])));
 
     // Chord-order menu (first dropdown found).
     auto chordOpts = firstMenuOptions (lib);
@@ -322,16 +325,21 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
 
         for (const auto& b : c.bindings)
         {
-            if (floatSpecFor (b.parameter) != nullptr)
-            {
-                applyBinding (engine, b, outputValue (b, norm, mn, mx));
-            }
-            else if (b.parameter == "TAG_VOLUME")
+            // Tag-addressed volume: TAG_VOLUME, or AMP_VOLUME at level="tag" (e.g. the
+            // Mechanical Noise knob targets the key-on/key-off tags). Resolve the tag
+            // to its groups — NOT master (which is AMP_VOLUME with no group/tag).
+            const bool tagVolume = b.parameter == "TAG_VOLUME"
+                                || (b.parameter == "AMP_VOLUME" && b.level == "tag" && b.identifier.isNotEmpty());
+            if (tagVolume)
             {
                 const float v = (float) outputValue (b, norm, mn, mx);
                 for (int gi = 0; gi < mode.groups.size(); ++gi)
                     if (mode.groups.getReference (gi).tags.contains (b.identifier))
                         engine.setGroupTagVolume (gi, v);
+            }
+            else if (floatSpecFor (b.parameter) != nullptr)
+            {
+                applyBinding (engine, b, outputValue (b, norm, mn, mx));
             }
             else if (b.parameter == "TAG_ENABLED")
             {
@@ -344,13 +352,12 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
         }
     }
 
-    for (const auto& btn : tab.buttons)
+    for (int i = 0; i < tab.buttons.size(); ++i)
     {
-        const int k = buttonKindIndex (btn);
-        if (k < 0) continue;
-        const int stateIndex = raw (kBoolSpecs[k].id) > 0.5f ? 1 : 0;
-        if (stateIndex >= 0 && stateIndex < btn.states.size())
-            applyButtonState (engine, btn.states.getReference (stateIndex));
+        const auto& btn = tab.buttons.getReference (i);
+        if (btn.states.isEmpty()) continue;
+        const int stateIndex = juce::jlimit (0, btn.states.size() - 1, (int) raw (buttonId (i)));
+        applyButtonState (engine, btn.states.getReference (stateIndex));
     }
 
     for (const auto& menu : tab.menus)
@@ -444,10 +451,9 @@ juce::StringArray controlParamIds (const Control& c)
     return ids;
 }
 
-juce::String buttonParamId (const Button& b)
+juce::String buttonParamId (int buttonIndex)
 {
-    const int k = buttonKindIndex (b);
-    return k >= 0 ? juce::String (kBoolSpecs[k].id) : juce::String();
+    return buttonId (buttonIndex);
 }
 
 } // namespace dm::params

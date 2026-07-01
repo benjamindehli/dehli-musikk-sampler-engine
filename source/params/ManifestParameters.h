@@ -49,7 +49,8 @@ void applyNoteSwitches (const juce::MidiBuffer& midi, const Mode& mode,
 /** The float param ids a control's bindings drive (for the editor to write/reflect). */
 juce::StringArray controlParamIds (const Control& c);
 
-/** The bool param id a button drives, or empty (for the editor). */
-juce::String buttonParamId (const Button& b);
+/** The param id a button drives — one per button index, an Int 0..numStates-1
+    (supports multi-state selectors, not just on/off). For the editor. */
+juce::String buttonParamId (int buttonIndex);
 
 } // namespace dm::params
