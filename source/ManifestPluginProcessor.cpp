@@ -14,6 +14,23 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
         *this, nullptr, "PARAMS", params::createLayout (library));
     apvts->addParameterListener (params::id::mode, this);
     apvts->addParameterListener (params::id::chordOrder, this);   // menu (e.g. amp/cabinet IR)
+
+    // Buttons whose states swap a convolution IR (e.g. Home/Church reverb) need the
+    // heavy IR reload on the message thread — listen so a click triggers the async update.
+    for (const auto& m : library.modes)
+        for (const auto& tab : m.ui.tabs)
+            for (int i = 0; i < tab.buttons.size(); ++i)
+                for (const auto& st : tab.buttons.getReference (i).states)
+                    for (const auto& b : st.bindings)
+                        if (b.parameter == "FX_IR_FILE")
+                        {
+                            const auto pid = params::buttonParamId (i);
+                            if (! irButtonParams.contains (pid))
+                            {
+                                irButtonParams.add (pid);
+                                apvts->addParameterListener (pid, this);
+                            }
+                        }
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor()
@@ -22,15 +39,57 @@ ManifestPluginProcessor::~ManifestPluginProcessor()
     {
         apvts->removeParameterListener (params::id::mode, this);
         apvts->removeParameterListener (params::id::chordOrder, this);
+        for (const auto& pid : irButtonParams)
+            apvts->removeParameterListener (pid, this);
     }
 }
 
 void ManifestPluginProcessor::loadEmbeddedLibrary()
 {
-    if (assets.manifestJson == nullptr || assets.manifestJsonSize <= 0 || ! assets.findResource)
+    if (! assets.findResource)
         return;
 
-    auto parsed = loadManifestFromJson (juce::String::fromUTF8 (assets.manifestJson, assets.manifestJsonSize));
+    auto loadJson = [this] (const juce::String& filename) -> juce::var
+    {
+        int size = 0;
+        if (const char* data = assets.findResource (filename, size))
+        {
+            juce::var v;
+            if (juce::JSON::parse (juce::String::fromUTF8 (data, size), v).wasOk())
+                return v;
+        }
+        return {};
+    };
+
+    // Prefer the SPLIT manifest (index.json + modes/<name>.json + optional
+    // partials/<name>.json), merged at load; fall back to a single embedded
+    // manifest.json if no index.json is present.
+    ManifestParseResult parsed;
+    if (auto index = loadJson ("index.json"); ! index.isVoid())
+    {
+        juce::StringArray resolveErrors;
+        auto merged = resolveSplitManifest (
+            index,
+            [&loadJson] (const juce::String& n) { return loadJson (n + ".json"); },   // modes/<n>.json
+            [&loadJson] (const juce::String& n) { return loadJson (n + ".json"); },   // partials/<n>.json
+            resolveErrors);
+        if (! resolveErrors.isEmpty())
+        {
+            DBG ("ManifestPluginProcessor: split manifest resolve failed: " << resolveErrors.joinIntoString ("; "));
+            return;
+        }
+        parsed = loadManifest (merged);
+    }
+    else if (assets.manifestJson != nullptr && assets.manifestJsonSize > 0)
+    {
+        parsed = loadManifestFromJson (juce::String::fromUTF8 (assets.manifestJson, assets.manifestJsonSize));
+    }
+    else
+    {
+        DBG ("ManifestPluginProcessor: no embedded manifest (index.json or manifest.json)");
+        return;
+    }
+
     if (! parsed.ok)
     {
         DBG ("ManifestPluginProcessor: manifest load failed: " << parsed.errors.joinIntoString ("; "));
@@ -49,13 +108,23 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
         for (const auto& e : m.effects)
             if (e.ir.isNotEmpty())
                 ids.addIfNotAlreadyThere (e.ir);
-        // IRs referenced only by a menu option's FX_IR_FILE binding (cabinet selector).
+        // IRs referenced only by a menu option or button state's FX_IR_FILE binding
+        // (cabinet/amp selector, Home/Church reverb switch).
+        auto collectIr = [&ids] (const juce::Array<Binding>& bindings)
+        {
+            for (const auto& b : bindings)
+                if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
+                    ids.addIfNotAlreadyThere (b.translationValue.toString());
+        };
         for (const auto& tab : m.ui.tabs)
+        {
             for (const auto& menu : tab.menus)
                 for (const auto& opt : menu.options)
-                    for (const auto& b : opt.bindings)
-                        if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
-                            ids.addIfNotAlreadyThere (b.translationValue.toString());
+                    collectIr (opt.bindings);
+            for (const auto& btn : tab.buttons)
+                for (const auto& st : btn.states)
+                    collectIr (st.bindings);
+        }
     }
 
     for (const auto& id : ids)
@@ -63,7 +132,7 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
         const auto filename = id.fromLastOccurrenceOf (":", false, false) + ".flac";
         int size = 0;
         if (const char* data = assets.findResource (filename, size))
-            sampleSource->addFlac (id, data, (size_t) size);
+            sampleSource->registerFlac (id, data, (size_t) size);   // decoded lazily per active mode
         else
             DBG ("ManifestPluginProcessor: no embedded asset for id " << id << " (" << filename << ")");
     }
@@ -106,9 +175,10 @@ bool ManifestPluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 
 void ManifestPluginProcessor::parameterChanged (const juce::String& paramID, float)
 {
-    // Mode switch (rebuild) and the cabinet menu (IR reload) are both heavy +
-    // message-thread work, coalesced onto the async update.
-    if (paramID == params::id::mode || paramID == params::id::chordOrder)
+    // Mode switch (rebuild), the cabinet menu, and IR-swap buttons (Home/Church) are
+    // all heavy + message-thread work, coalesced onto the async update.
+    if (paramID == params::id::mode || paramID == params::id::chordOrder
+        || irButtonParams.contains (paramID))
         triggerAsyncUpdate();
 }
 
@@ -140,19 +210,35 @@ void ManifestPluginProcessor::applyMenuIrFor (int modeIndex)
     const auto& m = library.modes.getReference (modeIndex);
     if (m.ui.tabs.isEmpty())
         return;
+    const auto& tab = m.ui.tabs.getReference (0);
 
+    auto applyIrBindings = [this] (const juce::Array<Binding>& bindings)
+    {
+        for (const auto& b : bindings)
+            if (b.parameter == "FX_IR_FILE" && b.effectIndex && b.translationValue.isString())
+                engine.setEffectIr (*b.effectIndex, b.translationValue.toString());
+    };
+
+    // Menu (cabinet/amp) FX_IR_FILE → selected option.
     const auto* sel = apvts->getRawParameterValue (params::id::chordOrder);
     const int selected = sel != nullptr ? (int) sel->load() : 0;
-
-    for (const auto& menu : m.ui.tabs.getReference (0).menus)
+    for (const auto& menu : tab.menus)
     {
         if (menu.options.isEmpty())
             continue;
-        const int s = juce::jlimit (0, menu.options.size() - 1, selected);
-        for (const auto& b : menu.options.getReference (s).bindings)
-            if (b.parameter == "FX_IR_FILE" && b.effectIndex && b.translationValue.isString())
-                engine.setEffectIr (*b.effectIndex, b.translationValue.toString());
+        applyIrBindings (menu.options.getReference (juce::jlimit (0, menu.options.size() - 1, selected)).bindings);
         break;
+    }
+
+    // Button (e.g. Home/Church reverb) FX_IR_FILE → selected state.
+    for (int i = 0; i < tab.buttons.size(); ++i)
+    {
+        const auto& btn = tab.buttons.getReference (i);
+        if (btn.states.isEmpty())
+            continue;
+        const auto* bs = apvts->getRawParameterValue (params::buttonParamId (i));
+        const int s = juce::jlimit (0, btn.states.size() - 1, bs != nullptr ? (int) bs->load() : 0);
+        applyIrBindings (btn.states.getReference (s).bindings);
     }
 }
 

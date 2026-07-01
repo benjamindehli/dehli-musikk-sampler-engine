@@ -106,6 +106,7 @@ private:
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };
     std::atomic<float> outputPeak { 0.0f };   // max |sample| since the editor last read it
+    juce::StringArray irButtonParams;         // button params that swap a convolution IR
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestPluginProcessor)
 };
