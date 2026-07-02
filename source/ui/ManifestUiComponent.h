@@ -14,6 +14,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <functional>
 #include <optional>
+#include <memory>
 
 namespace dm
 {
@@ -51,6 +52,10 @@ private:
 
     void handleButton (const Button& b, int index, int stateIndex);
     void applyLightBindings (const ButtonState& state);   // PATH swaps, addressed by controlIndex
+
+    // Floating value readout shown next to a knob while it is being turned.
+    void showValueBubble (juce::Component& knob, const juce::String& text);
+    std::unique_ptr<juce::Label> valueBubble;
 
     // VISIBLE/OPACITY: a control's value drives the visibility/alpha of images
     // addressed by controlIndex (e.g. the LED segment displays — pitch up/down

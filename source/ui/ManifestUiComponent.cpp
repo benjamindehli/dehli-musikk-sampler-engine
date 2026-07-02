@@ -46,12 +46,22 @@ public:
     FilmstripKnob (juce::Image strip, int numFrames, double minV, double maxV, double initial)
         : film (strip), frames (juce::jmax (1, numFrames)), minVal (minV), maxVal (maxV)
     {
-        value = juce::jlimit (minVal, maxVal, initial);
+        defaultVal = juce::jlimit (minVal, maxVal, initial);   // manifest value = reset target
+        value = defaultVal;
     }
 
     std::function<void (double)> onChange;
+    std::function<void (juce::Component&, const juce::String&)> onShowValue;   // live value readout
+    std::function<void()> onHideValue;
 
     double getValue() const noexcept { return value; }
+
+    // Value formatted for the readout bubble: a fixed 2 decimals so the label width
+    // stays constant while turning (no jitter from trimming trailing zeros).
+    juce::String valueText() const
+    {
+        return juce::String (value, 2);
+    }
 
     /** Set the displayed value WITHOUT firing onChange (used for external sync). */
     void setValue (double v)
@@ -76,8 +86,16 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
+        // Cmd (macOS) / Ctrl (Windows) + click resets to the manifest default value.
+        if (e.mods.isCommandDown() && value != defaultVal)
+        {
+            value = defaultVal;
+            repaint();
+            if (onChange) onChange (value);
+        }
         dragStartY = e.position.y;
         dragStartVal = value;
+        if (onShowValue) onShowValue (*this, valueText());
     }
 
     void mouseDrag (const juce::MouseEvent& e) override
@@ -92,12 +110,19 @@ public:
         repaint();
         if (onChange)
             onChange (value);
+        if (onShowValue) onShowValue (*this, valueText());
+    }
+
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (onHideValue) onHideValue();
     }
 
 private:
     juce::Image film;
     int frames;
     double minVal, maxVal, value { 0.0 };
+    double defaultVal { 0.0 };
     float dragStartY { 0.0f };
     double dragStartVal { 0.0 };
 };
@@ -211,6 +236,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
             if (onControlChanged) onControlChanged (*cp, v);
             applyVisibilityBindings (*cp, v);   // drive any LED segment images
         };
+        knob->onShowValue = [this] (juce::Component& k, const juce::String& t) { showValueBubble (k, t); };
+        knob->onHideValue = [this] { if (valueBubble) valueBubble->setVisible (false); };
         addAndMakeVisible (knob);
         knobs.add (knob);
         knobRects.add (c.rect);
@@ -278,6 +305,38 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
     // Set the initial visibility/opacity of any binding-driven images (so the LED
     // displays start matching their selector instead of all segments stacked on).
     applyAllVisibility();
+
+    // Floating value readout (hidden until a knob is turned). Added last so it sits
+    // above every widget; non-interactive so it never eats mouse events.
+    valueBubble = std::make_unique<juce::Label>();
+    valueBubble->setJustificationType (juce::Justification::centred);
+    valueBubble->setColour (juce::Label::backgroundColourId, juce::Colour (0xff202122));
+    valueBubble->setColour (juce::Label::textColourId,       juce::Colour (0xffffffff));
+    valueBubble->setColour (juce::Label::outlineColourId,    juce::Colour (0x40ffffff));
+    valueBubble->setInterceptsMouseClicks (false, false);
+    valueBubble->setVisible (false);
+    addChildComponent (valueBubble.get());
+}
+
+void ManifestUiComponent::showValueBubble (juce::Component& knob, const juce::String& text)
+{
+    if (valueBubble == nullptr)
+        return;
+
+    valueBubble->setText (text, juce::dontSendNotification);
+    valueBubble->setFont (juce::Font (juce::FontOptions().withHeight (13.0f)));
+
+    const int w = juce::jmax (34, text.length() * 9 + 12);   // rough width for a short number
+    const int h = 19;
+    const auto kb = knob.getBounds();
+    int x = kb.getCentreX() - w / 2;
+    int y = kb.getY() - h - 2;                 // just above the knob
+    if (y < 0) y = kb.getBottom() + 2;          // no room above → put it below
+    x = juce::jlimit (0, juce::jmax (0, getWidth() - w), x);
+
+    valueBubble->setBounds (x, y, w, h);
+    valueBubble->setVisible (true);
+    valueBubble->toFront (false);
 }
 
 void ManifestUiComponent::refresh (
