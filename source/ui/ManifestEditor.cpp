@@ -114,6 +114,33 @@ ManifestEditor::~ManifestEditor()
     host.onModeChanged = nullptr;
     pitchWheel.setLookAndFeel (nullptr);
     modWheel.setLookAndFeel (nullptr);
+    if (themedWindow != nullptr)   // detach before our LnF member dies (standalone only)
+        themedWindow->setLookAndFeel (nullptr);
+}
+
+void ManifestEditor::parentHierarchyChanged()
+{
+    // In the Standalone build the editor's top-level parent is a DocumentWindow;
+    // theme it flat monochrome. In a DAW there is no such parent → nothing to do.
+    if (auto* dw = findParentComponentOfClass<juce::DocumentWindow>())
+    {
+        if (themedWindow != dw)
+        {
+            themedWindow = dw;
+            dw->setLookAndFeel (&standaloneLnf);
+            dw->setBackgroundColour (juce::Colour (StandaloneWindowLookAndFeel::kBackground));
+
+            // Changing the window's look-and-feel disturbs the standalone's content
+            // fit; re-assert our size once the startup layout has settled.
+            juce::Component::SafePointer<ManifestEditor> self { this };
+            juce::MessageManager::callAsync ([self]
+            {
+                if (self != nullptr)
+                    if (auto* w = self->themedWindow.getComponent())
+                        w->setContentComponentSize (self->preferredWidth(), self->preferredHeight());
+            });
+        }
+    }
 }
 
 int ManifestEditor::preferredWidth() const

@@ -13,6 +13,7 @@
 #include "ManifestUiComponent.h"
 #include "ColouredKeyboard.h"
 #include "WheelLookAndFeel.h"
+#include "StandaloneWindowLookAndFeel.h"
 #include "LevelMeter.h"
 #include <functional>
 #include <memory>
@@ -59,6 +60,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void parentHierarchyChanged() override;   // theme the Standalone window when attached
     bool keyPressed (const juce::KeyPress& key) override { return handleKey (key); }
 
 private:
@@ -75,6 +77,8 @@ private:
     ColouredKeyboard keyboard;
     juce::Slider pitchWheel, modWheel;
     WheelLookAndFeel wheelLnf;
+    StandaloneWindowLookAndFeel standaloneLnf;
+    juce::Component::SafePointer<juce::DocumentWindow> themedWindow;   // standalone window we styled (if any)
     juce::Slider bendRangeSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bendRangeAttachment;
     LevelMeter outputMeter;
