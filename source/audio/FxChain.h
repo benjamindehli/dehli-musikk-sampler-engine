@@ -58,7 +58,7 @@ public:
     void setWaveShaperOutput (float level);  // wave_shaper output level (clamped 0..1)
 
 private:
-    enum class Kind { passthrough, lowpass, convolution, gain, waveShaper };
+    enum class Kind { passthrough, lowpass, highpass, convolution, gain, waveShaper };
 
     struct Slot
     {

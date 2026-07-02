@@ -175,6 +175,7 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
         if (ovEffectDrive[i].touched.load())   mr.fx.setEffectParam (i, "FX_DRIVE",        ovEffectDrive[i].value.load());
         if (ovEffectLevel[i].touched.load())   mr.fx.setEffectParam (i, "LEVEL",           ovEffectLevel[i].value.load());
         if (ovEffectOutput[i].touched.load())  mr.fx.setEffectParam (i, "FX_OUTPUT_LEVEL", ovEffectOutput[i].value.load());
+        if (ovEffectFreq[i].touched.load())    mr.fx.setEffectParam (i, "FX_FILTER_FREQUENCY", ovEffectFreq[i].value.load());
     }
     if (ovLowpassFreq.touched.load())    mr.fx.setLowpassFrequency (ovLowpassFreq.value.load());
     if (ovReverbMix.touched.load())      mr.fx.setReverbMix (ovReverbMix.value.load());
@@ -310,11 +311,12 @@ void SamplerEngine::setEffectParam (int effectIndex, const juce::String& paramet
 {
     if (effectIndex < 0 || effectIndex >= kMaxEffects)
         return;
-    FxOverride* o = parameter == "FX_MIX"          ? &ovEffectMix[effectIndex]
-                  : parameter == "FX_DRIVE"        ? &ovEffectDrive[effectIndex]
-                  : parameter == "LEVEL"           ? &ovEffectLevel[effectIndex]
-                  : parameter == "FX_OUTPUT_LEVEL" ? &ovEffectOutput[effectIndex]
-                                                   : nullptr;
+    FxOverride* o = parameter == "FX_MIX"              ? &ovEffectMix[effectIndex]
+                  : parameter == "FX_DRIVE"            ? &ovEffectDrive[effectIndex]
+                  : parameter == "LEVEL"               ? &ovEffectLevel[effectIndex]
+                  : parameter == "FX_OUTPUT_LEVEL"     ? &ovEffectOutput[effectIndex]
+                  : parameter == "FX_FILTER_FREQUENCY" ? &ovEffectFreq[effectIndex]
+                                                       : nullptr;
     if (o != nullptr) { o->value.store (value); o->touched.store (true); }
 }
 

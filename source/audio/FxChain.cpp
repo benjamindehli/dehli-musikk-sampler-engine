@@ -56,6 +56,19 @@ void FxChain::setEffects (const juce::Array<Effect>& effects, const SampleSource
                 slot->filter.setResonance (slot->resonance.load());
             }
         }
+        else if (e.type == "highpass")
+        {
+            slot->kind = Kind::highpass;
+            slot->frequency.store ((float) (e.frequency ? *e.frequency : 20.0));
+            slot->resonance.store ((float) (e.resonance ? *e.resonance : 0.707));
+            slot->filter.setType (juce::dsp::StateVariableTPTFilterType::highpass);
+            if (prepared)
+            {
+                slot->filter.prepare (spec);
+                slot->filter.setCutoffFrequency (slot->frequency.load());
+                slot->filter.setResonance (slot->resonance.load());
+            }
+        }
         else if (e.type == "convolution")
         {
             slot->kind = Kind::convolution;
@@ -112,7 +125,7 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
         if (! s.enabled.load())
             continue;
 
-        if (s.kind == Kind::lowpass)
+        if (s.kind == Kind::lowpass || s.kind == Kind::highpass)
         {
             const auto nyquist = (float) (spec.sampleRate * 0.49);
             s.filter.setCutoffFrequency (juce::jlimit (20.0f, nyquist, s.frequency.load()));
