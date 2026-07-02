@@ -168,8 +168,13 @@ static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
 
     if (p == "FX_FILTER_FREQUENCY")
     {
-        if (groupEffect) eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value);
-        else             eng.setLowpassFrequency ((float) value);   // instrument lowpass
+        // Address the specific effect when its index is known — a mode can have several
+        // filters (e.g. a lowpass AND a highpass); routing all of them to "the lowpass"
+        // would let one clobber the other. Fall back to the first lowpass only when no
+        // index is given.
+        if      (groupEffect)   eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value);
+        else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value);
+        else                    eng.setLowpassFrequency ((float) value);
     }
     // Effect params: address a specific instrument effect by index when known;
     // FxChain routes FX_OUTPUT_LEVEL by the slot's kind (wave_shaper vs convolution).
@@ -194,8 +199,8 @@ static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
     else if (p == "AMP_VOLUME")          { if (b.groupIndex) eng.setGroupVolume (*b.groupIndex, (float) value); else eng.setMasterVolume ((float) value); }
     else if (p == "GROUP_TUNING")        eng.setGroupTuning (b.groupIndex.value_or (0), (float) value);
     else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
-    else if (p == "MOD_AMOUNT")          eng.setLfoDepth ((float) value);
-    else if (p == "FREQUENCY")           eng.setLfoRate ((float) value);
+    else if (p == "MOD_AMOUNT")          eng.setLfoDepth (b.position.value_or (0), (float) value);
+    else if (p == "FREQUENCY")           eng.setLfoRate  (b.position.value_or (0), (float) value);
     else if (p == "ENABLED")
     {
         const bool on = value > 0.5;
@@ -207,21 +212,50 @@ static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
 
 static bool bindingIsTrue (const Binding& b)
 {
-    return b.translationValue.isBool() ? (bool) b.translationValue
-                                       : b.translationValue.toString().equalsIgnoreCase ("true");
+    if (b.translationValue.isBool()) return (bool) b.translationValue;
+    const auto s = b.translationValue.toString();
+    if (s.equalsIgnoreCase ("true"))  return true;
+    if (s.equalsIgnoreCase ("false")) return false;
+    return s.getFloatValue() > 0.5f;   // numeric "1"/"0"
 }
 
-static void applyButtonState (SamplerEngine& eng, const ButtonState& st)
+// A button-state binding carries a fixed value in translationValue → resolve to a number.
+static double buttonBindingValue (const Binding& b)
+{
+    if (b.translationValue.isBool()) return (bool) b.translationValue ? 1.0 : 0.0;
+    const auto s = b.translationValue.toString();
+    if (s.equalsIgnoreCase ("true"))  return 1.0;
+    if (s.equalsIgnoreCase ("false")) return 0.0;
+    return s.getDoubleValue();   // "4.11", "0.2", "4277", "1"/"0", …
+}
+
+static void applyButtonState (SamplerEngine& eng, const Mode& mode, const ButtonState& st)
 {
     for (const auto& b : st.bindings)
     {
-        if (b.parameter == "PATH") continue;
-        if (b.parameter == "ENABLED")
+        // PATH (sample swap) and FX_IR_FILE (convolution IR) are applied on the message
+        // thread by the processor (async IR reload), not from here. Everything else —
+        // including MOD_AMOUNT/FREQUENCY, which now carry the modulator index via
+        // `position` (from DecentSampler's modulatorIndex) — routes through applyBinding,
+        // so e.g. a hi-fi/lo-fi switch can zero the lo-fi modulators in hi-fi.
+        if (b.parameter == "PATH" || b.parameter == "FX_IR_FILE") continue;
+
+        if (b.parameter == "TAG_ENABLED")
         {
+            // Enable/disable every group carrying the named tag (e.g. a damping switch
+            // swapping between "damped" and "sustained" groups). Not handled by applyBinding.
             const bool on = bindingIsTrue (b);
-            if (b.level == "group" && b.groupIndex) eng.setGroupEnabled (*b.groupIndex, on);
-            else if (b.effectIndex)                 eng.setEffectEnabled (*b.effectIndex, on);
+            for (int gi = 0; gi < mode.groups.size(); ++gi)
+                if (mode.groups.getReference (gi).tags.contains (b.identifier))
+                    eng.setGroupEnabled (gi, on);
+            continue;
         }
+
+        // Everything else (ENABLED, FX_DRIVE, FX_OUTPUT_LEVEL, FX_FILTER_FREQUENCY,
+        // AMP_VEL_TRACK, MOD_AMOUNT, …) carries a fixed value → route through the same
+        // type-aware path the UI controls use, so a hi-fi/lo-fi switch actually applies
+        // the wave_shaper's drive + output level (and any filter settings).
+        applyBinding (eng, b, buttonBindingValue (b));
     }
 }
 
@@ -357,7 +391,7 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
         const auto& btn = tab.buttons.getReference (i);
         if (btn.states.isEmpty()) continue;
         const int stateIndex = juce::jlimit (0, btn.states.size() - 1, (int) raw (buttonId (i)));
-        applyButtonState (engine, btn.states.getReference (stateIndex));
+        applyButtonState (engine, mode, btn.states.getReference (stateIndex));
     }
 
     for (const auto& menu : tab.menus)
@@ -402,24 +436,25 @@ void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
         {
             if (cb.cc != cc)
                 continue;
-            // Find the control this CC targets (by its engine parameter + group) and
-            // drive that control's param. The converter precomputed normMin/normMax.
             if (mode.ui.tabs.isEmpty())
                 continue;
-            juce::String pid;
+            const float norm = juce::jlimit (0.0f, 1.0f,
+                                             (float) (cb.normMin + v * (cb.normMax - cb.normMin)));
+            // Drive EVERY control this CC targets (by engine parameter + group), not just
+            // the first — e.g. a mod wheel bound to MOD_AMOUNT moves ALL tremolo-depth
+            // knobs (one per modulator), not only modulator 0's.
             for (const auto& c : mode.ui.tabs.getReference (0).controls)
             {
                 if (! controlDrivesEngine (c)) continue;
+                bool matches = false;
                 for (const auto& b : c.bindings)
                     if (b.parameter == cb.parameter
                         && (! cb.groupIndex || b.groupIndex.value_or (0) == *cb.groupIndex))
-                    { pid = controlKey (c.label); break; }
-                if (pid.isNotEmpty()) break;
+                    { matches = true; break; }
+                if (matches)
+                    if (auto* prm = apvts.getParameter (controlKey (c.label)))
+                        prm->setValueNotifyingHost (norm);
             }
-            const float norm = juce::jlimit (0.0f, 1.0f,
-                                             (float) (cb.normMin + v * (cb.normMax - cb.normMin)));
-            if (auto* prm = apvts.getParameter (pid))
-                prm->setValueNotifyingHost (norm);
         }
     }
 }

@@ -62,12 +62,12 @@ public:
         AMP_VOLUME master can affect the same group without fighting. */
     void setGroupTagVolume (int groupIndex, float volume);
 
-    /** LFO depth 0..1 (MOD_AMOUNT). 0 = no modulation. The LFO shape/targets come
-        from the mode's modulator (setMode). */
-    void setLfoDepth (float depth) { lfoDepth = depth; }
+    /** Set modulator `position`'s depth 0..1 (MOD_AMOUNT). 0 = no modulation. The
+        modulator's shape/rate/targets come from the mode (setMode). */
+    void setLfoDepth (int position, float depth);
 
-    /** LFO rate in Hz (FREQUENCY / Tremulant Rate). Overrides the modulator's default. */
-    void setLfoRate (float hz) { if (hz > 0.0f) lfoFreqHz = hz; }
+    /** Set modulator `position`'s rate in Hz (FREQUENCY / Tremulant Rate). */
+    void setLfoRate (int position, float hz);
 
     /** Enable/disable a group at runtime (group-level ENABLED, e.g. the Keyboard
         mode's Mono/Poly button switching between a mono and a poly group). */
@@ -101,6 +101,7 @@ private:
         bool pitchKeyTrack = false;
         bool releaseTrigger = false;   // group trigger="release": fires on note-off
         CurvedAdsr::Parameters adsr;
+        bool ampEnv = true;            // false (ampEnvEnabled=false) → one-shot: full gain, ignores note-off
         float gain = 1.0f;
         float velTrack = 0.0f;
         int groupIndex = -1;
@@ -127,6 +128,7 @@ private:
         int note = -1;
         int groupIndex = -1;
         float gain = 1.0f;
+        bool ampEnv = true;                // false → one-shot (no amp envelope, ignores note-off)
         CurvedAdsr::Parameters baseAdsr;   // the zone's ADSR, before runtime overrides
 
         bool loopEnabled = false;
@@ -181,15 +183,31 @@ private:
     juce::Array<float> groupAttack, groupDecay, groupSustain, groupRelease;   // per-group (-1 = none)
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
 
-    // LFO tremolo (sine amp modulation on the modulator's target groups).
-    double lfoPhase { 0.0 };          // cycles, free-running
-    double lfoFreqHz { 0.0 };         // 0 = no LFO configured
-    float  lfoDepth { 0.0f };         // 0..1 (MOD_AMOUNT)
-    double lfoTuningMul { 1.0 };      // GLOBAL_TUNING vibrato → playback-rate multiplier
-    juce::Array<bool> lfoTargetGroup; // groups the LFO amplitude-modulates (AMP_VOLUME bindings)
-    juce::Array<Binding> lfoBindings; // the modulator's bindings (effect params / GLOBAL_TUNING)
-    std::vector<float> tremBuf;       // per-sample amplitude-tremolo factor (block-indexed)
-    void applyLfoBlock (int numSamples);   // advance LFO + apply its modulations (per block)
+    // ── Modulators (LFOs) ──────────────────────────────────────────────────
+    // A mode can define several: tremolo on different group sets at different rates,
+    // pitch vibrato, per-group FX sweeps. Each amplitude-modulates its AMP_VOLUME
+    // targets (per-sample tremolo) and control-rate-modulates GROUP_TUNING /
+    // GLOBAL_TUNING / per-group FX params.
+    struct Modulator
+    {
+        double phase { 0.0 };            // cycles, free-running
+        double freqHz { 0.0 };
+        float  depth { 0.0f };           // 0..1 (MOD_AMOUNT; starts at the manifest modAmount)
+        int    shape { 0 };              // 0 sine · 1 triangle · 2 saw · 3 square
+        juce::Array<Binding> bindings;
+        juce::Array<int> ampGroups;      // groups amplitude-modulated (AMP_VOLUME + groupIndex)
+        bool   ampInstrument { false };  // AMP_VOLUME with no group → modulates every voice
+    };
+    std::vector<Modulator> mods;
+    bool hasInstMod { false };           // any modulator amplitude-modulates the whole instrument
+    void applyLfoBlock (int numSamples); // advance + apply all modulators (per block)
+
+    // Per-block modulation outputs, read in renderChunk (indexed by block position):
+    std::vector<float> instTrem;                 // instrument-level amp tremolo (maxBlock)
+    std::vector<std::vector<float>> groupTrem;   // per-group amp tremolo [group][maxBlock]
+    juce::Array<bool>  groupHasTrem;             // groups with a group-level tremolo modulator
+    double globalTuningMul { 1.0 };              // GLOBAL_TUNING vibrato (all voices)
+    juce::Array<double> groupTuningModMul;       // GROUP_TUNING modulation per group (1.0 = none)
     juce::Array<float> groupVolume;       // AMP_VOLUME
     juce::Array<float> groupTagVolume;    // TAG_VOLUME (mixer knobs)
     juce::Array<float> groupGain;         // per-group output gain (linear; group-level gain effect)

@@ -8,6 +8,27 @@ namespace
 {
 constexpr int kMaxVoices = 64;   // headroom for multi-group layering (drums stack several layers per hit)
 
+// Modulator waveform shape name → index, and the shape's value at a phase (cycles) → -1..1.
+int lfoShapeFromString (const juce::String& s)
+{
+    if (s == "square")                 return 3;
+    if (s == "saw" || s == "sawtooth") return 2;
+    if (s == "triangle")               return 1;
+    return 0;   // sine (default)
+}
+
+float lfoWave (int shape, double phaseCycles)
+{
+    const double ph = phaseCycles - std::floor (phaseCycles);   // 0..1
+    switch (shape)
+    {
+        case 1: return (float) (1.0 - 4.0 * std::abs (ph - 0.5));   // triangle
+        case 2: return (float) (2.0 * ph - 1.0);                    // saw (ramp up)
+        case 3: return ph < 0.5 ? 1.0f : -1.0f;                     // square
+        default: return (float) std::sin (juce::MathConstants<double>::twoPi * ph);
+    }
+}
+
 // Resolve the effective amp envelope for a group: mode defaults, with the group's
 // own overrides applied where present.
 CurvedAdsr::Parameters resolveAdsr (const AmpEnvelope& amp, const Group& g)
@@ -118,7 +139,7 @@ void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int numChanne
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
     maxBlock   = juce::jmax (1, maxBlockSize);
     numChans   = juce::jmax (1, numChannels);
-    tremBuf.assign ((size_t) maxBlock, 1.0f);
+    instTrem.assign ((size_t) maxBlock, 1.0f);
     for (auto& v : voices)
     {
         v.active = false;
@@ -172,6 +193,9 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
 
         Zone proto;
         proto.adsr     = resolveAdsr (mode.amp, g);
+        // ampEnvEnabled=false → the amp envelope is bypassed and the sample rings to
+        // its natural end ignoring note-off (a one-shot, e.g. an un-damped/sustained group).
+        proto.ampEnv   = g.ampEnvEnabled.value_or (mode.amp.enabled);
         proto.releaseTrigger = (g.trigger == "release");
         groupReleaseTrigger.set (gi, proto.releaseTrigger);
         proto.gain     = (float) (g.volume   ? *g.volume   : mode.amp.volume);
@@ -262,27 +286,45 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     //  - effect params / GLOBAL_TUNING → applied per block in applyLfoBlock (elektrisk
     //    tremulant: gain + filter sweep + slight pitch vibrato).
     // Depth = MOD_AMOUNT control, rate = FREQUENCY control (both override the defaults).
-    lfoFreqHz = 0.0;
-    lfoPhase  = 0.0;
-    lfoDepth  = 0.0f;
-    lfoTuningMul = 1.0;
-    lfoTargetGroup.clearQuick();
-    lfoTargetGroup.insertMultiple (0, false, numGroups);
-    lfoBindings.clearQuick();
-    if (! mode.modulators.isEmpty())
+    // Build every modulator (not just the first). Each one's depth starts at its
+    // manifest modAmount and can be overridden per-position by a MOD_AMOUNT control.
+    mods.clear();
+    hasInstMod = false;
+    globalTuningMul = 1.0;
+    groupHasTrem.clearQuick();
+    groupHasTrem.insertMultiple (0, false, numGroups);
+    groupTuningModMul.clearQuick();
+    groupTuningModMul.insertMultiple (0, 1.0, numGroups);
+
+    for (const auto& lfo : mode.modulators)
     {
-        const auto& lfo = mode.modulators.getReference (0);
-        lfoFreqHz   = lfo.frequency;
-        lfoDepth    = (float) lfo.modAmount;   // overridden by the MOD_AMOUNT control
-        lfoBindings = lfo.bindings;
+        Modulator m;
+        m.freqHz   = lfo.frequency;
+        m.depth    = (float) lfo.modAmount;
+        m.shape    = lfoShapeFromString (lfo.shape);
+        m.bindings = lfo.bindings;
         for (const auto& b : lfo.bindings)
-            if (b.parameter == "AMP_VOLUME" && b.groupIndex)
+            if (b.parameter == "AMP_VOLUME")
             {
-                const int gi = *b.groupIndex;
-                if (gi >= 0 && gi < lfoTargetGroup.size())
-                    lfoTargetGroup.set (gi, true);
+                if (b.groupIndex)
+                {
+                    const int gi = *b.groupIndex;
+                    if (gi >= 0 && gi < numGroups)
+                    {
+                        m.ampGroups.addIfNotAlreadyThere (gi);
+                        groupHasTrem.set (gi, true);
+                    }
+                }
+                else
+                {
+                    m.ampInstrument = true;
+                    hasInstMod = true;
+                }
             }
+        mods.push_back (std::move (m));
     }
+    // Per-group tremolo scratch (each sized to a block; only trem groups are filled/read).
+    groupTrem.assign ((size_t) numGroups, std::vector<float> ((size_t) maxBlock, 1.0f));
 }
 
 const VoiceEngine::Zone* VoiceEngine::pickZoneInGroup (int group, int note, int velocity)
@@ -415,6 +457,7 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     const float velGain = 1.0f - vt + vt * velocity;
     v->gain = zone.gain * velGain;
 
+    v->ampEnv = zone.ampEnv;
     v->baseAdsr = zone.adsr;
     v->adsr.setSampleRate (sampleRate);
     v->adsr.setParameters (effectiveAdsr (v->baseAdsr, zone.groupIndex));
@@ -434,7 +477,7 @@ void VoiceEngine::handleNoteOff (int note)
     // mark them held so they keep ringing until the pedal lifts. Release-trigger
     // (key-off) voices are one-shots that ignore note-off and play out.
     for (auto& v : voices)
-        if (v.active && v.note == note && ! v.isRelease)
+        if (v.active && v.note == note && ! v.isRelease && v.ampEnv)   // one-shots (ampEnv=false) ignore note-off
         {
             if (sustainActive) v.pedalHeld = true;
             else               v.adsr.noteOff();
@@ -499,13 +542,10 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
     const int outChannels = buffer.getNumChannels();
 
-    // LFO tremolo for this chunk: a free-running sine factor that dips the volume
-    // to (1 - depth) at its trough and peaks at 1 (depth 0 → factor 1 = no effect).
-    // Computed per sample so it stays smooth across the whole block.
-    // Amplitude tremolo (tremBuf) is computed once per block in applyLfoBlock and
-    // indexed by absolute block position (startSample + i).
-    const bool tremActive = lfoFreqHz > 0.0 && ! lfoTargetGroup.isEmpty()
-                         && (int) tremBuf.size() >= startSample + numSamples;
+    // Amplitude tremolo + pitch modulation are computed once per block in
+    // applyLfoBlock and indexed here by absolute block position (startSample + i):
+    // instTrem = instrument-level tremolo (all voices), groupTrem[g] = per-group.
+    const bool instTremActive = hasInstMod && (int) instTrem.size() >= startSample + numSamples;
 
     for (auto& v : voices)
     {
@@ -514,8 +554,13 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
         const int srcChannels = v.buffer->getNumChannels();
         const int frames = v.buffer->getNumFrames();
-        const bool applyTrem = tremActive && v.groupIndex >= 0
-                            && v.groupIndex < lfoTargetGroup.size() && lfoTargetGroup[v.groupIndex];
+        const bool groupTremActive = v.groupIndex >= 0 && v.groupIndex < groupHasTrem.size()
+                                  && groupHasTrem[v.groupIndex]
+                                  && (int) groupTrem[(size_t) v.groupIndex].size() >= startSample + numSamples;
+        // Combined pitch multiplier for this voice: global vibrato × its group's vibrato.
+        double tuneMul = globalTuningMul;
+        if (v.groupIndex >= 0 && v.groupIndex < groupTuningModMul.size())
+            tuneMul *= groupTuningModMul[v.groupIndex];
 
         // Voices in a group with its own FX chain render into that group's scratch
         // buffer (filtered + gained as a group post-loop); others go straight out.
@@ -532,12 +577,15 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                 break;
             }
 
-            const float env = v.adsr.getNextSample();
+            // One-shot voices (ampEnv=false) play at full gain — the envelope is bypassed.
+            const float env = v.ampEnv ? v.adsr.getNextSample() : 1.0f;
             const bool hasGroup = v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
             const float gv  = hasGroup ? groupVolume[v.groupIndex]    : 1.0f;
             const float gtv = hasGroup ? groupTagVolume[v.groupIndex] : 1.0f;
             const float gg  = hasGroup ? groupGain[v.groupIndex]      : 1.0f;
-            const float trem = applyTrem ? tremBuf[(size_t) (startSample + i)] : 1.0f;
+            float trem = 1.0f;
+            if (instTremActive)    trem *= instTrem[(size_t) (startSample + i)];
+            if (groupTremActive)   trem *= groupTrem[(size_t) v.groupIndex][(size_t) (startSample + i)];
             const float g = env * v.gain * v.declickGain * gv * gtv * gg * trem;
 
             for (int ch = 0; ch < outChannels; ++ch)
@@ -550,7 +598,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                 target->addSample (ch, startSample + i, s * g);
             }
 
-            v.position += v.rate * pitchBendMul * lfoTuningMul;
+            v.position += v.rate * pitchBendMul * tuneMul;
             if (v.loopEnabled && v.position >= v.loopEnd)
                 v.position -= v.loopLen;
 
@@ -568,7 +616,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                 break;
             }
 
-            if (! v.adsr.isActive())             // release finished
+            if (v.ampEnv && ! v.adsr.isActive())  // release finished (one-shots end at sample end instead)
             {
                 v.active = false;
                 break;
@@ -577,53 +625,99 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
     }
 }
 
+void VoiceEngine::setLfoDepth (int position, float depth)
+{
+    if (position >= 0 && position < (int) mods.size())
+        mods[(size_t) position].depth = depth;
+}
+
+void VoiceEngine::setLfoRate (int position, float hz)
+{
+    if (hz > 0.0f && position >= 0 && position < (int) mods.size())
+        mods[(size_t) position].freqHz = hz;
+}
+
 void VoiceEngine::applyLfoBlock (int numSamples)
 {
-    if (lfoFreqHz <= 0.0 || numSamples <= 0)
+    if (numSamples <= 0 || mods.empty())
         return;
 
-    const double inc = lfoFreqHz / sampleRate;
-
-    // Per-sample amplitude tremolo for AMP_VOLUME-target groups (read in renderChunk).
-    if (! lfoTargetGroup.isEmpty() && (int) tremBuf.size() >= numSamples)
-        for (int i = 0; i < numSamples; ++i)
+    // Reset this block's outputs. Only groups that actually have a tremolo modulator
+    // (and the instrument buffer, if any) are cleared+read; the rest stay at unity.
+    if (hasInstMod)
+        for (int i = 0; i < numSamples; ++i) instTrem[(size_t) i] = 1.0f;
+    for (int gi = 0; gi < groupHasTrem.size(); ++gi)
+        if (groupHasTrem[gi])
         {
-            const float s = (float) std::sin (juce::MathConstants<double>::twoPi * (lfoPhase + inc * i));
-            tremBuf[(size_t) i] = 1.0f - lfoDepth * (0.5f - 0.5f * s);
+            auto& gt = groupTrem[(size_t) gi];
+            for (int i = 0; i < numSamples; ++i) gt[(size_t) i] = 1.0f;
         }
-
-    // Control-rate modulations (mid-block value): a unipolar sine 0..1 scaled by the
-    // depth, mapped through each binding's output range, then SET on its target.
-    const double mid = lfoPhase + inc * (numSamples * 0.5);
-    const double u = (std::sin (juce::MathConstants<double>::twoPi * mid) + 1.0) * 0.5 * (double) lfoDepth;
+    globalTuningMul = 1.0;
+    for (auto& g : groupTuningModMul) g = 1.0;
 
     // Tuning of the tremulant relative to the preset's binding ranges: the amplitude
-    // (gain) swing is deepened a little (the preset's ~1.25 dB reads as too subtle),
-    // and the pitch vibrato is eased back a touch.
-    constexpr double kGainSwing  = 6.0;   // > 1 = more amplitude tremolo
-    constexpr double kTuneScale  = 0.7;   // < 1 = less pitch vibrato
+    // (gain) swing on a per-group LEVEL effect is deepened a little, and pitch vibrato
+    // is eased back a touch. (Matches the previous single-LFO behaviour.)
+    constexpr double kGainSwing = 6.0;   // > 1 = more amplitude tremolo (LEVEL-target)
+    constexpr double kTuneScale = 0.7;   // < 1 = less pitch vibrato (ranged tuning, e.g. tremulant)
+    constexpr double kWowSemis  = 1.0;   // semitone span for a rangeless tuning wow (± modAmount*this)
 
-    lfoTuningMul = 1.0;
-    for (const auto& b : lfoBindings)
+    for (auto& m : mods)
     {
-        const double outMin = b.translationOutputMin.value_or (0.0);
-        const double outMax = b.translationOutputMax.value_or (1.0);
-        const double val = outMin + u * (outMax - outMin);
+        if (m.freqHz <= 0.0)
+            continue;
+        const double inc = m.freqHz / sampleRate;
 
-        if (b.parameter == "GLOBAL_TUNING")
-            lfoTuningMul = std::pow (2.0, (val * kTuneScale) / 12.0);   // val in semitones
-        else if (b.groupIndex && b.effectIndex
-                 && (b.parameter == "FX_FILTER_FREQUENCY" || b.parameter == "LEVEL" || b.parameter == "FX_MIX"))
+        // Per-sample amplitude tremolo (unipolar, downward: peak at unity, trough at
+        // 1-depth). Multiple modulators on the same group multiply.
+        if (m.depth > 0.0f && (m.ampInstrument || ! m.ampGroups.isEmpty()))
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float w = lfoWave (m.shape, m.phase + inc * i);
+                const float trem = 1.0f - m.depth * (0.5f - 0.5f * w);
+                if (m.ampInstrument) instTrem[(size_t) i] *= trem;
+                for (int gi : m.ampGroups) groupTrem[(size_t) gi][(size_t) i] *= trem;
+            }
+
+        // Control-rate targets (mid-block value). `waveMid` is the raw wave (-1..1);
+        // `u` is its unipolar 0..depth form mapped through each binding's output range.
+        const double waveMid = (double) lfoWave (m.shape, m.phase + inc * (numSamples * 0.5));
+        const double u = (waveMid + 1.0) * 0.5 * (double) m.depth;
+        for (const auto& b : m.bindings)
         {
-            const double v = (b.parameter == "LEVEL")
-                               ? outMin + u * (outMax - outMin) * kGainSwing   // deeper amplitude swing
-                               : val;
-            setGroupEffectParam (*b.groupIndex, *b.effectIndex, b.parameter, (float) v);
-        }
-    }
+            const double outMin = b.translationOutputMin.value_or (0.0);
+            const double outMax = b.translationOutputMax.value_or (1.0);
+            const double val = outMin + u * (outMax - outMin);
 
-    lfoPhase += inc * numSamples;
-    lfoPhase -= std::floor (lfoPhase);
+            if (b.parameter == "GLOBAL_TUNING" || (b.parameter == "GROUP_TUNING" && b.groupIndex))
+            {
+                // Pitch modulation (vibrato / wow). A binding with an explicit output
+                // range uses it as-is — a small unipolar vibrato, e.g. the tremulant.
+                // Without a range, `modAmount` alone is near-zero, so treat it as a
+                // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible gentle
+                // wander that centres on the true pitch.
+                const bool hasRange = b.translationOutputMin.has_value() || b.translationOutputMax.has_value();
+                const double semis = hasRange ? val * kTuneScale
+                                              : waveMid * (double) m.depth * kWowSemis;
+                const double mul = std::pow (2.0, semis / 12.0);
+                if (b.parameter == "GLOBAL_TUNING")
+                    globalTuningMul *= mul;
+                else if (const int gi = *b.groupIndex; gi >= 0 && gi < groupTuningModMul.size())
+                    groupTuningModMul.set (gi, groupTuningModMul[gi] * mul);
+            }
+            else if (b.groupIndex && b.effectIndex
+                     && (b.parameter == "FX_FILTER_FREQUENCY" || b.parameter == "LEVEL" || b.parameter == "FX_MIX"))
+            {
+                const double v = (b.parameter == "LEVEL")
+                                   ? outMin + u * (outMax - outMin) * kGainSwing   // deeper amplitude swing
+                                   : val;
+                setGroupEffectParam (*b.groupIndex, *b.effectIndex, b.parameter, (float) v);
+            }
+        }
+
+        m.phase += inc * numSamples;
+        m.phase -= std::floor (m.phase);
+    }
 }
 
 void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)

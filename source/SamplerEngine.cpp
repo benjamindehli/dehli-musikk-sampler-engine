@@ -92,7 +92,7 @@ void SamplerEngine::setLibrary (const PresetLibrary& lib, SampleSource& src)
 {
     library = &lib;
     source  = &src;
-    libraryPreGain = juce::Decibels::decibelsToGain ((float) lib.gainDb);   // pre-FX level trim
+    libraryGain = juce::Decibels::decibelsToGain ((float) lib.gainDb);   // pre-FX level trim (--gain)
     activeModeIndex = juce::jlimit (0, juce::jmax (0, lib.modes.size() - 1), activeModeIndex);
 
     if (sampleRate > 0.0)
@@ -116,9 +116,14 @@ juce::StringArray SamplerEngine::getModeNames() const
 void SamplerEngine::resetOverrides()
 {
     for (auto* o : { &ovLowpassEnabled, &ovLowpassFreq, &ovReverbMix, &ovReverbGain,
-                     &ovGain, &ovWaveDrive, &ovWaveOutput, &ovMasterVol, &ovLfoDepth, &ovLfoRate,
+                     &ovGain, &ovWaveDrive, &ovWaveOutput, &ovMasterVol,
                      &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease, &ovAmpVelTrack })
         o->touched.store (false);
+    for (int i = 0; i < kMaxMods; ++i)
+    {
+        ovLfoDepth[i].touched.store (false);
+        ovLfoRate[i].touched.store (false);
+    }
     for (auto& g : ovGroupVol)
         g.touched.store (false);
     for (auto& g : ovGroupTagVol)
@@ -136,6 +141,7 @@ void SamplerEngine::resetOverrides()
         ovEffectDrive[i].touched.store (false);
         ovEffectLevel[i].touched.store (false);
         ovEffectOutput[i].touched.store (false);
+        ovEffectFreq[i].touched.store (false);
     }
     ovSequencerRateTouched.store (false);
     ovSequencerIndexTouched.store (false);
@@ -190,8 +196,11 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
     if (ovAmpRelease.touched.load()) mr.voices.setAmpRelease (ovAmpRelease.value.load());
     if (ovAmpVelTrack.touched.load()) mr.voices.setAmpVelTrack (ovAmpVelTrack.value.load());
     if (ovMasterVol.touched.load())   masterGain = ovMasterVol.value.load();   // applied post-FX in processBlock
-    if (ovLfoDepth.touched.load())    mr.voices.setLfoDepth (ovLfoDepth.value.load());
-    if (ovLfoRate.touched.load())     mr.voices.setLfoRate (ovLfoRate.value.load());
+    for (int i = 0; i < kMaxMods; ++i)
+    {
+        if (ovLfoDepth[i].touched.load()) mr.voices.setLfoDepth (i, ovLfoDepth[i].value.load());
+        if (ovLfoRate[i].touched.load())  mr.voices.setLfoRate  (i, ovLfoRate[i].value.load());
+    }
 
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupVol[i].touched.load())
@@ -248,11 +257,14 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     current->sequencer.process (midi, sequencedMidi, buffer.getNumSamples());
     current->voices.processBlock (buffer, sequencedMidi);
 
-    // Per-library trim into the FX (matches DecentSampler's signal level feeding the
-    // drive/amp), then master volume AFTER the FX (DecentSampler topology: the master
-    // is an output control, so it sets level without changing the drive's distortion).
-    if (libraryPreGain != 1.0f)
-        buffer.applyGain (libraryPreGain);
+    // Per-library trim (--gain) applied BEFORE the FX: DecentSampler reduces level
+    // ahead of its effects, so the (input-level-dependent) wave_shaper sees the same
+    // moderate signal DS feeds it — gentle saturation that grows as the mixer knobs
+    // push harder, rather than a fully-clipped/collapsed signal. The master AMP_VOLUME
+    // is an output control, applied AFTER the FX. (For a library with no active
+    // wave_shaper the chain is linear, so pre- vs post-FX placement is equivalent.)
+    if (libraryGain != 1.0f)
+        buffer.applyGain (libraryGain);
     current->fx.process (buffer);
     if (masterGain != 1.0f)
         buffer.applyGain (masterGain);
@@ -326,16 +338,18 @@ void SamplerEngine::setMasterVolume (float volume)
     ovMasterVol.touched.store (true);
 }
 
-void SamplerEngine::setLfoDepth (float depth)
+void SamplerEngine::setLfoDepth (int position, float depth)
 {
-    ovLfoDepth.value.store (depth);
-    ovLfoDepth.touched.store (true);
+    if (position < 0 || position >= kMaxMods) return;
+    ovLfoDepth[position].value.store (depth);
+    ovLfoDepth[position].touched.store (true);
 }
 
-void SamplerEngine::setLfoRate (float hz)
+void SamplerEngine::setLfoRate (int position, float hz)
 {
-    ovLfoRate.value.store (hz);
-    ovLfoRate.touched.store (true);
+    if (position < 0 || position >= kMaxMods) return;
+    ovLfoRate[position].value.store (hz);
+    ovLfoRate[position].touched.store (true);
 }
 
 void SamplerEngine::setEffectIr (int effectIndex, const juce::String& irId)

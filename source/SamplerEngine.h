@@ -79,9 +79,10 @@ public:
     /** Per-group output gain in dB (group-level `gain` effect). */
     void setGroupGain (int groupIndex, float db);
 
-    /** LFO depth 0..1 (MOD_AMOUNT) and rate in Hz (FREQUENCY). */
-    void setLfoDepth (float depth);
-    void setLfoRate (float hz);
+    /** Set modulator `position`'s depth 0..1 (MOD_AMOUNT) / rate in Hz (FREQUENCY).
+        A mode can have several modulators; `position` selects which (from the binding). */
+    void setLfoDepth (int position, float depth);
+    void setLfoRate  (int position, float hz);
 
     /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
         each trigger's own rate. (The future StrumSpeed control.) */
@@ -144,7 +145,10 @@ private:
     // manifest defaults (and survive mode switches).
     struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
     FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
-    FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol, ovLfoDepth, ovLfoRate;
+    FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol;
+    static constexpr int kMaxMods = 16;          // per-modulator MOD_AMOUNT / FREQUENCY overrides
+    FxOverride ovLfoDepth[kMaxMods];
+    FxOverride ovLfoRate[kMaxMods];
     FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
     static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
     FxOverride ovGroupVol[kMaxGroupVol];
@@ -154,11 +158,13 @@ private:
     FxOverride ovGroupTuning[kMaxGroupVol];
     static constexpr int kMaxEffects = 8;
     FxOverride ovEffectEnabled[kMaxEffects];
-    // Per-effect-index params, so several same-type instrument effects are independent.
+    // Per-effect-index params, so several same-type instrument effects are independent
+    // (e.g. a separate lowpass + highpass, each with its own runtime cutoff).
     FxOverride ovEffectMix[kMaxEffects];
     FxOverride ovEffectDrive[kMaxEffects];
     FxOverride ovEffectLevel[kMaxEffects];
     FxOverride ovEffectOutput[kMaxEffects];
+    FxOverride ovEffectFreq[kMaxEffects];   // FX_FILTER_FREQUENCY per effect index
     // Selected convolution IR per effect (cabinet menu); message-thread only.
     // Re-applied when a mode is (re)built so the selection survives mode switches.
     juce::String desiredIr[kMaxEffects];
@@ -170,10 +176,11 @@ private:
 
     std::atomic<float> pitchBendRange { 2.0f };   // semitones; applied to current voices per block
 
-    // Gain stages applied in processBlock (audio thread): a per-library trim BEFORE
-    // the FX (so the drive/amp sees DecentSampler's signal level) and the master
-    // volume AFTER the FX (instrument AMP_VOLUME — an output control, like DS).
-    float libraryPreGain { 1.0f };
+    // Gain stages in processBlock (audio thread): the per-library trim (--gain) applied
+    // BEFORE the FX (DecentSampler reduces level ahead of its effects, so the level-
+    // dependent wave_shaper sees DS's moderate signal), and the master volume (instrument
+    // AMP_VOLUME — an output control) applied AFTER the FX.
+    float libraryGain { 1.0f };
     float masterGain { 1.0f };
 
     juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
