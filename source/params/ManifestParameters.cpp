@@ -287,6 +287,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
 
     p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendRange, 1 }, "Pitch Bend Range", 1, 12, 2));
 
+    // User master output fader (dB, post-everything). Independent of the preset's
+    // AMP_VOLUME master. -60 dB = silence, 0 dB = unity, +6 dB = boost.
+    p.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { id::masterOutput, 1 }, "Master Output",
+        juce::NormalisableRange<float> (-60.0f, 6.0f, 0.1f), 0.0f));
+
     // One float param per engine-driving control, keyed by label (deduped across
     // modes). Stored normalised 0..1; each mode maps it through its own control
     // range + bindings. The FIRST control seen for a given key sets the default.

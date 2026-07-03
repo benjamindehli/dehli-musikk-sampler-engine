@@ -260,6 +260,8 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     {
         if (auto* br = apvts->getRawParameterValue (params::id::pitchBendRange))
             engine.setPitchBendRange (br->load());
+        if (auto* mo = apvts->getRawParameterValue (params::id::masterOutput))
+            engine.setMasterOutputGain (juce::Decibels::decibelsToGain (mo->load(), -60.0f));
         if (const auto* m = getActiveMode())
         {
             params::applyCcToParams (midi, *m, *apvts);

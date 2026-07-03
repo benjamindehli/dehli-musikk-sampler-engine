@@ -27,6 +27,7 @@ namespace id
     inline constexpr const char* mode           = "mode";
     inline constexpr const char* pitchBendRange = "pitchBendRange";
     inline constexpr const char* chordOrder     = "chordOrder";   // first dropdown menu
+    inline constexpr const char* masterOutput   = "masterOutput"; // user master output fader (dB)
 }
 
 /** Build the APVTS layout for a whole library (auto-union of every mode's

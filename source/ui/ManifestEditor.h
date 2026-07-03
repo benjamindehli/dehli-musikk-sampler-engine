@@ -81,6 +81,8 @@ private:
     juce::Component::SafePointer<juce::DocumentWindow> themedWindow;   // standalone window we styled (if any)
     juce::Slider bendRangeSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bendRangeAttachment;
+    juce::Slider masterSlider;   // master output fader (top strip, between "Out" and the meter)
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
     LevelMeter outputMeter;
     juce::Label meterLabel;
 

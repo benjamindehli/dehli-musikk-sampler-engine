@@ -92,6 +92,13 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     bendRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         host.getApvts(), params::id::pitchBendRange, bendRangeSlider);
 
+    masterSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    masterSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);   // no inline number
+    masterSlider.setTextValueSuffix (" dB");
+    masterSlider.setPopupDisplayEnabled (true, false, this);   // value bubble while dragging
+    addAndMakeVisible (masterSlider);
+    masterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        host.getApvts(), params::id::masterOutput, masterSlider);
     meterLabel.setText ("Out", juce::dontSendNotification);
     meterLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (meterLabel);
@@ -114,6 +121,8 @@ ManifestEditor::~ManifestEditor()
     host.onModeChanged = nullptr;
     pitchWheel.setLookAndFeel (nullptr);
     modWheel.setLookAndFeel (nullptr);
+    bendRangeSlider.setLookAndFeel (nullptr);
+    masterSlider.setLookAndFeel (nullptr);
     if (themedWindow != nullptr)   // detach before our LnF member dies (standalone only)
         themedWindow->setLookAndFeel (nullptr);
 }
@@ -279,11 +288,14 @@ void ManifestEditor::resized()
     versionLabel.setBounds (top.removeFromRight (190));
     top.removeFromLeft (12);
     bendLabel.setBounds (top.removeFromLeft (40));
-    bendRangeSlider.setBounds (top.removeFromLeft (96));
-    // Output meter on the right of the strip (before the version label).
-    auto meterArea = top.removeFromRight (130).reduced (8, 7);
-    meterLabel.setBounds (meterArea.removeFromLeft (28));
+    bendRangeSlider.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, kCtrlH));
+
+    // Right side: version label, then one group laid out left→right —
+    // "Out" label · master fader · level meter.
     outputMeter.setBounds (meterArea);
+    meterLabel.setBounds (outArea.removeFromLeft (28));                 // "Out"
+    outputMeter.setBounds (outArea.removeFromRight (60).reduced (0, 4)); // meter on the right
+    masterSlider.setBounds (outArea.reduced (6, 0));                    // fader fills the middle
 
     if (uiComponent != nullptr)
         uiComponent->setBounds (area);

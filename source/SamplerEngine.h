@@ -108,6 +108,10 @@ public:
     /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
     void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }
 
+    /** User master output gain (linear), applied AFTER everything else — independent
+        of the preset's AMP_VOLUME master. Set per block from the plugin's Master fader. */
+    void setMasterOutputGain (float gainLinear) noexcept { uiMasterGain = gainLinear; }
+
 private:
     struct ModeRender
     {
@@ -182,6 +186,7 @@ private:
     // AMP_VOLUME — an output control) applied AFTER the FX.
     float libraryGain { 1.0f };
     float masterGain { 1.0f };
+    float uiMasterGain { 1.0f };   // user master output fader (post-everything)
 
     juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
 

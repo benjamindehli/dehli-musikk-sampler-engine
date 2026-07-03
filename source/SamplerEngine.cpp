@@ -268,6 +268,8 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     current->fx.process (buffer);
     if (masterGain != 1.0f)
         buffer.applyGain (masterGain);
+    if (uiMasterGain != 1.0f)   // user master output fader — the very last stage
+        buffer.applyGain (uiMasterGain);
 }
 
 void SamplerEngine::releaseResources()
