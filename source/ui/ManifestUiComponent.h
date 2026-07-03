@@ -63,9 +63,11 @@ private:
     void applyVisibilityBindings (const Control& c, double value);
     void applyAllVisibility();   // re-evaluate every source control (load + refresh)
 
-    Ui uiData;                          // owned copy (widgets reference it)
+    Ui uiData;                          // owned copy (widgets reference it; height/rects
+                                        // already adjusted for cropTop in the ctor)
     ImageProvider provider;
     juce::Image background;
+    float bgCropFrac { 0.0f };          // fraction of the background trimmed off the top
 
     juce::OwnedArray<FilmstripKnob>   knobs;
     juce::Array<Rect>                 knobRects;

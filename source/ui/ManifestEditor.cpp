@@ -185,7 +185,8 @@ int ManifestEditor::preferredWidth() const
 int ManifestEditor::preferredHeight() const
 {
     if (const auto* m = host.getActiveMode())
-        if (m->ui.height > 0) return m->ui.height + kTopStrip;
+        if (m->ui.height > 0)
+            return juce::jmax (1, m->ui.height - m->ui.cropTop) + kTopStrip;   // cropTop trims the top
     return 375 + kTopStrip;
 }
 
@@ -232,6 +233,19 @@ void ManifestEditor::rebuildUi()
 
     refreshWidgets();
     resized();
+    applyPreferredSize();   // modes may differ in height (per-mode cropTop) → resize host
+}
+
+void ManifestEditor::applyPreferredSize()
+{
+    // Resize the host to the active mode's preferred size. Modes can differ in height
+    // (per-mode cropTop), so this runs on every mode switch. No-op during construction
+    // (not yet parented); the plugin editor sets the initial size itself.
+    const int w = preferredWidth(), h = preferredHeight();
+    if (auto* parent = getParentComponent())    // the AudioProcessorEditor
+        parent->setSize (w, h);
+    if (themedWindow != nullptr)                // standalone window follows its content
+        themedWindow->setContentComponentSize (w, h);
 }
 
 void ManifestEditor::setParam (const char* paramId, float nativeValue)

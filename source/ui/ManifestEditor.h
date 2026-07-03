@@ -68,6 +68,7 @@ public:
 
 private:
     void rebuildUi();
+    void applyPreferredSize();   // resize host to the active mode (per-mode cropTop → varying height)
     void refreshWidgets();
     void setParam (const char* paramId, float nativeValue);
     void shiftKeyboardOctave (int deltaOctaves);

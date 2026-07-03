@@ -299,6 +299,7 @@ var writeUi (const Ui& ui)
     o.setStr ("background", ui.background);
     o.set ("width", ui.width);
     o.set ("height", ui.height);
+    if (ui.cropTop != 0) o.set ("cropTop", ui.cropTop);
     o.setStr ("layoutMode", ui.layoutMode);
     o.setStr ("bgMode", ui.bgMode);
 

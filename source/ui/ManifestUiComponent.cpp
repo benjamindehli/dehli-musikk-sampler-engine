@@ -204,6 +204,24 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
     if (uiData.background.isNotEmpty() && provider)
         background = provider (uiData.background);
 
+    // Per-mode top crop: trim `cropTop` design-px off the top. Shrink the height,
+    // shift every element up by the same amount, and remember the fraction so paint()
+    // draws only the lower part of the background. Everything downstream (resized()
+    // scaling, widget rects) then works against the cropped geometry automatically.
+    if (const int crop = juce::jlimit (0, juce::jmax (0, uiData.height - 1), uiData.cropTop);
+        crop > 0 && uiData.height > 0)
+    {
+        bgCropFrac = (float) crop / (float) uiData.height;
+        uiData.height -= crop;
+        for (auto& t : uiData.tabs)
+        {
+            for (auto& c  : t.controls) c.rect.y  -= crop;
+            for (auto& b  : t.buttons)  b.rect.y  -= crop;
+            for (auto& im : t.images)   im.rect.y -= crop;
+            for (auto& mn : t.menus)    mn.rect.y -= crop;
+        }
+    }
+
     if (uiData.tabs.isEmpty())
         return;
 
@@ -428,7 +446,14 @@ void ManifestUiComponent::applyLightBindings (const ButtonState& state)
 void ManifestUiComponent::paint (juce::Graphics& g)
 {
     if (background.isValid())
-        g.drawImage (background, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
+    {
+        const int imgW = background.getWidth();
+        const int imgH = background.getHeight();
+        const int srcY = juce::jlimit (0, juce::jmax (0, imgH - 1), juce::roundToInt (bgCropFrac * (float) imgH));
+        g.drawImage (background,
+                     0, 0, getWidth(), getHeight(),   // dest: the whole (cropped) component
+                     0, srcY, imgW, imgH - srcY);      // src: lower part of the background only
+    }
     else
         g.fillAll (juce::Colour (0xff222222));
 }

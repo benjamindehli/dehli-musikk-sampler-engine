@@ -327,6 +327,9 @@ struct Ui
 {
     juce::String background;     // bg image asset id
     int width = 0, height = 0;
+    int cropTop = 0;             // design-px trimmed off the TOP: shrinks the height,
+                                 // shifts every element up, and shows only the lower
+                                 // part of the background (reclaims dead header space).
     juce::String layoutMode;     // relative | ...
     juce::String bgMode;         // top_left | ...
     juce::Array<Tab> tabs;

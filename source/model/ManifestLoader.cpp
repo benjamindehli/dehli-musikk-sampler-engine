@@ -334,6 +334,7 @@ Ui parseUi (const var& v)
     ui.background = str (v, "background");
     ui.width      = intg (v, "width", 0);
     ui.height     = intg (v, "height", 0);
+    ui.cropTop    = intg (v, "cropTop", 0);
     ui.layoutMode = str (v, "layoutMode");
     ui.bgMode     = str (v, "bgMode");
 
