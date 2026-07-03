@@ -189,6 +189,9 @@ var writeEffect (const Effect& e)
     o.setOpt ("mix", e.mix);
     o.setOpt ("wet", e.wet);
     o.setOpt ("outputLevel", e.outputLevel);
+    o.setOpt ("rate", e.rate);
+    o.setOpt ("depth", e.depth);
+    o.setOpt ("feedback", e.feedback);
     o.setStr ("ir", e.ir);
     if (! e.normalizeIr) o.set ("normalizeIr", false);
     return o.toVar();
@@ -257,6 +260,8 @@ var writeControl (const Control& c)
         o.set ("skin", s.toVar());
     }
     o.setOpt ("mouseDragSensitivity", c.mouseDragSensitivity);
+    o.setOpt ("controlIndex", c.controlIndex);
+    if (! c.visible) o.set ("visible", false);
     o.set ("bindings", writeBindings (c.bindings));
     return o.toVar();
 }
@@ -267,6 +272,8 @@ var writeButton (const Button& b)
     o.set ("rect", writeRect (b.rect));
     o.setStr ("style", b.style);
     o.setOpt ("value", b.value);
+    o.setOpt ("controlIndex", b.controlIndex);
+    if (! b.visible) o.set ("visible", false);
 
     juce::Array<var> states;
     for (const auto& st : b.states)
@@ -290,6 +297,7 @@ var writeImage (const UiImage& img)
     o.setStr ("image", img.image);
     o.setStr ("aspectRatioMode", img.aspectRatioMode);
     o.setOpt ("controlIndex", img.controlIndex);
+    if (! img.visible) o.set ("visible", false);
     return o.toVar();
 }
 
@@ -332,6 +340,8 @@ var writeUi (const Ui& ui)
                 mo.setStr ("textColor", m.textColor);
                 mo.setStr ("backgroundColor", m.backgroundColor);
                 mo.setStr ("hAlign", m.hAlign);
+                mo.setOpt ("controlIndex", m.controlIndex);
+                if (! m.visible) mo.set ("visible", false);
                 juce::Array<var> opts;
                 for (const auto& op : m.options)
                 {
@@ -436,6 +446,7 @@ var writeMode (const Mode& m)
             co.set ("cc", cb.cc);
             co.setStr ("parameter", cb.parameter);
             co.setOpt ("groupIndex", cb.groupIndex);
+            co.setOpt ("controlIndex", cb.controlIndex);
             co.set ("normMin", cb.normMin);
             co.set ("normMax", cb.normMax);
             ccs.add (co.toVar());

@@ -226,6 +226,9 @@ Effect parseEffect (const var& v)
     e.mix         = optD (v, "mix");
     e.wet         = optD (v, "wet");
     e.outputLevel = optD (v, "outputLevel");
+    e.rate        = optD (v, "rate");
+    e.depth       = optD (v, "depth");
+    e.feedback    = optD (v, "feedback");
     e.ir          = str (v, "ir");
     e.normalizeIr = boolean (v, "normalizeIr", true);
     return e;
@@ -291,6 +294,8 @@ Control parseControl (const var& v)
     c.style     = str (v, "style");
     c.skin      = parseSkin (v);
     c.mouseDragSensitivity = optD (v, "mouseDragSensitivity");
+    c.controlIndex = optI (v, "controlIndex");
+    c.visible   = boolean (v, "visible", true);
     c.bindings  = parseBindings (v);
     return c;
 }
@@ -301,6 +306,8 @@ Button parseButton (const var& v)
     b.rect  = parseRect (get (v, "rect"));
     b.style = str (v, "style");
     b.value = optI (v, "value");
+    b.controlIndex = optI (v, "controlIndex");
+    b.visible = boolean (v, "visible", true);
 
     if (auto* a = get (v, "states").getArray())
     {
@@ -325,6 +332,7 @@ UiImage parseImage (const var& v)
     img.image           = str (v, "image");
     img.aspectRatioMode = str (v, "aspectRatioMode");
     img.controlIndex    = optI (v, "controlIndex");
+    img.visible         = boolean (v, "visible", true);
     return img;
 }
 
@@ -356,6 +364,8 @@ Ui parseUi (const var& v)
                     menu.textColor       = str (e, "textColor");
                     menu.backgroundColor = str (e, "backgroundColor");
                     menu.hAlign          = str (e, "hAlign");
+                    menu.controlIndex    = optI (e, "controlIndex");
+                    menu.visible         = boolean (e, "visible", true);
                     if (auto* opts = get (e, "options").getArray())
                         for (auto& o : *opts)
                         {
@@ -439,11 +449,12 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
         for (auto& e : *a)
         {
             CcBinding cb;
-            cb.cc         = intg (e, "cc", 1);
-            cb.parameter  = str (e, "parameter");
-            cb.groupIndex = optI (e, "groupIndex");
-            cb.normMin    = dbl (e, "normMin", 0.0);
-            cb.normMax    = dbl (e, "normMax", 1.0);
+            cb.cc           = intg (e, "cc", 1);
+            cb.parameter    = str (e, "parameter");
+            cb.groupIndex   = optI (e, "groupIndex");
+            cb.controlIndex = optI (e, "controlIndex");
+            cb.normMin      = dbl (e, "normMin", 0.0);
+            cb.normMax      = dbl (e, "normMax", 1.0);
             m.ccBindings.add (cb);
         }
 

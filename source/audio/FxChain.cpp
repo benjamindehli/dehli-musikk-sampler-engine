@@ -18,6 +18,14 @@ void FxChain::prepare (double sampleRate, int maxBlockSize, int numChannels)
             s.filter.prepare (spec);
         if (s.convolution != nullptr)
             s.convolution->prepare (spec);
+        if (s.chorusDelay != nullptr)
+        {
+            s.chorusDelay->setMaximumDelayInSamples ((int) (spec.sampleRate * 0.05) + 4);   // 50 ms headroom
+            s.chorusDelay->prepare (spec);
+            s.chorusDelay->reset();
+            s.chorusPhase = 0.0;
+            s.chorusLastWet[0] = s.chorusLastWet[1] = 0.0f;
+        }
     }
 
     dryBuffer.setSize ((int) spec.numChannels, (int) spec.maximumBlockSize);
@@ -31,6 +39,12 @@ void FxChain::reset()
             slotPtr->filter.reset();
         if (slotPtr->convolution != nullptr)
             slotPtr->convolution->reset();
+        if (slotPtr->chorusDelay != nullptr)
+        {
+            slotPtr->chorusDelay->reset();
+            slotPtr->chorusPhase = 0.0;
+            slotPtr->chorusLastWet[0] = slotPtr->chorusLastWet[1] = 0.0f;
+        }
     }
 }
 
@@ -104,6 +118,26 @@ void FxChain::setEffects (const juce::Array<Effect>& effects, const SampleSource
             slot->drive.store  ((float) (e.drive       ? *e.drive       : 1.0));
             slot->output.store ((float) (e.outputLevel ? *e.outputLevel : 1.0));
         }
+        else if (e.type == "chorus")
+        {
+            // Stereo widener / ensemble. mix is dynamic (a mono/stereo switch drives
+            // FX_MIX); rate/depth/feedback are static from the effect (gentle defaults
+            // if the preset omits them). Implemented as an anti-phase per-channel
+            // modulated delay (see process) so it actually widens a mono source.
+            slot->kind = Kind::chorus;
+            slot->mix.store ((float) (e.mix ? *e.mix : 0.5));
+            slot->chorusRate     = (float) (e.rate     ? *e.rate     : 1.0);
+            slot->chorusDepth    = (float) (e.depth    ? *e.depth    : 0.25);
+            slot->chorusFeedback = juce::jlimit (-0.95f, 0.95f, (float) (e.feedback ? *e.feedback : 0.0));
+            slot->chorusDelay = std::make_unique<
+                juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>>();
+            if (prepared)
+            {
+                slot->chorusDelay->setMaximumDelayInSamples ((int) (spec.sampleRate * 0.05) + 4);
+                slot->chorusDelay->prepare (spec);
+                slot->chorusDelay->reset();
+            }
+        }
         // else: unknown → passthrough.
 
         slots.push_back (std::move (slot));
@@ -160,6 +194,41 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
         else if (s.kind == Kind::gain)
         {
             buffer.applyGain (s.gainLinear.load());
+        }
+        else if (s.kind == Kind::chorus && s.chorusDelay != nullptr)
+        {
+            const float mix = juce::jlimit (0.0f, 1.0f, s.mix.load());
+            if (mix <= 0.0f)
+                continue;   // fully dry (e.g. mono switch) — skip
+
+            const auto  sr        = (float) spec.sampleRate;
+            const float centre    = juce::jmax (2.0f, s.chorusCentreMs) * 0.001f * sr;   // base delay (samples)
+            const float modRange  = juce::jlimit (0.0f, centre - 1.0f, s.chorusDepth * 0.010f * sr); // depth → ±(depth·10 ms)
+            const float fb        = s.chorusFeedback;
+            const double inc      = juce::MathConstants<double>::twoPi * (double) juce::jmax (0.01f, s.chorusRate) / (double) sr;
+            const int    lastCh   = juce::jmin (numCh, 2);   // widen the first two channels; extra channels pass dry
+
+            for (int i = 0; i < numSamples; ++i)
+            {
+                for (int ch = 0; ch < numCh; ++ch)
+                {
+                    auto* w = buffer.getWritePointer (ch);
+                    const float dry = w[i];
+                    if (ch >= lastCh)   // >2 channels: still run the line to stay coherent, no width offset
+                        { s.chorusDelay->pushSample (ch, dry); w[i] = dry; continue; }
+
+                    // Left LFO at phase, right in anti-phase → their delays diverge → stereo width.
+                    const float lfo   = (float) std::sin (s.chorusPhase + (ch == 1 ? juce::MathConstants<double>::pi : 0.0));
+                    const float delay = juce::jlimit (1.0f, centre + modRange, centre + modRange * lfo);
+                    s.chorusDelay->pushSample (ch, dry + fb * s.chorusLastWet[ch]);
+                    const float wet = s.chorusDelay->popSample (ch, delay, true);
+                    s.chorusLastWet[ch] = wet;
+                    w[i] = dry * (1.0f - mix) + wet * mix;
+                }
+                s.chorusPhase += inc;
+                if (s.chorusPhase >= juce::MathConstants<double>::twoPi)
+                    s.chorusPhase -= juce::MathConstants<double>::twoPi;
+            }
         }
         else if (s.kind == Kind::waveShaper)
         {

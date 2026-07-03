@@ -1,5 +1,7 @@
 #include "ManifestUiComponent.h"
 #include <cmath>
+#include <vector>
+#include <algorithm>
 
 namespace dm
 {
@@ -238,6 +240,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         auto* light = new SwappableImage();
         if (provider) light->setImage (provider (im.image));
         addAndMakeVisible (light);
+        light->setVisible (im.visible);   // authored default (e.g. a patch dialog starts hidden)
         lights.add (light);
         lightRects.add (im.rect);
         lightControlIndex.add (im.controlIndex.value_or (-1));
@@ -262,6 +265,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         knob->onShowValue = [this] (juce::Component& k, const juce::String& t) { showValueBubble (k, t); };
         knob->onHideValue = [this] { if (valueBubble) valueBubble->setVisible (false); };
         addAndMakeVisible (knob);
+        knob->setVisible (c.visible);
+        if (c.controlIndex) { widgetByIndex[*c.controlIndex] = knob; knobIdxByCI[*c.controlIndex] = knobs.size(); }
         knobs.add (knob);
         knobRects.add (c.rect);
         knobModels.add (cp);
@@ -279,6 +284,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         const int bi = i;
         btn->onChange = [this, bp, bi] (int s) { handleButton (*bp, bi, s); };
         addAndMakeVisible (btn);
+        btn->setVisible (b.visible);
+        if (b.controlIndex) { widgetByIndex[*b.controlIndex] = btn; buttonIdxByCI[*b.controlIndex] = buttons.size(); }
         buttons.add (btn);
         buttonRects.add (b.rect);
         buttonModels.add (bp);
@@ -318,16 +325,59 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         combo->setSelectedId (juce::jlimit (1, juce::jmax (1, m.options.size()), m.value),
                               juce::dontSendNotification);
         const Menu* mp = &m;
-        combo->onChange = [this, mp, combo] { if (onMenuChanged) onMenuChanged (*mp, combo->getSelectedId() - 1); };
+        combo->onChange = [this, mp, combo]
+        {
+            const int idx = combo->getSelectedId() - 1;
+            if (onMenuChanged) onMenuChanged (*mp, idx);
+            // A menu option can set many control VALUEs (e.g. selecting a patch loads
+            // its 85 drawbar/ADSR/source values). Applied UI-side → each drives its
+            // param/engine via the normal control path.
+            if (idx >= 0 && idx < mp->options.size())
+                applyValueBindings (mp->options.getReference (idx).bindings);
+        };
         addAndMakeVisible (combo);
+        combo->setVisible (m.visible);
+        if (m.controlIndex) { widgetByIndex[*m.controlIndex] = combo; menuIdxByCI[*m.controlIndex] = menus.size(); }
         menus.add (combo);
         menuRects.add (m.rect);
         menuModels.add (mp);
     }
 
+    // Apply each button's initial-state VISIBLE/OPACITY bindings now that every
+    // widget exists (a button may show/hide knobs/menus, not just lights). This runs
+    // after the per-widget `visible` defaults above, so a button state overrides them
+    // — e.g. EDB-Orgel's MIX/MOD toggle hides the modulation bank on load.
+    for (int i = 0; i < tab.buttons.size(); ++i)
+    {
+        const auto& b = tab.buttons.getReference (i);
+        const int s = b.value.value_or (0);
+        if (s >= 0 && s < b.states.size())
+            applyStateVisibility (b.states.getReference (s));
+    }
+
     // Set the initial visibility/opacity of any binding-driven images (so the LED
     // displays start matching their selector instead of all segments stacked on).
     applyAllVisibility();
+
+    // Restore DecentSampler's document z-order (later-declared elements paint on top,
+    // e.g. a patch-dialog overlay above the main controls). Only when the manifest
+    // carries controlIndex on every widget — i.e. regenerated with the converter that
+    // stamps all elements. Legacy manifests (index on images only) keep the build
+    // order (lights at back), so the 7 shipped plugins are unaffected until regen.
+    const bool docOrdered =
+        std::any_of (tab.controls.begin(), tab.controls.end(), [] (const Control& c) { return c.controlIndex.has_value(); })
+     || std::any_of (tab.buttons.begin(),  tab.buttons.end(),  [] (const Button&  b) { return b.controlIndex.has_value(); })
+     || std::any_of (tab.menus.begin(),    tab.menus.end(),    [] (const Menu&    m) { return m.controlIndex.has_value(); });
+    if (docOrdered)
+    {
+        std::vector<std::pair<int, juce::Component*>> z;
+        for (int i = 0; i < lights.size();  ++i) if (lightControlIndex[i] >= 0)      z.push_back ({ lightControlIndex[i],        lights[i]  });
+        for (int i = 0; i < knobs.size();   ++i) if (knobModels[i]->controlIndex)    z.push_back ({ *knobModels[i]->controlIndex,   knobs[i]   });
+        for (int i = 0; i < buttons.size(); ++i) if (buttonModels[i]->controlIndex)  z.push_back ({ *buttonModels[i]->controlIndex, buttons[i] });
+        for (int i = 0; i < menus.size();   ++i) if (menuModels[i]->controlIndex)    z.push_back ({ *menuModels[i]->controlIndex,   menus[i]   });
+        std::sort (z.begin(), z.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
+        for (auto& [ci, comp] : z) comp->toFront (false);   // ascending → highest index ends up frontmost
+    }
 
     // Floating value readout (hidden until a knob is turned). Added last so it sits
     // above every widget; non-interactive so it never eats mouse events.
@@ -378,7 +428,10 @@ void ManifestUiComponent::refresh (
                 buttons[i]->setState (*s);
                 const auto& b = *buttonModels[i];
                 if (*s >= 0 && *s < b.states.size())
-                    applyLightBindings (b.states.getReference (*s));   // keep the paired light in sync
+                {
+                    applyLightBindings   (b.states.getReference (*s));   // keep the paired light in sync
+                    applyStateVisibility (b.states.getReference (*s));   // keep target widgets in sync
+                }
             }
 
     for (int i = 0; i < menus.size(); ++i)
@@ -389,26 +442,93 @@ void ManifestUiComponent::refresh (
     applyAllVisibility();   // selector knobs may have moved → resync LED displays
 }
 
+void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourceValue)
+{
+    if (b.type != "control" || ! b.controlIndex)
+        return;
+    const bool isOpacity = b.parameter == "OPACITY";
+    if (! isOpacity && b.parameter != "VISIBLE")
+        return;
+
+    // Output value: a translation table maps the source (knob) value; otherwise a
+    // fixed translationValue (a button state's bool/number); otherwise the raw source.
+    double out = sourceValue;
+    if (b.translationTable.isNotEmpty())
+        out = evalTableLinear (b.translationTable, sourceValue);
+    else if (b.translationValue.isBool())
+        out = ((bool) b.translationValue) ? 1.0 : 0.0;
+    else if (b.translationValue.isDouble() || b.translationValue.isInt())
+        out = (double) b.translationValue;
+
+    // Lights keep their dedicated path (image-alpha crossfade for OPACITY).
+    const int lidx = lightControlIndex.indexOf (*b.controlIndex);
+    if (lidx >= 0)
+    {
+        if (isOpacity) lights[lidx]->setImageAlpha ((float) out);
+        else           lights[lidx]->setVisible (out > 0.5);
+        return;
+    }
+
+    // Any other widget (knob/button/menu) addressed by its document index.
+    if (auto it = widgetByIndex.find (*b.controlIndex); it != widgetByIndex.end())
+    {
+        if (isOpacity) it->second->setAlpha ((float) out);
+        else           it->second->setVisible (out > 0.5);
+    }
+}
+
 void ManifestUiComponent::applyVisibilityBindings (const Control& c, double value)
 {
     for (const auto& b : c.bindings)
+        applyVisibilityBinding (b, value);
+}
+
+void ManifestUiComponent::applyStateVisibility (const ButtonState& state)
+{
+    for (const auto& b : state.bindings)
+        applyVisibilityBinding (b, 0.0);   // value unused: button states carry a fixed translationValue
+}
+
+void ManifestUiComponent::applyValueBindings (const juce::Array<Binding>& bindings)
+{
+    for (const auto& b : bindings)
+        if (b.type == "control" && b.controlIndex && b.parameter == "VALUE")
+        {
+            const double v = b.translationValue.isBool()
+                               ? (((bool) b.translationValue) ? 1.0 : 0.0)
+                               : b.translationValue.toString().getDoubleValue();
+            setWidgetValue (*b.controlIndex, v);
+        }
+}
+
+void ManifestUiComponent::setWidgetValue (int controlIndex, double value)
+{
+    // Only act on an actual change — this both avoids redundant work and terminates
+    // the button↔button cascade (e.g. the patch dialog's load/close pair).
+    if (auto it = buttonIdxByCI.find (controlIndex); it != buttonIdxByCI.end())
     {
-        if (b.type != "control" || ! b.controlIndex)
-            continue;
-        const bool isOpacity = b.parameter == "OPACITY";
-        if (! isOpacity && b.parameter != "VISIBLE")
-            continue;
-
-        const int idx = lightControlIndex.indexOf (*b.controlIndex);
-        if (idx < 0)
-            continue;
-
-        const double out = b.translationTable.isNotEmpty()
-                             ? evalTableLinear (b.translationTable, value) : value;
-        if (isOpacity)
-            lights[idx]->setImageAlpha ((float) out);
-        else
-            lights[idx]->setVisible (out > 0.5);
+        const int i = it->second, s = (int) value;
+        if (s != buttons[i]->getState())
+        {
+            buttons[i]->setState (s);
+            handleButton (*buttonModels[i], i, s);   // fires onButtonChanged (APVTS sync) + cascades
+        }
+    }
+    else if (auto it2 = knobIdxByCI.find (controlIndex); it2 != knobIdxByCI.end())
+    {
+        const int i = it2->second;
+        if (value != knobs[i]->getValue())
+        {
+            knobs[i]->setValue (value);
+            if (onControlChanged) onControlChanged (*knobModels[i], value);
+            applyVisibilityBindings (*knobModels[i], value);
+        }
+    }
+    else if (auto it3 = menuIdxByCI.find (controlIndex); it3 != menuIdxByCI.end())
+    {
+        const int i = it3->second, sel = (int) value;
+        if (menus[i]->getSelectedId() != sel + 1)
+            menus[i]->setSelectedId (sel + 1, juce::sendNotification);   // fires onMenuChanged
     }
 }
 
@@ -423,7 +543,11 @@ ManifestUiComponent::~ManifestUiComponent() = default;
 void ManifestUiComponent::handleButton (const Button& b, int index, int stateIndex)
 {
     if (stateIndex >= 0 && stateIndex < b.states.size())
-        applyLightBindings (b.states.getReference (stateIndex));
+    {
+        applyLightBindings    (b.states.getReference (stateIndex));            // image swaps
+        applyStateVisibility  (b.states.getReference (stateIndex));            // show/hide target widgets
+        applyValueBindings    (b.states.getReference (stateIndex).bindings);   // set other widgets' values (cascade)
+    }
 
     if (onButtonChanged)
         onButtonChanged (b, index, stateIndex);

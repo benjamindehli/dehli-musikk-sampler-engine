@@ -134,6 +134,9 @@ struct Effect
     std::optional<double> mix;
     std::optional<double> wet;           // convolution (from "wetLevel")
     std::optional<double> outputLevel;
+    std::optional<double> rate;          // chorus modRate (Hz)
+    std::optional<double> depth;         // chorus modDepth (0..1)
+    std::optional<double> feedback;      // chorus feedback (-1..1)
     juce::String ir;                     // convolution IR asset id (from "irFile")
     bool normalizeIr = true;             // normalise the IR's energy (off = use it as recorded, like DS)
 
@@ -256,6 +259,8 @@ struct Control
     std::optional<CustomSkin> skin;
     std::optional<double> mouseDragSensitivity;
     juce::Array<Binding> bindings;
+    std::optional<int> controlIndex;   // document-order UI index (VISIBLE/OPACITY binding target)
+    bool visible = true;               // default visibility (DecentSampler `visible` attr)
 };
 
 struct ButtonState
@@ -273,6 +278,8 @@ struct Button
     juce::String style;          // image | ...
     std::optional<int> value;
     juce::Array<ButtonState> states;
+    std::optional<int> controlIndex;   // document-order UI index (VISIBLE/OPACITY binding target)
+    bool visible = true;               // default visibility (DecentSampler `visible` attr)
 };
 
 struct UiImage
@@ -282,6 +289,7 @@ struct UiImage
     juce::String aspectRatioMode;
     std::optional<int> controlIndex;   // document-order UI index; PATH bindings
                                        // target lights by this (e.g. button → light)
+    bool visible = true;               // default visibility (DecentSampler `visible` attr)
 };
 
 /** A dropdown option. `seqIndex` is the SEQ_INDEX it selects (Omni-84's
@@ -306,6 +314,9 @@ struct Menu
     juce::String textColor;         // ARGB hex
     juce::String backgroundColor;   // ARGB hex
     juce::String hAlign;            // left | center | right
+
+    std::optional<int> controlIndex;   // document-order UI index (VISIBLE/OPACITY binding target)
+    bool visible = true;               // default visibility (DecentSampler `visible` attr)
 };
 
 struct Tab
@@ -353,6 +364,8 @@ struct CcBinding
     int cc = 1;                     // controller number (1 = mod wheel)
     juce::String parameter;         // engine binding parameter the control drives (e.g. SEQ_PLAYBACK_RATE)
     std::optional<int> groupIndex;
+    std::optional<int> controlIndex; // the SPECIFIC target control (document index); when set,
+                                     // drive only that control, not every one sharing `parameter`
     double normMin = 0.0;           // normalised parameter value at CC 0
     double normMax = 1.0;           // normalised parameter value at CC 127
 };

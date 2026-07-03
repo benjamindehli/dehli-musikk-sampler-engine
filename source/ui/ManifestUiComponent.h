@@ -15,6 +15,7 @@
 #include <functional>
 #include <optional>
 #include <memory>
+#include <map>
 
 namespace dm
 {
@@ -57,11 +58,22 @@ private:
     void showValueBubble (juce::Component& knob, const juce::String& text);
     std::unique_ptr<juce::Label> valueBubble;
 
-    // VISIBLE/OPACITY: a control's value drives the visibility/alpha of images
-    // addressed by controlIndex (e.g. the LED segment displays — pitch up/down
-    // crossfade via OPACITY, sustain digit selection via VISIBLE).
-    void applyVisibilityBindings (const Control& c, double value);
+    // VISIBLE/OPACITY: a source (a control's value, or a button state) drives the
+    // visibility/alpha of a target widget addressed by controlIndex. Targets can be
+    // lights (LED segments — pitch up/down crossfade), OR any knob/button/menu (e.g.
+    // EDB-Orgel's MIX/MOD toggle hides/shows whole banks of controls, and the
+    // patch-load dialog).
+    void applyVisibilityBinding  (const Binding& b, double sourceValue);
+    void applyVisibilityBindings (const Control& c, double value);      // knob-driven
+    void applyStateVisibility    (const ButtonState& state);            // button-driven
     void applyAllVisibility();   // re-evaluate every source control (load + refresh)
+
+    // VALUE bindings: a source (a button state, or a selected menu option) sets OTHER
+    // widgets' values by controlIndex. Powers the patch dialog's two-button cross-toggle
+    // (load icon sets the close button's state → its state drives the dialog's VISIBLE
+    // bindings) AND patch loading (a menu option sets 85 drawbar/ADSR/source controls).
+    void applyValueBindings (const juce::Array<Binding>& bindings);
+    void setWidgetValue     (int controlIndex, double value);
 
     Ui uiData;                          // owned copy (widgets reference it; height/rects
                                         // already adjusted for cropTop in the ctor)
@@ -81,6 +93,13 @@ private:
     juce::OwnedArray<juce::ComboBox>  menus;
     juce::Array<Rect>                 menuRects;
     juce::Array<const Menu*>          menuModels;          // parallel to menus
+
+    // controlIndex (document order) → widget, for VISIBLE/OPACITY bindings that
+    // target knobs/buttons/menus (lights use lightControlIndex above).
+    std::map<int, juce::Component*>   widgetByIndex;
+    // controlIndex → index into buttons[]/knobs[]/menus[], for VALUE bindings that
+    // set another widget's value (need the model + index to fire the callback).
+    std::map<int, int>                buttonIdxByCI, knobIdxByCI, menuIdxByCI;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestUiComponent)
 };

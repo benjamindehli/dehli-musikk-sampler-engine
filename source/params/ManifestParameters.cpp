@@ -446,17 +446,30 @@ void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
                 continue;
             const float norm = juce::jlimit (0.0f, 1.0f,
                                              (float) (cb.normMin + v * (cb.normMax - cb.normMin)));
-            // Drive EVERY control this CC targets (by engine parameter + group), not just
-            // the first — e.g. a mod wheel bound to MOD_AMOUNT moves ALL tremolo-depth
-            // knobs (one per modulator), not only modulator 0's.
+            // When the CC binding names its specific target control (controlIndex —
+            // regenerated manifests), drive ONLY that control. Otherwise (legacy
+            // manifests that lost the index) fall back to driving EVERY control sharing
+            // the parameter+group — which is how a mod wheel→MOD_AMOUNT opened both of
+            // the 4-track/Wurli tremolo-depth knobs. Precise targeting fixes libraries
+            // like EDB-Orgel where FREQUENCY is shared by the vibrato, every tremolo LFO,
+            // and a stray velocity control — the mod wheel must move only the vibrato.
             for (const auto& c : mode.ui.tabs.getReference (0).controls)
             {
                 if (! controlDrivesEngine (c)) continue;
+
                 bool matches = false;
-                for (const auto& b : c.bindings)
-                    if (b.parameter == cb.parameter
-                        && (! cb.groupIndex || b.groupIndex.value_or (0) == *cb.groupIndex))
-                    { matches = true; break; }
+                if (cb.controlIndex)
+                {
+                    matches = c.controlIndex && *c.controlIndex == *cb.controlIndex;
+                }
+                else
+                {
+                    for (const auto& b : c.bindings)
+                        if (b.parameter == cb.parameter
+                            && (! cb.groupIndex || b.groupIndex.value_or (0) == *cb.groupIndex))
+                        { matches = true; break; }
+                }
+
                 if (matches)
                     if (auto* prm = apvts.getParameter (controlKey (c.label)))
                         prm->setValueNotifyingHost (norm);
