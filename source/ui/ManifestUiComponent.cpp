@@ -86,8 +86,13 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        // Cmd (macOS) / Ctrl (Windows) + click resets to the manifest default value.
-        if (e.mods.isCommandDown() && value != defaultVal)
+        // Option (macOS) / Ctrl (Windows) + click resets to the manifest default value.
+       #if JUCE_MAC
+        const bool resetClick = e.mods.isAltDown();       // Option key on macOS
+       #else
+        const bool resetClick = e.mods.isCommandDown();   // Ctrl on Windows/Linux
+       #endif
+        if (resetClick && value != defaultVal)
         {
             value = defaultVal;
             repaint();
