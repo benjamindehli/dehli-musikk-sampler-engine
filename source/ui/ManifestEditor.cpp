@@ -13,7 +13,12 @@ juce::Range<int> usedNoteRange (const Mode& m)
 {
     int lo = 128, hi = -1;
     for (const auto& g : m.groups)
-        for (const auto& s : g.samples)   { lo = juce::jmin (lo, s.loNote); hi = juce::jmax (hi, s.hiNote); }
+        for (const auto& s : g.samples)
+        {
+            if (s.loNote < 0 || s.hiNote < 0)   // unmapped samples (e.g. pedal/damper noise) define no key range
+                continue;
+            lo = juce::jmin (lo, s.loNote); hi = juce::jmax (hi, s.hiNote);
+        }
     for (const auto& t : m.sequenceTriggers) { lo = juce::jmin (lo, t.note); hi = juce::jmax (hi, t.note); }
     for (const auto& k : m.menuKeySwitches)  { lo = juce::jmin (lo, k.note); hi = juce::jmax (hi, k.note); }
     if (hi < lo) return { 36, 84 };
@@ -222,9 +227,19 @@ void ManifestEditor::rebuildUi()
 
     keyboard.setColourRanges (ui.keyboardColors);
 
-    const auto range = usedNoteRange (*mode);
-    usedLow  = range.getStart();
-    usedHigh = range.getEnd();
+    auto range = usedNoteRange (*mode);
+    int lo = range.getStart(), hi = range.getEnd();
+    // "none"/"transparent" ranges extend what's shown (regular, untinted keys the preset
+    // wouldn't otherwise display). Tinted ranges don't change the extent — existing
+    // libraries keep their sample-based keyboard width.
+    for (const auto& kc : ui.keyboardColors)
+        if (kc.color.trim().equalsIgnoreCase ("none") || kc.color.trim().equalsIgnoreCase ("transparent"))
+        {
+            lo = juce::jmin (lo, kc.loNote);
+            hi = juce::jmax (hi, kc.hiNote);
+        }
+    usedLow  = juce::jlimit (0, 127, lo);
+    usedHigh = juce::jlimit (0, 127, juce::jmax (hi, lo));
     keyboard.setAvailableRange (usedLow, usedHigh);
     lowestVisibleKey = usedLow;
     keyboard.setLowestVisibleKey (lowestVisibleKey);

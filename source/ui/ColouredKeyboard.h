@@ -22,6 +22,10 @@ public:
         parsed.clearQuick();
         for (const auto& r : ranges)
         {
+            // "none"/"transparent" → the range is still declared (so the editor keeps
+            // those keys visible), but drawn WITHOUT a tint → regular black/white keys.
+            if (r.color.trim().equalsIgnoreCase ("none") || r.color.trim().equalsIgnoreCase ("transparent"))
+                continue;
             auto colour = juce::Colour ((juce::uint32) r.color.getHexValue32());
             if (colour.getAlpha() == 0)            // 6-digit (no alpha) → treat as opaque
                 colour = colour.withAlpha (1.0f);
