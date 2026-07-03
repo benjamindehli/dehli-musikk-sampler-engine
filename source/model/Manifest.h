@@ -32,6 +32,9 @@ struct Binding
 {
     juce::String type;        // amp | effect | control | general | note_binding | note_sequence | ...
     juce::String level;       // instrument | group | tag | ui | midi | <numeric group/tag index>
+    juce::String targetId;    // id of the element this binding targets (effect/group/modulator/
+                              // control). Replaces the positional *Index selectors below; the
+                              // index fields remain as a transition fallback until fully migrated.
     juce::String parameter;   // FX_FILTER_FREQUENCY, ENV_RELEASE, SEQ_INDEX, PATH, ...
     juce::String translation; // fixed_value | linear | table (empty = none)
     juce::String modBehavior; // set (LFO bindings)
@@ -124,6 +127,7 @@ struct Sample
 // ---------------------------------------------------------------------------
 struct Effect
 {
+    juce::String id;              // stable unique id (binding targets resolve to this)
     juce::String type;            // lowpass | gain | convolution
     bool enabled = true;
 
@@ -195,6 +199,7 @@ struct Group
 // ---------------------------------------------------------------------------
 struct Lfo
 {
+    juce::String id;              // stable unique id (MOD_AMOUNT/FREQUENCY targets resolve to this)
     juce::String shape;           // sine | ...
     double frequency = 0.0;
     double modAmount = 0.0;
@@ -248,6 +253,7 @@ struct CustomSkin
 
 struct Control
 {
+    juce::String id;             // stable unique id (VISIBLE/OPACITY/VALUE/CC targets resolve to this)
     Rect rect;
     juce::String label;          // parameterName
     juce::String valueType;      // float | percent
@@ -274,6 +280,7 @@ struct ButtonState
 
 struct Button
 {
+    juce::String id;             // stable unique id (VISIBLE/OPACITY/VALUE/PATH targets resolve to this)
     Rect rect;
     juce::String style;          // image | ...
     std::optional<int> value;
@@ -284,6 +291,7 @@ struct Button
 
 struct UiImage
 {
+    juce::String id;             // stable unique id (VISIBLE/OPACITY/PATH targets resolve to this)
     Rect rect;
     juce::String image;          // asset id
     juce::String aspectRatioMode;
@@ -305,6 +313,7 @@ struct MenuOption
 
 struct Menu
 {
+    juce::String id;                // stable unique id (VISIBLE/OPACITY/VALUE targets resolve to this)
     Rect rect;
     int  value = 1;                 // selected option (1-based, as authored)
     juce::Array<MenuOption> options;
@@ -364,6 +373,7 @@ struct CcBinding
     int cc = 1;                     // controller number (1 = mod wheel)
     juce::String parameter;         // engine binding parameter the control drives (e.g. SEQ_PLAYBACK_RATE)
     std::optional<int> groupIndex;
+    juce::String       targetId;     // id of the specific target control (preferred over controlIndex)
     std::optional<int> controlIndex; // the SPECIFIC target control (document index); when set,
                                      // drive only that control, not every one sharing `parameter`
     double normMin = 0.0;           // normalised parameter value at CC 0

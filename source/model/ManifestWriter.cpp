@@ -32,6 +32,7 @@ var writeBinding (const Binding& b)
     Obj o;
     o.setStr ("type", b.type);
     o.setStr ("level", b.level);
+    o.setStr ("targetId", b.targetId);
     o.setStr ("identifier", b.identifier);
     o.setStr ("translationTable", b.translationTable);
     if (b.translationReversed) o.set ("translationReversed", true);
@@ -180,6 +181,7 @@ var writeGroup (const Group& g)
 var writeEffect (const Effect& e)
 {
     Obj o;
+    o.setStr ("id", e.id);
     o.setStr ("type", e.type);
     o.set ("enabled", e.enabled);
     o.setOpt ("frequency", e.frequency);
@@ -200,6 +202,7 @@ var writeEffect (const Effect& e)
 var writeLfo (const Lfo& l)
 {
     Obj o;
+    o.setStr ("id", l.id);
     o.setStr ("shape", l.shape);
     o.set ("frequency", l.frequency);
     o.set ("modAmount", l.modAmount);
@@ -243,6 +246,7 @@ var writeRect (const Rect& r)
 var writeControl (const Control& c)
 {
     Obj o;
+    o.setStr ("id", c.id);
     o.set ("rect", writeRect (c.rect));
     o.setStr ("label", c.label);
     o.setStr ("valueType", c.valueType);
@@ -269,6 +273,7 @@ var writeControl (const Control& c)
 var writeButton (const Button& b)
 {
     Obj o;
+    o.setStr ("id", b.id);
     o.set ("rect", writeRect (b.rect));
     o.setStr ("style", b.style);
     o.setOpt ("value", b.value);
@@ -293,6 +298,7 @@ var writeButton (const Button& b)
 var writeImage (const UiImage& img)
 {
     Obj o;
+    o.setStr ("id", img.id);
     o.set ("rect", writeRect (img.rect));
     o.setStr ("image", img.image);
     o.setStr ("aspectRatioMode", img.aspectRatioMode);
@@ -335,6 +341,7 @@ var writeUi (const Ui& ui)
             for (const auto& m : t.menus)
             {
                 Obj mo;
+                mo.setStr ("id", m.id);
                 mo.set ("rect", writeRect (m.rect));
                 mo.set ("value", m.value);
                 mo.setStr ("textColor", m.textColor);
@@ -445,6 +452,7 @@ var writeMode (const Mode& m)
             Obj co;
             co.set ("cc", cb.cc);
             co.setStr ("parameter", cb.parameter);
+            co.setStr ("targetId", cb.targetId);
             co.setOpt ("groupIndex", cb.groupIndex);
             co.setOpt ("controlIndex", cb.controlIndex);
             co.set ("normMin", cb.normMin);

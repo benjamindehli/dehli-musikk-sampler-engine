@@ -158,54 +158,89 @@ static double evalTable (const juce::String& table, double x)
 // binding -> engine vocabulary. `value` is the final engine value (native units,
 // factor already applied).
 // ---------------------------------------------------------------------------
-static void applyBinding (SamplerEngine& eng, const Binding& b, double value)
+// Resolve a binding's instrument-effect target to a slot index: prefer the id
+// (targetId), falling back to the legacy effectIndex during the id migration.
+static int effectSlotFor (const Mode& mode, const Binding& b)
+{
+    if (b.targetId.isNotEmpty())
+        for (int i = 0; i < mode.effects.size(); ++i)
+            if (mode.effects.getReference (i).id == b.targetId)
+                return i;
+    return b.effectIndex.value_or (-1);
+}
+
+// Resolve a binding's group target to a group index: prefer the id (targetId → group
+// uid), falling back to the legacy groupIndex during the id migration.
+static int groupSlotFor (const Mode& mode, const Binding& b)
+{
+    if (b.targetId.isNotEmpty())
+        for (int i = 0; i < mode.groups.size(); ++i)
+            if (mode.groups.getReference (i).uid == b.targetId)
+                return i;
+    return b.groupIndex.value_or (-1);
+}
+
+// Resolve a MOD_AMOUNT/FREQUENCY binding's modulator target to an index: prefer the id
+// (targetId → modulator id), falling back to the legacy position (= modulatorIndex).
+static int modSlotFor (const Mode& mode, const Binding& b)
+{
+    if (b.targetId.isNotEmpty())
+        for (int i = 0; i < mode.modulators.size(); ++i)
+            if (mode.modulators.getReference (i).id == b.targetId)
+                return i;
+    return b.position.value_or (0);
+}
+
+static void applyBinding (SamplerEngine& eng, const Mode& mode, const Binding& b, double value)
 {
     const auto& p = b.parameter;
+    const int  fx  = effectSlotFor (mode, b);   // instrument effect slot (id-resolved)
+    const int  grp = groupSlotFor (mode, b);    // group index (id-resolved)
     // Group-level effect (level="group" + effectIndex): a per-group insert chain
-    // (organ swell filter, loudness gain, …) — route to that group's chain.
-    const bool groupEffect = b.level == "group" && b.groupIndex && b.effectIndex;
-    const bool groupLevel  = b.level == "group" && b.groupIndex.has_value();
+    // (organ swell filter, loudness gain, …) — route to that group's chain by (group, slot).
+    const bool groupEffect = b.level == "group" && grp >= 0 && b.effectIndex;
+    const bool groupLevel  = b.level == "group" && grp >= 0;
 
     if (p == "FX_FILTER_FREQUENCY")
     {
-        // Address the specific effect when its index is known — a mode can have several
+        // Address the specific effect when its id resolves — a mode can have several
         // filters (e.g. a lowpass AND a highpass); routing all of them to "the lowpass"
         // would let one clobber the other. Fall back to the first lowpass only when no
-        // index is given.
-        if      (groupEffect)   eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value);
-        else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value);
+        // target is given.
+        if      (groupEffect)   eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value);
+        else if (fx >= 0)       eng.setEffectParam (fx, p, (float) value);
         else                    eng.setLowpassFrequency ((float) value);
     }
-    // Effect params: address a specific instrument effect by index when known;
+    // Effect params: address a specific instrument effect by id when known;
     // FxChain routes FX_OUTPUT_LEVEL by the slot's kind (wave_shaper vs convolution).
-    else if (p == "FX_MIX")              { if (groupEffect) eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value); else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbMix ((float) value); }
-    else if (p == "FX_DRIVE")            { if (groupEffect) eng.setGroupEffectParam (*b.groupIndex, *b.effectIndex, p, (float) value); else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setWaveShaperDrive ((float) value); }
-    else if (p == "FX_OUTPUT_LEVEL")     { if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value); else eng.setReverbWetGainDb ((float) value); }
+    else if (p == "FX_MIX")              { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setReverbMix ((float) value); }
+    else if (p == "FX_DRIVE")            { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setWaveShaperDrive ((float) value); }
+    else if (p == "FX_OUTPUT_LEVEL")     { if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setReverbWetGainDb ((float) value); }
     else if (p == "LEVEL")
     {
         // group-level gain: per-group chain if it has one (else falls back to a
-        // per-group output gain inside the engine); instrument gain → by index.
-        if      (groupLevel)    eng.setGroupEffectParam (*b.groupIndex, b.effectIndex.value_or (0), p, (float) value);
-        else if (b.effectIndex) eng.setEffectParam (*b.effectIndex, p, (float) value);
+        // per-group output gain inside the engine); instrument gain → by id.
+        if      (groupLevel)    eng.setGroupEffectParam (grp, b.effectIndex.value_or (0), p, (float) value);
+        else if (fx >= 0)       eng.setEffectParam (fx, p, (float) value);
         else                    eng.setGain ((float) value);
     }
     else if (p == "SEQ_PLAYBACK_RATE")   eng.setSequencerRate (value);
-    // ENV_* with a groupIndex → that group only (e.g. organ "loudness" lengthening
+    // ENV_* with a group target → that group only (e.g. organ "loudness" lengthening
     // just the reed groups' attack); without → the global amp envelope.
-    else if (p == "ENV_ATTACK")          { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpAttack ((float) value); }
-    else if (p == "ENV_DECAY")           { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpDecay ((float) value); }
-    else if (p == "ENV_SUSTAIN")         { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpSustain ((float) value); }
-    else if (p == "ENV_RELEASE")         { if (groupLevel) eng.setGroupAmp (*b.groupIndex, p, (float) value); else eng.setAmpRelease ((float) value); }
-    else if (p == "AMP_VOLUME")          { if (b.groupIndex) eng.setGroupVolume (*b.groupIndex, (float) value); else eng.setMasterVolume ((float) value); }
-    else if (p == "GROUP_TUNING")        eng.setGroupTuning (b.groupIndex.value_or (0), (float) value);
+    else if (p == "ENV_ATTACK")          { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpAttack ((float) value); }
+    else if (p == "ENV_DECAY")           { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpDecay ((float) value); }
+    else if (p == "ENV_SUSTAIN")         { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpSustain ((float) value); }
+    else if (p == "ENV_RELEASE")         { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpRelease ((float) value); }
+    else if (p == "AMP_VOLUME")          { if (grp >= 0) eng.setGroupVolume (grp, (float) value); else eng.setMasterVolume ((float) value); }
+    else if (p == "GROUP_TUNING")        eng.setGroupTuning (grp >= 0 ? grp : 0, (float) value);
     else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
-    else if (p == "MOD_AMOUNT")          eng.setLfoDepth (b.position.value_or (0), (float) value);
-    else if (p == "FREQUENCY")           eng.setLfoRate  (b.position.value_or (0), (float) value);
+    else if (p == "MOD_AMOUNT")          eng.setLfoDepth (modSlotFor (mode, b), (float) value);
+    else if (p == "FREQUENCY")           eng.setLfoRate  (modSlotFor (mode, b), (float) value);
     else if (p == "ENABLED")
     {
         const bool on = value > 0.5;
-        if (b.level == "group" && b.groupIndex) eng.setGroupEnabled (*b.groupIndex, on);
-        else if (b.effectIndex)                 eng.setEffectEnabled (*b.effectIndex, on);
+        if (b.level == "group" && grp >= 0) eng.setGroupEnabled (grp, on);
+        else if (fx >= 0)                   eng.setEffectEnabled (fx, on);
     }
     // AMP_VEL_TRACK etc.: no engine runtime param yet.
 }
@@ -255,7 +290,7 @@ static void applyButtonState (SamplerEngine& eng, const Mode& mode, const Button
         // AMP_VEL_TRACK, MOD_AMOUNT, …) carries a fixed value → route through the same
         // type-aware path the UI controls use, so a hi-fi/lo-fi switch actually applies
         // the wave_shaper's drive + output level (and any filter settings).
-        applyBinding (eng, b, buttonBindingValue (b));
+        applyBinding (eng, mode, b, buttonBindingValue (b));
     }
 }
 
@@ -379,7 +414,7 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
             }
             else if (floatSpecFor (b.parameter) != nullptr)
             {
-                applyBinding (engine, b, outputValue (b, norm, mn, mx));
+                applyBinding (engine, mode, b, outputValue (b, norm, mn, mx));
             }
             else if (b.parameter == "TAG_ENABLED")
             {
@@ -458,7 +493,11 @@ void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
                 if (! controlDrivesEngine (c)) continue;
 
                 bool matches = false;
-                if (cb.controlIndex)
+                if (cb.targetId.isNotEmpty())
+                {
+                    matches = (c.id == cb.targetId);        // id-based target (preferred)
+                }
+                else if (cb.controlIndex)
                 {
                     matches = c.controlIndex && *c.controlIndex == *cb.controlIndex;
                 }

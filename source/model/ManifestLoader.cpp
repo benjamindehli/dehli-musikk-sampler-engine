@@ -61,6 +61,7 @@ Binding parseBinding (const var& v)
     b.raw         = v;
     b.type        = str (v, "type");
     b.level       = str (v, "level");
+    b.targetId    = str (v, "targetId");
     b.identifier  = str (v, "identifier");
     b.translationTable = str (v, "translationTable");
     b.translationReversed = boolean (v, "translationReversed", false);
@@ -216,6 +217,7 @@ Effect parseEffect (const var& v)
 {
     Effect e;
     e.raw     = v;
+    e.id      = str (v, "id");
     e.type    = str (v, "type");
     e.enabled = boolean (v, "enabled", true);
 
@@ -237,6 +239,7 @@ Effect parseEffect (const var& v)
 Lfo parseLfo (const var& v)
 {
     Lfo l;
+    l.id        = str (v, "id");
     l.shape     = str (v, "shape");
     l.frequency = dbl (v, "frequency", 0.0);
     l.modAmount = dbl (v, "modAmount", 0.0);
@@ -284,6 +287,7 @@ std::optional<CustomSkin> parseSkin (const var& v)
 Control parseControl (const var& v)
 {
     Control c;
+    c.id        = str (v, "id");
     c.rect      = parseRect (get (v, "rect"));
     c.label     = str (v, "label");
     c.valueType = str (v, "valueType");
@@ -303,6 +307,7 @@ Control parseControl (const var& v)
 Button parseButton (const var& v)
 {
     Button b;
+    b.id    = str (v, "id");
     b.rect  = parseRect (get (v, "rect"));
     b.style = str (v, "style");
     b.value = optI (v, "value");
@@ -328,6 +333,7 @@ Button parseButton (const var& v)
 UiImage parseImage (const var& v)
 {
     UiImage img;
+    img.id              = str (v, "id");
     img.rect            = parseRect (get (v, "rect"));
     img.image           = str (v, "image");
     img.aspectRatioMode = str (v, "aspectRatioMode");
@@ -359,6 +365,7 @@ Ui parseUi (const var& v)
                 for (auto& e : *a)
                 {
                     Menu menu;
+                    menu.id    = str (e, "id");
                     menu.rect  = parseRect (get (e, "rect"));
                     menu.value = intg (e, "value", 1);
                     menu.textColor       = str (e, "textColor");
@@ -451,6 +458,7 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
             CcBinding cb;
             cb.cc           = intg (e, "cc", 1);
             cb.parameter    = str (e, "parameter");
+            cb.targetId     = str (e, "targetId");
             cb.groupIndex   = optI (e, "groupIndex");
             cb.controlIndex = optI (e, "controlIndex");
             cb.normMin      = dbl (e, "normMin", 0.0);

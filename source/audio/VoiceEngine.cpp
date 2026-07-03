@@ -303,7 +303,15 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         m.depth    = (float) lfo.modAmount;
         m.shape    = lfoShapeFromString (lfo.shape);
         m.bindings = lfo.bindings;
-        for (const auto& b : lfo.bindings)
+        // Resolve id-based group targets → indices ONCE here, so the audio thread
+        // (applyLfoBlock) reads plain group indices. targetId is a group uid during the
+        // migration; fall back to the binding's own groupIndex when absent.
+        for (auto& b : m.bindings)
+            if (b.targetId.isNotEmpty())
+                for (int gi = 0; gi < mode.groups.size(); ++gi)
+                    if (mode.groups.getReference (gi).uid == b.targetId) { b.groupIndex = gi; break; }
+
+        for (const auto& b : m.bindings)
             if (b.parameter == "AMP_VOLUME")
             {
                 if (b.groupIndex)

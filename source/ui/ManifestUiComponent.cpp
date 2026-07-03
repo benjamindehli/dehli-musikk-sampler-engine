@@ -234,6 +234,13 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
 
     auto& tab = uiData.tabs.getReference (0);   // Omni-84 has a single "main" tab
 
+    // id → controlIndex, so id-based binding targets resolve to the controlIndex-keyed
+    // maps built below (lights/knobs/buttons/menus).
+    for (const auto& c  : tab.controls) if (c.id.isNotEmpty()  && c.controlIndex)  idToCI[c.id]  = *c.controlIndex;
+    for (const auto& b  : tab.buttons)  if (b.id.isNotEmpty()  && b.controlIndex)  idToCI[b.id]  = *b.controlIndex;
+    for (const auto& m  : tab.menus)    if (m.id.isNotEmpty()  && m.controlIndex)  idToCI[m.id]  = *m.controlIndex;
+    for (const auto& im : tab.images)   if (im.id.isNotEmpty() && im.controlIndex)  idToCI[im.id] = *im.controlIndex;
+
     // Lights first so the knobs/buttons paint over them if they overlap.
     for (auto& im : tab.images)
     {
@@ -442,12 +449,23 @@ void ManifestUiComponent::refresh (
     applyAllVisibility();   // selector knobs may have moved → resync LED displays
 }
 
+int ManifestUiComponent::controlIndexForBinding (const Binding& b) const
+{
+    if (b.targetId.isNotEmpty())
+        if (auto it = idToCI.find (b.targetId); it != idToCI.end())
+            return it->second;
+    return b.controlIndex.value_or (-1);
+}
+
 void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourceValue)
 {
-    if (b.type != "control" || ! b.controlIndex)
+    if (b.type != "control")
         return;
     const bool isOpacity = b.parameter == "OPACITY";
     if (! isOpacity && b.parameter != "VISIBLE")
+        return;
+    const int ci = controlIndexForBinding (b);
+    if (ci < 0)
         return;
 
     // Output value: a translation table maps the source (knob) value; otherwise a
@@ -461,7 +479,7 @@ void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourc
         out = (double) b.translationValue;
 
     // Lights keep their dedicated path (image-alpha crossfade for OPACITY).
-    const int lidx = lightControlIndex.indexOf (*b.controlIndex);
+    const int lidx = lightControlIndex.indexOf (ci);
     if (lidx >= 0)
     {
         if (isOpacity) lights[lidx]->setImageAlpha ((float) out);
@@ -470,7 +488,7 @@ void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourc
     }
 
     // Any other widget (knob/button/menu) addressed by its document index.
-    if (auto it = widgetByIndex.find (*b.controlIndex); it != widgetByIndex.end())
+    if (auto it = widgetByIndex.find (ci); it != widgetByIndex.end())
     {
         if (isOpacity) it->second->setAlpha ((float) out);
         else           it->second->setVisible (out > 0.5);
@@ -492,12 +510,15 @@ void ManifestUiComponent::applyStateVisibility (const ButtonState& state)
 void ManifestUiComponent::applyValueBindings (const juce::Array<Binding>& bindings)
 {
     for (const auto& b : bindings)
-        if (b.type == "control" && b.controlIndex && b.parameter == "VALUE")
+        if (b.type == "control" && b.parameter == "VALUE")
         {
+            const int ci = controlIndexForBinding (b);
+            if (ci < 0)
+                continue;
             const double v = b.translationValue.isBool()
                                ? (((bool) b.translationValue) ? 1.0 : 0.0)
                                : b.translationValue.toString().getDoubleValue();
-            setWidgetValue (*b.controlIndex, v);
+            setWidgetValue (ci, v);
         }
 }
 
@@ -563,10 +584,10 @@ void ManifestUiComponent::applyLightBindings (const ButtonState& state)
 
     for (const auto& bind : state.bindings)
     {
-        if (bind.parameter != "PATH" || ! bind.translationValue.isString() || ! bind.controlIndex)
+        if (bind.parameter != "PATH" || ! bind.translationValue.isString())
             continue;
 
-        const int idx = lightControlIndex.indexOf (*bind.controlIndex);
+        const int idx = lightControlIndex.indexOf (controlIndexForBinding (bind));
         if (idx >= 0)
             lights[idx]->setImage (provider (bind.translationValue.toString()));
     }

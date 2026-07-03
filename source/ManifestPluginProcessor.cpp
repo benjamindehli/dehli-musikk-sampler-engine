@@ -212,11 +212,20 @@ void ManifestPluginProcessor::applyMenuIrFor (int modeIndex)
         return;
     const auto& tab = m.ui.tabs.getReference (0);
 
-    auto applyIrBindings = [this] (const juce::Array<Binding>& bindings)
+    auto applyIrBindings = [this, &m] (const juce::Array<Binding>& bindings)
     {
         for (const auto& b : bindings)
-            if (b.parameter == "FX_IR_FILE" && b.effectIndex && b.translationValue.isString())
-                engine.setEffectIr (*b.effectIndex, b.translationValue.toString());
+            if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
+            {
+                // Resolve the target effect by id (targetId), falling back to effectIndex.
+                int fx = -1;
+                if (b.targetId.isNotEmpty())
+                    for (int i = 0; i < m.effects.size(); ++i)
+                        if (m.effects.getReference (i).id == b.targetId) { fx = i; break; }
+                if (fx < 0) fx = b.effectIndex.value_or (-1);
+                if (fx >= 0)
+                    engine.setEffectIr (fx, b.translationValue.toString());
+            }
     };
 
     // Menu (cabinet/amp) FX_IR_FILE → selected option.

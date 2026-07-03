@@ -63,6 +63,11 @@ private:
     // lights (LED segments — pitch up/down crossfade), OR any knob/button/menu (e.g.
     // EDB-Orgel's MIX/MOD toggle hides/shows whole banks of controls, and the
     // patch-load dialog).
+    // Resolve a binding's UI target to a document-order controlIndex: prefer the id
+    // (targetId → element id), falling back to the legacy controlIndex. Lets the
+    // existing controlIndex-keyed maps stay while bindings become id-based.
+    int  controlIndexForBinding (const Binding& b) const;
+
     void applyVisibilityBinding  (const Binding& b, double sourceValue);
     void applyVisibilityBindings (const Control& c, double value);      // knob-driven
     void applyStateVisibility    (const ButtonState& state);            // button-driven
@@ -100,6 +105,9 @@ private:
     // controlIndex → index into buttons[]/knobs[]/menus[], for VALUE bindings that
     // set another widget's value (need the model + index to fire the callback).
     std::map<int, int>                buttonIdxByCI, knobIdxByCI, menuIdxByCI;
+    // element id → controlIndex, so id-based binding targets resolve to the existing
+    // controlIndex-keyed maps above.
+    std::map<juce::String, int>       idToCI;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestUiComponent)
 };
