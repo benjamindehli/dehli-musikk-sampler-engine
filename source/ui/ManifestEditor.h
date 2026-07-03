@@ -40,6 +40,9 @@ public:
         implementation reads-and-resets. Default 0 = no meter (host opts in). */
     virtual float readOutputPeak() { return 0.0f; }
 
+    /** Plugin version string (e.g. "0.1.0") shown in the top strip. Empty → no label. */
+    virtual juce::String getPluginVersion() const { return {}; }
+
     /** The editor installs this; the host invokes it (message thread) after the
         active mode actually changes, so the editor can rebuild its face. */
     std::function<void()> onModeChanged;

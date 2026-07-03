@@ -38,7 +38,9 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     : host (h),
       keyboard (h.getKeyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
 {
-    versionLabel.setText (SamplerEngine::getVersion(), juce::dontSendNotification);
+    const auto pluginVer = host.getPluginVersion();
+    versionLabel.setText (pluginVer.isNotEmpty() ? "v" + pluginVer : juce::String(),
+                          juce::dontSendNotification);
     versionLabel.setJustificationType (juce::Justification::centredRight);
     versionLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
     addAndMakeVisible (versionLabel);
@@ -283,16 +285,19 @@ void ManifestEditor::resized()
     auto area = getLocalBounds();
 
     auto top = area.removeFromTop (kTopStrip);
+    // Combo + steppers are trimmed to the text-box height (22) and centred in the
+    // strip so their heights match the number inputs.
+    constexpr int kCtrlH = 22;
     modeLabel.setBounds (top.removeFromLeft (46));
-    modeSelector.setBounds (top.removeFromLeft (220));
-    versionLabel.setBounds (top.removeFromRight (190));
+    modeSelector.setBounds (top.removeFromLeft (220).withSizeKeepingCentre (220, kCtrlH));
     top.removeFromLeft (12);
     bendLabel.setBounds (top.removeFromLeft (40));
     bendRangeSlider.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, kCtrlH));
 
     // Right side: version label, then one group laid out left→right —
     // "Out" label · master fader · level meter.
-    outputMeter.setBounds (meterArea);
+    versionLabel.setBounds (top.removeFromRight (90));
+    auto outArea = top.removeFromRight (230).reduced (8, 3);
     meterLabel.setBounds (outArea.removeFromLeft (28));                 // "Out"
     outputMeter.setBounds (outArea.removeFromRight (60).reduced (0, 4)); // meter on the right
     masterSlider.setBounds (outArea.reduced (6, 0));                    // fader fills the middle

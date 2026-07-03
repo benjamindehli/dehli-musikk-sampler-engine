@@ -32,6 +32,7 @@ public:
     struct Assets
     {
         juce::String name;                  // product name (JucePlugin_Name)
+        juce::String version;               // plugin version (JucePlugin_VersionString), for the UI
         const char*  manifestJson = nullptr;
         int          manifestJsonSize = 0;
         // Look up an embedded resource by its original file name (e.g. "Bass_1C.flac",
@@ -82,6 +83,7 @@ public:
         return &library.modes.getReference (i);
     }
     float readOutputPeak() override { return outputPeak.exchange (0.0f, std::memory_order_relaxed); }
+    juce::String getPluginVersion() const override { return assets.version; }
 
 protected:
     SamplerEngine& getEngine() noexcept { return engine; }
