@@ -81,6 +81,7 @@ private:
     juce::Slider pitchWheel, modWheel;
     WheelLookAndFeel wheelLnf;
     StandaloneWindowLookAndFeel standaloneLnf;
+    juce::LookAndFeel_V4 stripLnf;   // grayscale scheme for the top-strip combo/steppers
     juce::Component::SafePointer<juce::DocumentWindow> themedWindow;   // standalone window we styled (if any)
     juce::Slider bendRangeSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bendRangeAttachment;

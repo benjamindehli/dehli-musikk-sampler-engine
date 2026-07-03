@@ -101,6 +101,26 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     addAndMakeVisible (masterSlider);
     masterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         host.getApvts(), params::id::masterOutput, masterSlider);
+
+    // Monochrome grayscale scheme for the top-strip combo + steppers, so they match
+    // the plugin's dark theme instead of JUCE's default blue-grey.
+    juce::LookAndFeel_V4::ColourScheme grayscale {
+        0xff202122,  // windowBackground
+        0xff2c2d2e,  // widgetBackground (combo / textbox fill)
+        0xff202122,  // menuBackground (dropdown)
+        0xff555657,  // outline
+        0xffffffff,  // defaultText
+        0xff4a4b4c,  // defaultFill (slider track/thumb, +/- button face)
+        0xffffffff,  // highlightedText
+        0xff6a6b6c,  // highlightedFill
+        0xffffffff   // menuText
+    };
+    stripLnf.setColourScheme (grayscale);
+    for (juce::Component* c : { static_cast<juce::Component*> (&modeSelector),
+                                static_cast<juce::Component*> (&bendRangeSlider),
+                                static_cast<juce::Component*> (&masterSlider) })
+        c->setLookAndFeel (&stripLnf);
+
     meterLabel.setText ("Out", juce::dontSendNotification);
     meterLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (meterLabel);
@@ -123,6 +143,7 @@ ManifestEditor::~ManifestEditor()
     host.onModeChanged = nullptr;
     pitchWheel.setLookAndFeel (nullptr);
     modWheel.setLookAndFeel (nullptr);
+    modeSelector.setLookAndFeel (nullptr);
     bendRangeSlider.setLookAndFeel (nullptr);
     masterSlider.setLookAndFeel (nullptr);
     if (themedWindow != nullptr)   // detach before our LnF member dies (standalone only)
