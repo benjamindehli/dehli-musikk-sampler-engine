@@ -854,6 +854,9 @@ CurvedAdsr::Parameters VoiceEngine::effectiveAdsr (const CurvedAdsr::Parameters&
     if (ovDecay   >= 0.0f) p.decay   = ovDecay;
     if (ovSustain >= 0.0f) p.sustain = ovSustain;
     if (ovRelease >= 0.0f) p.release = ovRelease;
+    if (ovAttackCurve  > kNoCurve) p.attackCurve  = ovAttackCurve;
+    if (ovDecayCurve   > kNoCurve) p.decayCurve   = ovDecayCurve;
+    if (ovReleaseCurve > kNoCurve) p.releaseCurve = ovReleaseCurve;
     // Per-group overrides take precedence over the global ones.
     if (groupIndex >= 0 && groupIndex < groupAttack.size())
     {
@@ -871,6 +874,10 @@ void VoiceEngine::setAmpAttack  (float s) { ovAttack  = s; }
 void VoiceEngine::setAmpDecay   (float s) { ovDecay   = s; }
 void VoiceEngine::setAmpSustain (float l) { ovSustain = l; }
 void VoiceEngine::setAmpRelease (float s) { ovRelease = s; }
+
+void VoiceEngine::setAmpAttackCurve  (float c) { ovAttackCurve  = c; }
+void VoiceEngine::setAmpDecayCurve   (float c) { ovDecayCurve   = c; }
+void VoiceEngine::setAmpReleaseCurve (float c) { ovReleaseCurve = c; }
 
 void VoiceEngine::setGroupAmpAttack  (int g, float s) { if (g >= 0 && g < groupAttack.size())  groupAttack.set  (g, s); }
 void VoiceEngine::setGroupAmpDecay   (int g, float s) { if (g >= 0 && g < groupDecay.size())   groupDecay.set   (g, s); }

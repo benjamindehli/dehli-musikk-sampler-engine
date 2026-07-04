@@ -96,6 +96,9 @@ public:
     void setAmpDecay (float seconds);
     void setAmpSustain (float level);
     void setAmpRelease (float seconds);
+    void setAmpAttackCurve  (float curve);   // ENV_ATTACK_CURVE  (-100 log … +100 exp)
+    void setAmpDecayCurve   (float curve);   // ENV_DECAY_CURVE
+    void setAmpReleaseCurve (float curve);   // ENV_RELEASE_CURVE
     void setAmpVelTrack (float amount);   // global AMP_VEL_TRACK (velocity → volume)
     void setMasterVolume (float volume);                     // instrument-level AMP_VOLUME
     void setGroupVolume (int groupIndex, float volume);
@@ -156,6 +159,7 @@ private:
     FxOverride ovLfoDepth[kMaxMods];
     FxOverride ovLfoRate[kMaxMods];
     FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
+    FxOverride ovAmpAttackCurve, ovAmpDecayCurve, ovAmpReleaseCurve;   // ENV_*_CURVE knobs
     static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
     FxOverride ovGroupVol[kMaxGroupVol];
     FxOverride ovGroupTagVol[kMaxGroupVol];   // TAG_VOLUME mixer knobs

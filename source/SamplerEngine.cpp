@@ -117,7 +117,8 @@ void SamplerEngine::resetOverrides()
 {
     for (auto* o : { &ovLowpassEnabled, &ovLowpassFreq, &ovReverbMix, &ovReverbGain,
                      &ovGain, &ovWaveDrive, &ovWaveOutput, &ovMasterVol,
-                     &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease, &ovAmpVelTrack })
+                     &ovAmpAttack, &ovAmpDecay, &ovAmpSustain, &ovAmpRelease, &ovAmpVelTrack,
+                     &ovAmpAttackCurve, &ovAmpDecayCurve, &ovAmpReleaseCurve })
         o->touched.store (false);
     for (int i = 0; i < kMaxMods; ++i)
     {
@@ -202,6 +203,9 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
     if (ovAmpDecay.touched.load())   mr.voices.setAmpDecay   (ovAmpDecay.value.load());
     if (ovAmpSustain.touched.load()) mr.voices.setAmpSustain (ovAmpSustain.value.load());
     if (ovAmpRelease.touched.load()) mr.voices.setAmpRelease (ovAmpRelease.value.load());
+    if (ovAmpAttackCurve.touched.load())  mr.voices.setAmpAttackCurve  (ovAmpAttackCurve.value.load());
+    if (ovAmpDecayCurve.touched.load())   mr.voices.setAmpDecayCurve   (ovAmpDecayCurve.value.load());
+    if (ovAmpReleaseCurve.touched.load()) mr.voices.setAmpReleaseCurve (ovAmpReleaseCurve.value.load());
     if (ovAmpVelTrack.touched.load()) mr.voices.setAmpVelTrack (ovAmpVelTrack.value.load());
     if (ovMasterVol.touched.load())   masterGain = ovMasterVol.value.load();   // applied post-FX in processBlock
     for (int i = 0; i < kMaxMods; ++i)
@@ -415,6 +419,9 @@ void SamplerEngine::setAmpAttack  (float s) { ovAmpAttack.value.store (s);  ovAm
 void SamplerEngine::setAmpDecay   (float s) { ovAmpDecay.value.store (s);   ovAmpDecay.touched.store (true); }
 void SamplerEngine::setAmpSustain (float l) { ovAmpSustain.value.store (l); ovAmpSustain.touched.store (true); }
 void SamplerEngine::setAmpRelease (float s) { ovAmpRelease.value.store (s); ovAmpRelease.touched.store (true); }
+void SamplerEngine::setAmpAttackCurve  (float c) { ovAmpAttackCurve.value.store (c);  ovAmpAttackCurve.touched.store (true); }
+void SamplerEngine::setAmpDecayCurve   (float c) { ovAmpDecayCurve.value.store (c);   ovAmpDecayCurve.touched.store (true); }
+void SamplerEngine::setAmpReleaseCurve (float c) { ovAmpReleaseCurve.value.store (c); ovAmpReleaseCurve.touched.store (true); }
 void SamplerEngine::setAmpVelTrack (float a) { ovAmpVelTrack.value.store (a); ovAmpVelTrack.touched.store (true); }
 
 void SamplerEngine::setGroupVolume (int groupIndex, float volume)

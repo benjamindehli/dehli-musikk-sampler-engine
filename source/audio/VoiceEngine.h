@@ -48,6 +48,11 @@ public:
     void setAmpSustain (float level);
     void setAmpRelease (float seconds);
 
+    // Envelope curve shapes (-100 log … 0 linear … +100 exp). Sentinel = no override.
+    void setAmpAttackCurve  (float curve);
+    void setAmpDecayCurve   (float curve);
+    void setAmpReleaseCurve (float curve);
+
     // Per-group amp overrides (e.g. an organ "loudness" that lengthens only the reed
     // groups' attack, not the key-noise groups). Take precedence over the global ones.
     void setGroupAmpAttack (int groupIndex, float seconds);
@@ -187,6 +192,10 @@ private:
 
     // Runtime amp overrides (negative = none) + per-group volume multipliers.
     float ovAttack { -1.0f }, ovDecay { -1.0f }, ovSustain { -1.0f }, ovRelease { -1.0f };
+    // Envelope curve overrides. Valid curve range is [-100,+100], so a value below
+    // kNoCurve means "untouched — use the mode's curve".
+    static constexpr float kNoCurve = -1000.0f;
+    float ovAttackCurve { kNoCurve }, ovDecayCurve { kNoCurve }, ovReleaseCurve { kNoCurve };
     juce::Array<float> groupAttack, groupDecay, groupSustain, groupRelease;   // per-group (-1 = none)
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
 

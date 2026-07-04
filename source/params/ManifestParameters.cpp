@@ -33,6 +33,9 @@ static const FloatSpec kFloatSpecs[] =
     { "ENV_DECAY",           "decay",      "Decay",       false },
     { "ENV_ATTACK",          "attack",     "Attack",      false },
     { "ENV_SUSTAIN",         "sustain",    "Sustain",     false },
+    { "ENV_ATTACK_CURVE",    "attackCurve",  "Attack Curve",  false },   // -100 log … +100 exp
+    { "ENV_DECAY_CURVE",     "decayCurve",   "Decay Curve",   false },
+    { "ENV_RELEASE_CURVE",   "releaseCurve", "Release Curve", false },
     { "FX_OUTPUT_LEVEL",     "fxOutput",   "Output Level", false },   // convolution wet trim OR wave_shaper output
     { "AMP_VOLUME",          "voice",      "Voice",       true  },
     { "SEQ_PLAYBACK_RATE",   "strumSpeed", "Strum Speed", false },
@@ -240,6 +243,10 @@ static void applyBinding (SamplerEngine& eng, const Mode& mode, const Binding& b
     else if (p == "ENV_DECAY")           { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpDecay ((float) value); }
     else if (p == "ENV_SUSTAIN")         { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpSustain ((float) value); }
     else if (p == "ENV_RELEASE")         { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpRelease ((float) value); }
+    // Envelope curve shapes (-100 log … 0 linear … +100 exp). Instrument-level here.
+    else if (p == "ENV_ATTACK_CURVE")    eng.setAmpAttackCurve  ((float) value);
+    else if (p == "ENV_DECAY_CURVE")     eng.setAmpDecayCurve   ((float) value);
+    else if (p == "ENV_RELEASE_CURVE")   eng.setAmpReleaseCurve ((float) value);
     else if (p == "AMP_VOLUME")          { if (grp >= 0) eng.setGroupVolume (grp, (float) value); else eng.setMasterVolume ((float) value); }
     else if (p == "GROUP_TUNING")        eng.setGroupTuning (grp >= 0 ? grp : 0, (float) value);
     else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
