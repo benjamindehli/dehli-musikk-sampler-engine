@@ -319,6 +319,8 @@ var writeUi (const Ui& ui)
     if (ui.cropTop != 0) o.set ("cropTop", ui.cropTop);
     o.setStr ("layoutMode", ui.layoutMode);
     o.setStr ("bgMode", ui.bgMode);
+    if (ui.whiteKeyTint.isNotEmpty()) o.setStr ("whiteKeyTint", ui.whiteKeyTint);
+    if (ui.blackKeyTint.isNotEmpty()) o.setStr ("blackKeyTint", ui.blackKeyTint);
 
     juce::Array<var> tabs;
     for (const auto& t : ui.tabs)

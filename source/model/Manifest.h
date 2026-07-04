@@ -358,6 +358,11 @@ struct Ui
     juce::String bgMode;         // top_left | ...
     juce::Array<Tab> tabs;
     juce::Array<KeyboardColor> keyboardColors;
+    // Optional global per-key-type tint (ARGB hex; alpha = strength). Overlaid on ALL
+    // white / black keys respectively — independent of keyboardColors' note-range zones.
+    // e.g. whiteKeyTint "30ffcc00" = subtle yellow on white keys only. Empty = none.
+    juce::String whiteKeyTint;
+    juce::String blackKeyTint;
 };
 
 // ---------------------------------------------------------------------------

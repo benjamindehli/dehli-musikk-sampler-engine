@@ -354,6 +354,8 @@ Ui parseUi (const var& v)
     ui.cropTop    = intg (v, "cropTop", 0);
     ui.layoutMode = str (v, "layoutMode");
     ui.bgMode     = str (v, "bgMode");
+    ui.whiteKeyTint = str (v, "whiteKeyTint");
+    ui.blackKeyTint = str (v, "blackKeyTint");
 
     if (auto* tabs = get (v, "tabs").getArray())
     {

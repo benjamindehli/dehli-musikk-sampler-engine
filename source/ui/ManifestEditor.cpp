@@ -290,6 +290,7 @@ void ManifestEditor::rebuildUi()
     uiComponent->toBack();
 
     keyboard.setColourRanges (ui.keyboardColors);
+    keyboard.setKeyTints (ui.whiteKeyTint, ui.blackKeyTint);
 
     auto range = usedNoteRange (*mode);
     int lo = range.getStart(), hi = range.getEnd();
