@@ -26,6 +26,8 @@ void FxChain::prepare (double sampleRate, int maxBlockSize, int numChannels)
             s.chorusPhase = 0.0;
             s.chorusLastWet[0] = s.chorusLastWet[1] = 0.0f;
         }
+        if (s.phaser != nullptr)
+            s.phaser->prepare (spec);
     }
 
     dryBuffer.setSize ((int) spec.numChannels, (int) spec.maximumBlockSize);
@@ -45,6 +47,8 @@ void FxChain::reset()
             slotPtr->chorusPhase = 0.0;
             slotPtr->chorusLastWet[0] = slotPtr->chorusLastWet[1] = 0.0f;
         }
+        if (slotPtr->phaser != nullptr)
+            slotPtr->phaser->reset();
     }
 }
 
@@ -126,9 +130,9 @@ void FxChain::setEffects (const juce::Array<Effect>& effects, const SampleSource
             // modulated delay (see process) so it actually widens a mono source.
             slot->kind = Kind::chorus;
             slot->mix.store ((float) (e.mix ? *e.mix : 0.5));
-            slot->chorusRate     = (float) (e.rate     ? *e.rate     : 1.0);
-            slot->chorusDepth    = (float) (e.depth    ? *e.depth    : 0.25);
-            slot->chorusFeedback = juce::jlimit (-0.95f, 0.95f, (float) (e.feedback ? *e.feedback : 0.0));
+            slot->modRate.store     ((float) (e.rate  ? *e.rate  : 1.0));
+            slot->modDepth.store    ((float) (e.depth ? *e.depth : 0.25));
+            slot->modFeedback.store (juce::jlimit (-0.95f, 0.95f, (float) (e.feedback ? *e.feedback : 0.0)));
             slot->chorusDelay = std::make_unique<
                 juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>>();
             if (prepared)
@@ -137,6 +141,19 @@ void FxChain::setEffects (const juce::Array<Effect>& effects, const SampleSource
                 slot->chorusDelay->prepare (spec);
                 slot->chorusDelay->reset();
             }
+        }
+        else if (e.type == "phaser")
+        {
+            // Allpass sweep. mix is dynamic (On button drives FX_MIX); rate/depth/feedback
+            // are the Rate/Color controls (FX_MOD_RATE / FX_MOD_DEPTH / FX_FEEDBACK).
+            slot->kind = Kind::phaser;
+            slot->mix.store         ((float) (e.mix ? *e.mix : 1.0));
+            slot->modRate.store     ((float) (e.rate  ? *e.rate  : 0.5));
+            slot->modDepth.store    ((float) (e.depth ? *e.depth : 0.5));
+            slot->modFeedback.store (juce::jlimit (-0.95f, 0.95f, (float) (e.feedback ? *e.feedback : 0.0)));
+            slot->phaser = std::make_unique<juce::dsp::Phaser<float>>();
+            if (prepared)
+                slot->phaser->prepare (spec);
         }
         // else: unknown → passthrough.
 
@@ -203,9 +220,9 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
 
             const auto  sr        = (float) spec.sampleRate;
             const float centre    = juce::jmax (2.0f, s.chorusCentreMs) * 0.001f * sr;   // base delay (samples)
-            const float modRange  = juce::jlimit (0.0f, centre - 1.0f, s.chorusDepth * 0.010f * sr); // depth → ±(depth·10 ms)
-            const float fb        = s.chorusFeedback;
-            const double inc      = juce::MathConstants<double>::twoPi * (double) juce::jmax (0.01f, s.chorusRate) / (double) sr;
+            const float modRange  = juce::jlimit (0.0f, centre - 1.0f, s.modDepth.load() * 0.010f * sr); // depth → ±(depth·10 ms)
+            const float fb        = s.modFeedback.load();
+            const double inc      = juce::MathConstants<double>::twoPi * (double) juce::jmax (0.01f, s.modRate.load()) / (double) sr;
             const int    lastCh   = juce::jmin (numCh, 2);   // widen the first two channels; extra channels pass dry
 
             for (int i = 0; i < numSamples; ++i)
@@ -229,6 +246,18 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
                 if (s.chorusPhase >= juce::MathConstants<double>::twoPi)
                     s.chorusPhase -= juce::MathConstants<double>::twoPi;
             }
+        }
+        else if (s.kind == Kind::phaser && s.phaser != nullptr)
+        {
+            const float mix = juce::jlimit (0.0f, 1.0f, s.mix.load());
+            if (mix <= 0.0f)
+                continue;   // off (mix 0 / disabled) — skip
+            s.phaser->setRate     (juce::jmax (0.01f, s.modRate.load()));
+            s.phaser->setDepth    (juce::jlimit (0.0f, 1.0f, s.modDepth.load()));
+            s.phaser->setFeedback (juce::jlimit (-0.95f, 0.95f, s.modFeedback.load()));
+            s.phaser->setMix      (mix);
+            juce::dsp::ProcessContextReplacing<float> ctx (block);
+            s.phaser->process (ctx);
         }
         else if (s.kind == Kind::waveShaper)
         {
@@ -262,6 +291,14 @@ void FxChain::setEffectParam (int index, const juce::String& parameter, float va
     auto& s = *slots[(size_t) index];
     if (parameter == "FX_FILTER_FREQUENCY")
         s.frequency.store (value);
+    else if (parameter == "FX_FILTER_RESONANCE")
+        s.resonance.store (value);
+    else if (parameter == "FX_MOD_RATE")
+        s.modRate.store (value);
+    else if (parameter == "FX_MOD_DEPTH")
+        s.modDepth.store (value);
+    else if (parameter == "FX_FEEDBACK")
+        s.modFeedback.store (value);
     else if (parameter == "FX_MIX")
         s.mix.store (value);
     else if (parameter == "FX_DRIVE")

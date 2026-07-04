@@ -45,8 +45,10 @@ double evalTableLinear (const juce::String& table, double x)
 class ManifestUiComponent::FilmstripKnob : public juce::Component
 {
 public:
-    FilmstripKnob (juce::Image strip, int numFrames, double minV, double maxV, double initial)
-        : film (strip), frames (juce::jmax (1, numFrames)), minVal (minV), maxVal (maxV)
+    FilmstripKnob (juce::Image strip, int numFrames, double minV, double maxV, double initial,
+                   bool horizontalDrag = false)
+        : film (strip), frames (juce::jmax (1, numFrames)), minVal (minV), maxVal (maxV),
+          horizontal (horizontalDrag)
     {
         defaultVal = juce::jlimit (minVal, maxVal, initial);   // manifest value = reset target
         value = defaultVal;
@@ -100,6 +102,7 @@ public:
             repaint();
             if (onChange) onChange (value);
         }
+        dragStartX = e.position.x;
         dragStartY = e.position.y;
         dragStartVal = value;
         if (onShowValue) onShowValue (*this, valueText());
@@ -111,8 +114,12 @@ public:
         if (range <= 0.0)
             return;
 
-        const double dy = (double) (dragStartY - e.position.y);     // drag up = increase
-        double norm = (dragStartVal - minVal) / range + dy / 200.0; // 200 px = full sweep
+        // Horizontal faders drag left/right (right = more); everything else up/down (up = more).
+        // Horizontal faders are short, so use a tighter px-per-sweep (more sensitive).
+        const double delta = horizontal ? (double) (e.position.x - dragStartX)
+                                        : (double) (dragStartY - e.position.y);
+        const double pxPerSweep = horizontal ? 120.0 : 200.0;
+        double norm = (dragStartVal - minVal) / range + delta / pxPerSweep;
         value = minVal + juce::jlimit (0.0, 1.0, norm) * range;
         repaint();
         if (onChange)
@@ -130,7 +137,8 @@ private:
     int frames;
     double minVal, maxVal, value { 0.0 };
     double defaultVal { 0.0 };
-    float dragStartY { 0.0f };
+    bool horizontal { false };
+    float dragStartX { 0.0f }, dragStartY { 0.0f };
     double dragStartVal { 0.0 };
 };
 
@@ -262,7 +270,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         auto* knob = new FilmstripKnob (provider ? provider (c.skin->image) : juce::Image(),
                                         c.skin->numFrames.value_or (1),
                                         c.min.value_or (0.0), c.max.value_or (1.0),
-                                        c.value.value_or (c.min.value_or (0.0)));
+                                        c.value.value_or (c.min.value_or (0.0)),
+                                        c.style.contains ("horizontal"));   // custom_skin_horizontal_drag → drag L/R
         const Control* cp = &c;
         knob->onChange = [this, cp] (double v)
         {

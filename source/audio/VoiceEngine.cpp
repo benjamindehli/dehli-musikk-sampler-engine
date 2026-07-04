@@ -34,9 +34,9 @@ float lfoWave (int shape, double phaseCycles)
 CurvedAdsr::Parameters resolveAdsr (const AmpEnvelope& amp, const Group& g)
 {
     CurvedAdsr::Parameters p;
-    p.attack  = (float) amp.attack;
+    p.attack  = (float) (g.attack  ? *g.attack  : amp.attack);
     p.decay   = (float) (g.decay   ? *g.decay   : amp.decay);
-    p.sustain = (float) amp.sustain;
+    p.sustain = (float) (g.sustain ? *g.sustain : amp.sustain);
     p.release = (float) (g.release ? *g.release : amp.release);
     // Curve shape: manifest value if present, else DecentSampler defaults
     // (CurvedAdsr::Parameters already defaults to attack -100, decay/release +100).
@@ -177,6 +177,7 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupSustain.clearQuick(); groupSustain.insertMultiple (0, -1.0f, numGroups);
     groupRelease.clearQuick(); groupRelease.insertMultiple (0, -1.0f, numGroups);
     groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
+    hasPerSampleDrift = false; driftDepthThisBlock = 0.0f; driftRateHz = 0.71; driftSeed = 0;
     sustainValue = 0; sustainActive = false;
     for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
 
@@ -233,6 +234,8 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
             z.rootNote = s.rootNote;
             z.buffer = buffer;
             z.pitchKeyTrack = s.pitchKeyTrack || groupPitchKeyTrack;
+            z.pitchDrift = (float) s.pitchDrift.value_or (0.0);
+            if (z.pitchDrift > 0.0f) hasPerSampleDrift = true;
 
             // Loop, validated against the actual decoded length — out-of-range
             // points (e.g. authored against a stale .dspreset length) fall back to
@@ -448,6 +451,10 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->groupIndex = zone.groupIndex;
     v->tags = zone.tags;
     v->silencedByTags = zone.silencedByTags;
+    v->pitchDrift = zone.pitchDrift;
+    // Independent per-voice drift phase, spread by the golden ratio so successive notes
+    // wander out of sync with each other.
+    v->driftPhase = std::fmod ((double) (driftSeed++) * 0.61803398875, 1.0) * juce::MathConstants<double>::twoPi;
 
     double rate = zone.buffer->sampleRate / sampleRate;
     if (zone.pitchKeyTrack)
@@ -570,6 +577,19 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
         if (v.groupIndex >= 0 && v.groupIndex < groupTuningModMul.size())
             tuneMul *= groupTuningModMul[v.groupIndex];
 
+        // Independent per-voice pitch drift (string-machine oscillator wander): active when
+        // the Drift switch turned the GLOBAL_TUNING modulator on and this voice's sample has
+        // a drift depth. Block-rate (drift is <1 Hz). kDriftSemis is the tuning knob.
+        if (driftDepthThisBlock > 0.0f && v.pitchDrift > 0.0f)
+        {
+            constexpr double kDriftSemis = 2.0;   // max ± semitones at pitchDrift 1.0 (tune by ear)
+            const double driftSemis = std::sin (v.driftPhase) * (double) v.pitchDrift * kDriftSemis;
+            tuneMul *= std::pow (2.0, driftSemis / 12.0);
+            v.driftPhase += juce::MathConstants<double>::twoPi * driftRateHz * (double) numSamples / sampleRate;
+            if (v.driftPhase >= juce::MathConstants<double>::twoPi)
+                v.driftPhase = std::fmod (v.driftPhase, juce::MathConstants<double>::twoPi);
+        }
+
         // Voices in a group with its own FX chain render into that group's scratch
         // buffer (filtered + gained as a group post-loop); others go straight out.
         juce::AudioBuffer<float>* target = &buffer;
@@ -662,6 +682,7 @@ void VoiceEngine::applyLfoBlock (int numSamples)
         }
     globalTuningMul = 1.0;
     for (auto& g : groupTuningModMul) g = 1.0;
+    driftDepthThisBlock = 0.0f;   // set by the GLOBAL_TUNING modulator below when per-sample drift is active
 
     // Tuning of the tremulant relative to the preset's binding ranges: the amplitude
     // (gain) swing on a per-group LEVEL effect is deepened a little, and pitch vibrato
@@ -704,6 +725,16 @@ void VoiceEngine::applyLfoBlock (int numSamples)
                 // Without a range, `modAmount` alone is near-zero, so treat it as a
                 // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible gentle
                 // wander that centres on the true pitch.
+                // Per-sample drift: this GLOBAL_TUNING modulator drives an INDEPENDENT
+                // per-voice drift (its depth = the Drift button's on/off) instead of the
+                // shared globalTuningMul; the actual pitch swing is per voice (see renderChunk).
+                if (b.parameter == "GLOBAL_TUNING" && hasPerSampleDrift)
+                {
+                    driftDepthThisBlock = m.depth;
+                    driftRateHz = m.freqHz;
+                    continue;
+                }
+
                 const bool hasRange = b.translationOutputMin.has_value() || b.translationOutputMax.has_value();
                 const double semis = hasRange ? val * kTuneScale
                                               : waveMid * (double) m.depth * kWowSemis;

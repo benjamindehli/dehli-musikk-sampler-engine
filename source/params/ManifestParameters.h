@@ -17,6 +17,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <model/Manifest.h>
 #include <SamplerEngine.h>
+#include <atomic>
+#include <cstdint>
 
 namespace dm::params
 {
@@ -35,9 +37,15 @@ namespace id
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLibrary& library);
 
 /** Apply the current parameter values to the engine for `mode`. Idempotent; call
-    every block so a mode switch (which resets engine overrides) is re-honoured. */
+    every block so a mode switch (which resets engine overrides) is re-honoured.
+    `buttonClickSeq` (per-tab-button-index click counters, or nullptr) orders the button
+    application by recency: buttons are applied oldest-click-first so that among any set
+    of buttons targeting the SAME effect (a radio group, e.g. Strykebrett's ensemble
+    O/Acc/Solo/Organ) the most recently clicked one wins — and clicking an unrelated
+    button never disturbs that. Never-clicked buttons keep index order. */
 void applyToEngine (SamplerEngine& engine, const Mode& mode,
-                    juce::AudioProcessorValueTreeState& apvts);
+                    juce::AudioProcessorValueTreeState& apvts,
+                    const std::atomic<std::uint32_t>* buttonClickSeq = nullptr);
 
 /** Map incoming MIDI CC (mod wheel etc.) to params per the mode's CC bindings. */
 void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,

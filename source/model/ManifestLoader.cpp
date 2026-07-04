@@ -135,6 +135,7 @@ Sample parseSample (const var& v, ManifestParseResult& res, const juce::String& 
     s.lengthFrames  = optI (v, "lengthFrames");
     s.sampleRate    = optD (v, "sampleRate");
     s.pitchKeyTrack = boolean (v, "pitchKeyTrack", false);
+    s.pitchDrift    = optD (v, "pitchDrift");
 
     s.start         = optI (v, "start");
     s.end           = optI (v, "end");
@@ -189,7 +190,9 @@ Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& wh
         g.silencing = s;
     }
 
+    g.attack        = optD (v, "attack");
     g.decay         = optD (v, "decay");
+    g.sustain       = optD (v, "sustain");
     g.release       = optD (v, "release");
     g.volume        = optD (v, "volume");
     g.velTrack      = optD (v, "velTrack");

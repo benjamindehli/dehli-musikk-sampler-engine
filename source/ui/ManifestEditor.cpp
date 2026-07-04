@@ -217,6 +217,7 @@ void ManifestEditor::rebuildUi()
     uiComponent->onButtonChanged = [this] (const Button&, int buttonIndex, int stateIndex)
     {
         setParam (params::buttonParamId (buttonIndex).toRawUTF8(), (float) stateIndex);
+        host.noteButtonClicked (buttonIndex);   // radio groups: last clicked wins
     };
     uiComponent->onMenuChanged = [this] (const Menu&, int idx)
     {

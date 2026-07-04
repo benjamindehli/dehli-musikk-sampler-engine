@@ -58,31 +58,33 @@ public:
     void setWaveShaperOutput (float level);  // wave_shaper output level (clamped 0..1)
 
 private:
-    enum class Kind { passthrough, lowpass, highpass, convolution, gain, waveShaper, chorus };
+    enum class Kind { passthrough, lowpass, highpass, convolution, gain, waveShaper, chorus, phaser };
 
     struct Slot
     {
         Kind kind { Kind::passthrough };
         std::atomic<bool>  enabled { true };
         std::atomic<float> frequency { 20000.0f };  // lowpass cutoff (Hz)
-        std::atomic<float> resonance { 0.707f };     // lowpass Q
-        std::atomic<float> mix { 0.0f };             // convolution/chorus dry/wet 0..1 (1 = fully wet)
+        std::atomic<float> resonance { 0.707f };     // lowpass Q (FX_FILTER_RESONANCE)
+        std::atomic<float> mix { 0.0f };             // convolution/chorus/phaser dry/wet 0..1 (1 = fully wet)
         std::atomic<float> wetGainDb { 0.0f };       // convolution wet trim (dB, ±) to balance vs dry
         std::atomic<float> gainLinear { 1.0f };      // gain effect (linear)
         std::atomic<float> drive { 1.0f };           // wave_shaper input gain
         std::atomic<float> output { 1.0f };          // wave_shaper output level (0..1)
         bool normalize { true };                     // convolution: normalise the IR (off = as recorded)
-        // chorus / stereo widener: static params from the effect, plus per-channel
-        // delay-line state. The two channels are modulated in ANTI-PHASE so a mono
-        // source gains real stereo width (juce::dsp::Chorus can't — it processes every
-        // channel identically). chorusDelay is null unless this slot is a chorus.
-        float chorusRate { 1.0f }, chorusDepth { 0.25f }, chorusFeedback { 0.0f }, chorusCentreMs { 12.0f };
+        // Modulation params shared by chorus + phaser (runtime: FX_MOD_RATE / FX_MOD_DEPTH /
+        // FX_FEEDBACK). chorus is a hand-rolled ANTI-PHASE stereo delay (juce::dsp::Chorus
+        // processes every channel identically → can't widen a mono source); phaser uses
+        // juce::dsp::Phaser directly. chorusDelay/phaser are null unless that's the slot kind.
+        std::atomic<float> modRate { 1.0f }, modDepth { 0.25f }, modFeedback { 0.0f };
+        float  chorusCentreMs { 12.0f };
         double chorusPhase { 0.0 };
         float  chorusLastWet[2] { 0.0f, 0.0f };
 
         juce::dsp::StateVariableTPTFilter<float> filter;
         std::unique_ptr<juce::dsp::Convolution> convolution;
         std::unique_ptr<juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>> chorusDelay;
+        std::unique_ptr<juce::dsp::Phaser<float>> phaser;
     };
 
     juce::dsp::ProcessSpec spec {};

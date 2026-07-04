@@ -1,6 +1,8 @@
 #include "ManifestParameters.h"
 #include <set>
 #include <map>
+#include <algorithm>
+#include <cstdint>
 
 namespace dm::params
 {
@@ -22,6 +24,10 @@ struct FloatSpec
 static const FloatSpec kFloatSpecs[] =
 {
     { "FX_FILTER_FREQUENCY", "filter",     "Filter",      false },
+    { "FX_FILTER_RESONANCE", "resonance",  "Resonance",   false },
+    { "FX_MOD_RATE",         "fxModRate",  "Mod Rate",    false },   // chorus/phaser rate
+    { "FX_MOD_DEPTH",        "fxModDepth", "Mod Depth",   false },   // chorus/phaser depth
+    { "FX_FEEDBACK",         "fxFeedback", "Feedback",    false },   // phaser feedback / chorus
     { "FX_MIX",              "reverbMix",  "Reverb Mix",  false },
     { "ENV_RELEASE",         "release",    "Release",     false },
     { "ENV_DECAY",           "decay",      "Decay",       false },
@@ -211,6 +217,9 @@ static void applyBinding (SamplerEngine& eng, const Mode& mode, const Binding& b
         else if (fx >= 0)       eng.setEffectParam (fx, p, (float) value);
         else                    eng.setLowpassFrequency ((float) value);
     }
+    // VCF resonance + chorus/phaser modulation params: route to the addressed effect.
+    else if (p == "FX_FILTER_RESONANCE") { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); }
+    else if (p == "FX_MOD_RATE" || p == "FX_MOD_DEPTH" || p == "FX_FEEDBACK") { if (fx >= 0) eng.setEffectParam (fx, p, (float) value); }
     // Effect params: address a specific instrument effect by id when known;
     // FxChain routes FX_OUTPUT_LEVEL by the slot's kind (wave_shaper vs convolution).
     else if (p == "FX_MIX")              { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setReverbMix ((float) value); }
@@ -376,7 +385,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
 // ---------------------------------------------------------------------------
 
 void applyToEngine (SamplerEngine& engine, const Mode& mode,
-                    juce::AudioProcessorValueTreeState& apvts)
+                    juce::AudioProcessorValueTreeState& apvts,
+                    const std::atomic<std::uint32_t>* buttonClickSeq)
 {
     if (mode.ui.tabs.isEmpty())
         return;
@@ -427,8 +437,21 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
         }
     }
 
-    for (int i = 0; i < tab.buttons.size(); ++i)
+    // Apply buttons oldest-click-first (never-clicked keep index order). Among any set
+    // of buttons targeting the SAME effect (a radio group, e.g. the ensemble O/Acc/Solo/
+    // Organ), the most-recently-clicked is applied LAST and wins — and clicking an
+    // unrelated button doesn't change the ensemble's winner. Snapshot the seq first so
+    // the sort sees a stable ordering.
+    constexpr int kMaxBtn = 64;
+    const int nB = juce::jmin (tab.buttons.size(), kMaxBtn);
+    int order[kMaxBtn];
+    std::uint32_t seq[kMaxBtn];
+    for (int i = 0; i < nB; ++i) { order[i] = i; seq[i] = buttonClickSeq ? buttonClickSeq[i].load() : 0u; }
+    std::stable_sort (order, order + nB, [&seq] (int a, int b) { return seq[a] < seq[b]; });
+
+    for (int k = 0; k < nB; ++k)
     {
+        const int i = order[k];
         const auto& btn = tab.buttons.getReference (i);
         if (btn.states.isEmpty()) continue;
         const int stateIndex = juce::jlimit (0, btn.states.size() - 1, (int) raw (buttonId (i)));

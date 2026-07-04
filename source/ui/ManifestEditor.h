@@ -43,6 +43,11 @@ public:
     /** Plugin version string (e.g. "0.1.0") shown in the top strip. Empty → no label. */
     virtual juce::String getPluginVersion() const { return {}; }
 
+    /** A UI button was clicked (its index in the tab). Lets the host resolve radio-style
+        button groups by "last clicked wins" — momentary buttons that all target the same
+        effects (e.g. Strykebrett's ensemble O/Acc/Solo/Organ). Default: no-op. */
+    virtual void noteButtonClicked (int /*buttonIndex*/) {}
+
     /** The editor installs this; the host invokes it (message thread) after the
         active mode actually changes, so the editor can rebuild its face. */
     std::function<void()> onModeChanged;

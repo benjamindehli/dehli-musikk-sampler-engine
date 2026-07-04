@@ -93,6 +93,7 @@ var writeSample (const Sample& s)
     o.setOpt ("lengthFrames", s.lengthFrames);
     o.setOpt ("sampleRate", s.sampleRate);
     o.set ("pitchKeyTrack", s.pitchKeyTrack);
+    o.setOpt ("pitchDrift", s.pitchDrift);
     o.setOpt ("start", s.start);
     o.setOpt ("end", s.end);
     o.setOpt ("volume", s.volume);
@@ -155,7 +156,9 @@ var writeGroup (const Group& g)
         o.set ("silencing", s.toVar());
     }
 
+    o.setOpt ("attack", g.attack);
     o.setOpt ("decay", g.decay);
+    o.setOpt ("sustain", g.sustain);
     o.setOpt ("release", g.release);
     o.setOpt ("volume", g.volume);
     o.setOpt ("velTrack", g.velTrack);

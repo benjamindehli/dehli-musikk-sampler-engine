@@ -275,7 +275,7 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         {
             params::applyCcToParams (midi, *m, *apvts);
             params::applyNoteSwitches (midi, *m, *apvts);
-            params::applyToEngine (engine, *m, *apvts);
+            params::applyToEngine (engine, *m, *apvts, buttonClickSeq);
         }
     }
 

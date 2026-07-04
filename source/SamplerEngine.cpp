@@ -142,6 +142,10 @@ void SamplerEngine::resetOverrides()
         ovEffectLevel[i].touched.store (false);
         ovEffectOutput[i].touched.store (false);
         ovEffectFreq[i].touched.store (false);
+        ovEffectReso[i].touched.store (false);
+        ovEffectModRate[i].touched.store (false);
+        ovEffectModDepth[i].touched.store (false);
+        ovEffectFeedback[i].touched.store (false);
     }
     ovSequencerRateTouched.store (false);
     ovSequencerIndexTouched.store (false);
@@ -182,6 +186,10 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
         if (ovEffectLevel[i].touched.load())   mr.fx.setEffectParam (i, "LEVEL",           ovEffectLevel[i].value.load());
         if (ovEffectOutput[i].touched.load())  mr.fx.setEffectParam (i, "FX_OUTPUT_LEVEL", ovEffectOutput[i].value.load());
         if (ovEffectFreq[i].touched.load())    mr.fx.setEffectParam (i, "FX_FILTER_FREQUENCY", ovEffectFreq[i].value.load());
+        if (ovEffectReso[i].touched.load())      mr.fx.setEffectParam (i, "FX_FILTER_RESONANCE", ovEffectReso[i].value.load());
+        if (ovEffectModRate[i].touched.load())   mr.fx.setEffectParam (i, "FX_MOD_RATE",  ovEffectModRate[i].value.load());
+        if (ovEffectModDepth[i].touched.load())  mr.fx.setEffectParam (i, "FX_MOD_DEPTH", ovEffectModDepth[i].value.load());
+        if (ovEffectFeedback[i].touched.load())  mr.fx.setEffectParam (i, "FX_FEEDBACK",  ovEffectFeedback[i].value.load());
     }
     if (ovLowpassFreq.touched.load())    mr.fx.setLowpassFrequency (ovLowpassFreq.value.load());
     if (ovReverbMix.touched.load())      mr.fx.setReverbMix (ovReverbMix.value.load());
@@ -330,6 +338,10 @@ void SamplerEngine::setEffectParam (int effectIndex, const juce::String& paramet
                   : parameter == "LEVEL"               ? &ovEffectLevel[effectIndex]
                   : parameter == "FX_OUTPUT_LEVEL"     ? &ovEffectOutput[effectIndex]
                   : parameter == "FX_FILTER_FREQUENCY" ? &ovEffectFreq[effectIndex]
+                  : parameter == "FX_FILTER_RESONANCE" ? &ovEffectReso[effectIndex]
+                  : parameter == "FX_MOD_RATE"         ? &ovEffectModRate[effectIndex]
+                  : parameter == "FX_MOD_DEPTH"        ? &ovEffectModDepth[effectIndex]
+                  : parameter == "FX_FEEDBACK"         ? &ovEffectFeedback[effectIndex]
                                                        : nullptr;
     if (o != nullptr) { o->value.store (value); o->touched.store (true); }
 }

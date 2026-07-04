@@ -99,6 +99,7 @@ private:
         int loVel = 0, hiVel = 127;   // velocity layer (group loVel/hiVel)
         const SampleBuffer* buffer = nullptr;
         bool pitchKeyTrack = false;
+        float pitchDrift = 0.0f;       // per-sample pitch-drift depth (0 = none)
         bool releaseTrigger = false;   // group trigger="release": fires on note-off
         CurvedAdsr::Parameters adsr;
         bool ampEnv = true;            // false (ampEnvEnabled=false) → one-shot: full gain, ignores note-off
@@ -127,6 +128,8 @@ private:
         double rate = 1.0;
         int note = -1;
         int groupIndex = -1;
+        float  pitchDrift = 0.0f;     // this voice's drift depth (from its sample)
+        double driftPhase = 0.0;      // independent per-voice drift LFO phase
         float gain = 1.0f;
         bool ampEnv = true;                // false → one-shot (no amp envelope, ignores note-off)
         CurvedAdsr::Parameters baseAdsr;   // the zone's ADSR, before runtime overrides
@@ -208,6 +211,14 @@ private:
     juce::Array<bool>  groupHasTrem;             // groups with a group-level tremolo modulator
     double globalTuningMul { 1.0 };              // GLOBAL_TUNING vibrato (all voices)
     juce::Array<double> groupTuningModMul;       // GROUP_TUNING modulation per group (1.0 = none)
+    // Per-sample pitch drift: when the mode has samples with pitchDrift, the GLOBAL_TUNING
+    // modulator drives an INDEPENDENT per-voice drift (own phase, depth = sample.pitchDrift)
+    // instead of the shared globalTuningMul. driftDepthThisBlock (0 = off) + driftRateHz are
+    // taken from that modulator each block; driftSeed spreads new voices' start phase.
+    bool   hasPerSampleDrift { false };
+    float  driftDepthThisBlock { 0.0f };
+    double driftRateHz { 0.71 };
+    juce::uint32 driftSeed { 0 };
     juce::Array<float> groupVolume;       // AMP_VOLUME
     juce::Array<float> groupTagVolume;    // TAG_VOLUME (mixer knobs)
     juce::Array<float> groupGain;         // per-group output gain (linear; group-level gain effect)

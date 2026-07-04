@@ -16,6 +16,7 @@
 #include "params/ManifestParameters.h"
 #include "ui/ManifestEditor.h"
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -84,6 +85,12 @@ public:
     }
     float readOutputPeak() override { return outputPeak.exchange (0.0f, std::memory_order_relaxed); }
     juce::String getPluginVersion() const override { return assets.version; }
+    void noteButtonClicked (int buttonIndex) override
+    {
+        if (buttonIndex >= 0 && buttonIndex < kMaxUiButtons)
+            buttonClickSeq[buttonIndex].store (clickCounter.fetch_add (1, std::memory_order_relaxed) + 1,
+                                               std::memory_order_relaxed);
+    }
 
 protected:
     SamplerEngine& getEngine() noexcept { return engine; }
@@ -107,6 +114,11 @@ private:
 
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };
+    // Per-button click sequence (radio groups resolve to most-recently-clicked). Read on
+    // the audio thread by applyToEngine; bumped on the message thread by noteButtonClicked.
+    static constexpr int kMaxUiButtons = 64;
+    std::atomic<std::uint32_t> buttonClickSeq[kMaxUiButtons] {};
+    std::atomic<std::uint32_t> clickCounter { 0 };
     std::atomic<float> outputPeak { 0.0f };   // max |sample| since the editor last read it
     juce::StringArray irButtonParams;         // button params that swap a convolution IR
 

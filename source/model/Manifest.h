@@ -104,6 +104,8 @@ struct Sample
     std::optional<int>    lengthFrames;
     std::optional<double> sampleRate;
     bool                  pitchKeyTrack = false;
+    std::optional<double> pitchDrift;   // per-sample pitch-drift depth (fractional DS
+                                        // pitchKeyTrack, 0<x<1); each voice drifts by this much
 
     std::optional<int>    start;     // playback start offset (frames)
     std::optional<int>    end;       // playback end offset (frames); absent/0 = to end
@@ -179,7 +181,9 @@ struct Group
     std::optional<Silencing>     silencing;
 
     // Group-level amp / playback overrides (only present when the group sets them).
+    std::optional<double> attack;
     std::optional<double> decay;
+    std::optional<double> sustain;
     std::optional<double> release;
     std::optional<double> volume;
     std::optional<double> velTrack;

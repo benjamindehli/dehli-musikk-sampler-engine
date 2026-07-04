@@ -169,6 +169,10 @@ private:
     FxOverride ovEffectLevel[kMaxEffects];
     FxOverride ovEffectOutput[kMaxEffects];
     FxOverride ovEffectFreq[kMaxEffects];   // FX_FILTER_FREQUENCY per effect index
+    FxOverride ovEffectReso[kMaxEffects];   // FX_FILTER_RESONANCE
+    FxOverride ovEffectModRate[kMaxEffects];   // FX_MOD_RATE  (chorus/phaser rate)
+    FxOverride ovEffectModDepth[kMaxEffects];  // FX_MOD_DEPTH (chorus/phaser depth)
+    FxOverride ovEffectFeedback[kMaxEffects];  // FX_FEEDBACK  (phaser feedback / chorus)
     // Selected convolution IR per effect (cabinet menu); message-thread only.
     // Re-applied when a mode is (re)built so the selection survives mode switches.
     juce::String desiredIr[kMaxEffects];
