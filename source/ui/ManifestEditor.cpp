@@ -144,6 +144,15 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     bendRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         host.getApvts(), params::id::pitchBendRange, bendRangeSlider);
 
+    // Performance/fidelity toggle: when on (default), notes skip drawbars pulled fully
+    // down; off = every group triggers so raising a drawbar mid-note brings it in.
+    skipMutedButton.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffbfc0c1));
+    skipMutedButton.setTooltip ("On: don't trigger drawbars/groups that are fully down (saves polyphony). "
+                                "Off: always trigger, so raising a drawbar while a note is held brings it in.");
+    addAndMakeVisible (skipMutedButton);
+    skipMutedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        host.getApvts(), params::id::skipMuted, skipMutedButton);
+
     masterSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     masterSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);   // no inline number
     masterSlider.setTextValueSuffix (" dB");
@@ -395,6 +404,8 @@ void ManifestEditor::resized()
     top.removeFromLeft (12);
     bendLabel.setBounds (top.removeFromLeft (40));
     bendRangeSlider.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, kCtrlH));
+    top.removeFromLeft (16);
+    skipMutedButton.setBounds (top.removeFromLeft (110).withSizeKeepingCentre (110, kCtrlH));
 
     // Top-right group laid out left→right — "Out" label · master fader · level meter.
     auto outArea = top.removeFromRight (230).reduced (8, 3);

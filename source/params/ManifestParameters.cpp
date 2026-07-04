@@ -355,6 +355,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
     p.push_back (std::make_unique<AudioParameterFloat> (
         ParameterID { id::volumeDrift, 1 }, "Volume Drift",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+    p.push_back (std::make_unique<AudioParameterBool> (
+        ParameterID { id::skipMuted, 1 }, "Skip Silent Groups", true));
 
     // One float param per engine-driving control, keyed by label (deduped across
     // modes). Stored normalised 0..1; each mode maps it through its own control

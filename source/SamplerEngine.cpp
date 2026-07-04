@@ -271,6 +271,7 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     current->voices.setPitchBendRange (pitchBendRange.load());
     current->voices.setPitchDriftAmount (pitchDriftAmount.load());
     current->voices.setVolumeDriftAmount (volumeDriftAmount.load());
+    current->voices.setSkipMutedGroups (skipMutedGroups.load());
 
     // Sequencer turns trigger keys into the strummed/played notes; non-trigger
     // keys pass straight through.

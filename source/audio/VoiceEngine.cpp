@@ -421,6 +421,13 @@ void VoiceEngine::handleNoteOn (int note, float velocity)
     {
         if (! groupEnabled[g] || groupReleaseTrigger[g])
             continue;
+        // Skip groups muted to true silence — e.g. a drawbar pulled fully down. There's
+        // no point spawning a voice that contributes nothing, and it frees polyphony for
+        // the drawbars that ARE up (a big win on this organ's 9 drawbars × double-track).
+        // Only skip at ~zero, so a barely-open drawbar still sounds. User-toggleable: with
+        // the skip off, every group triggers (so raising a drawbar mid-note brings it in).
+        if (skipMutedGroups && groupVolume[g] * groupTagVolume[g] * groupGain[g] <= 1.0e-6f)
+            continue;
         if (const auto* zone = pickZoneInGroup (g, note, velMidi))
             startVoice (*zone, note, velocity);
     }

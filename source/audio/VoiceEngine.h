@@ -105,6 +105,11 @@ public:
         each group's own velTrack. How much note velocity scales voice volume. */
     void setAmpVelTrack (float amount) { ovVelTrack = amount; }
 
+    /** When true (default), a note skips spawning voices for groups muted to silence
+        (e.g. a drawbar pulled fully down) — a big polyphony/CPU saving. When false,
+        every group triggers, so raising a drawbar while a note is held brings it in. */
+    void setSkipMutedGroups (bool skip) { skipMutedGroups = skip; }
+
 private:
     struct Zone
     {
@@ -204,6 +209,7 @@ private:
     juce::Array<float> groupAttack, groupDecay, groupSustain, groupRelease;   // per-group (-1 = none)
     juce::Array<float> groupPan;   // per-group balance (-1 left … 0 centre … +1 right)
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
+    bool  skipMutedGroups { true };   // note-on: skip groups at ~zero volume (drawbar fully down)
 
     // ── Modulators (LFOs) ──────────────────────────────────────────────────
     // A mode can define several: tremolo on different group sets at different rates,

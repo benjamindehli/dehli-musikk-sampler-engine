@@ -275,6 +275,8 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             engine.setPitchDriftAmount (pd->load());
         if (auto* vd = apvts->getRawParameterValue (params::id::volumeDrift))
             engine.setVolumeDriftAmount (vd->load());
+        if (auto* sm = apvts->getRawParameterValue (params::id::skipMuted))
+            engine.setSkipMutedGroups (sm->load() > 0.5f);
         if (const auto* m = getActiveMode())
         {
             params::applyCcToParams (midi, *m, *apvts);
