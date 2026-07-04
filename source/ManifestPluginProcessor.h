@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 namespace dm
 {
@@ -39,6 +41,12 @@ public:
         // Look up an embedded resource by its original file name (e.g. "Bass_1C.flac",
         // "Knob.png") — the plugin's BinaryData lookup. Returns nullptr if absent.
         std::function<const char* (const juce::String& filename, int& sizeOut)> findResource;
+
+        // Optional memory-mapped sample pack (samples.pak; its index is "<path>.json").
+        // When set + present, samples are read from it instead of embedded BinaryData —
+        // used by multi-GB libraries so the binary stays small. Images/manifest/IR still
+        // come from findResource. Empty File = fully embedded (the default for small libs).
+        juce::File packFile;
     };
 
     explicit ManifestPluginProcessor (Assets assets);
@@ -86,6 +94,9 @@ public:
     float readOutputPeak() override { return outputPeak.exchange (0.0f, std::memory_order_relaxed); }
     juce::String getPluginVersion() const override { return assets.version; }
     juce::String getPluginName() const override { return getName(); }
+    bool  isLoading() const override    { return engine.isLoading(); }
+    float loadProgress() const override { return engine.loadProgress(); }
+    void  pollEngine() override         { engine.drainRetired(); }   // free retired modes (message thread)
     void noteButtonClicked (int buttonIndex) override
     {
         if (buttonIndex >= 0 && buttonIndex < kMaxUiButtons)
@@ -109,6 +120,7 @@ private:
     std::unique_ptr<EmbeddedFlacSource> sampleSource;
     PresetLibrary library;
     bool loaded { false };
+    std::unordered_map<std::string, juce::Image> imageCache;   // decoded UI images by id (message thread)
 
     SamplerEngine engine;
     std::unique_ptr<juce::AudioProcessorValueTreeState> apvts;

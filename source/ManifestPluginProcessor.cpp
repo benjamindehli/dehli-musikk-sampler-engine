@@ -98,6 +98,18 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
     library = parsed.library;
     sampleSource = std::make_unique<EmbeddedFlacSource>();
 
+    // Large libraries ship their samples as a memory-mapped pack (samples.pak + .json
+    // index) rather than compiled into the binary — register those first; anything the
+    // pack doesn't cover (IRs, or samples for a plugin that still embeds) falls back to
+    // the embedded BinaryData below.
+    if (assets.packFile != juce::File() && assets.packFile.existsAsFile())
+    {
+        const auto indexFile = juce::File (assets.packFile.getFullPathName() + ".json");
+        if (! sampleSource->openPack (assets.packFile, indexFile))
+            DBG ("ManifestPluginProcessor: sample pack present but failed to open: "
+                 << assets.packFile.getFullPathName());
+    }
+
     // Every referenced sample/IR id resolves to "<stem>.flac" in the bundle.
     juce::StringArray ids;
     for (const auto& m : library.modes)
@@ -129,12 +141,17 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
 
     for (const auto& id : ids)
     {
+        if (sampleSource->isRegistered (id))
+            continue;   // already provided by the memory-mapped pack
         const auto filename = id.fromLastOccurrenceOf (":", false, false) + ".flac";
         int size = 0;
-        if (const char* data = assets.findResource (filename, size))
-            sampleSource->registerFlac (id, data, (size_t) size);   // decoded lazily per active mode
-        else
-            DBG ("ManifestPluginProcessor: no embedded asset for id " << id << " (" << filename << ")");
+        if (assets.findResource != nullptr)
+            if (const char* data = assets.findResource (filename, size))
+            {
+                sampleSource->registerFlac (id, data, (size_t) size);   // decoded lazily per active mode
+                continue;
+            }
+        DBG ("ManifestPluginProcessor: no asset for id " << id << " (" << filename << ")");
     }
 
     loaded = ! library.modes.isEmpty() && sampleSource->size() > 0;
@@ -147,14 +164,27 @@ juce::Image ManifestPluginProcessor::loadImage (const juce::String& id)
     if (! assets.findResource)
         return {};
 
+    // Cache decoded images by id — the UI asks for the same skin (e.g. one 18 MB drawbar
+    // filmstrip shared by 9 drawbars, a knob strip by 30 knobs) once per control, and
+    // re-decoding a big PNG each time blocked the message thread for ~17 s on the cassette
+    // organ. juce::Image is ref-counted, so cached copies are cheap. Message thread only.
+    const auto key = id.toStdString();
+    if (auto it = imageCache.find (key); it != imageCache.end())
+        return it->second;
+
+    juce::Image image;
     const auto stem = id.fromLastOccurrenceOf (":", false, false);
     for (const char* ext : { ".png", ".jpg", ".jpeg" })
     {
         int size = 0;
         if (const char* data = assets.findResource (stem + ext, size))
-            return juce::ImageFileFormat::loadFrom (data, (size_t) size);
+        {
+            image = juce::ImageFileFormat::loadFrom (data, (size_t) size);
+            break;
+        }
     }
-    return {};
+    imageCache[key] = image;
+    return image;
 }
 
 void ManifestPluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)

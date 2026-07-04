@@ -6,7 +6,9 @@ namespace dm
 
 namespace
 {
-constexpr int kMaxVoices = 64;   // headroom for multi-group layering (drums stack several layers per hit)
+constexpr int kMaxVoices = 128;  // headroom for heavy layering (the cassette organ stacks 9 drawbars
+                                 // × double-track per note); balanced against per-voice render CPU —
+                                 // 256 could overrun on big chords. skip-muted keeps the live count low.
 
 // Modulator waveform shape name → index, and the shape's value at a phase (cycles) → -1..1.
 int lfoShapeFromString (const juce::String& s)
@@ -267,6 +269,17 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         }
     }
 
+    // Index zones by group so note-on only scans a group's own zones (this organ has
+    // ~1830 zones across 30 groups — an all-zones scan per group per note-on was a huge
+    // audio-thread spike when playing chords).
+    zonesByGroup.assign ((size_t) juce::jmax (0, numGroups), {});
+    for (int i = 0; i < zones.size(); ++i)
+    {
+        const int g = zones.getReference (i).groupIndex;
+        if (g >= 0 && g < numGroups)
+            zonesByGroup[(size_t) g].push_back (i);
+    }
+
     // Per-group insert FX chains (e.g. organ swell filter + loudness). Built once
     // per group that declares effects; rendered per-group in processBlock.
     groupChains.clear();
@@ -347,47 +360,48 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
 
 const VoiceEngine::Zone* VoiceEngine::pickZoneInGroup (int group, int note, int velocity)
 {
-    auto covers = [note, velocity] (const Zone& z)
-    {
-        return note >= z.loNote && note <= z.hiNote
-            && velocity >= z.loVel && velocity <= z.hiVel;   // velocity layer
-    };
+    if (group < 0 || group >= (int) zonesByGroup.size())
+        return nullptr;
 
-    // This group's zones covering the note+velocity.
-    juce::Array<int> candidates;
+    // Scan ONLY this group's zones (indexed at setLibrary) and gather covering candidates
+    // into a fixed stack buffer — no audio-thread heap allocation, no all-zones scan.
+    constexpr int kMaxCandidates = 32;
+    int candidates[kMaxCandidates];
+    int nCand = 0;
     bool roundRobin = false;
-    juce::String rrMode;
-    for (int i = 0; i < zones.size(); ++i)
+    const juce::String* rrMode = nullptr;
+    for (int zi : zonesByGroup[(size_t) group])
     {
-        const auto& z = zones.getReference (i);
-        if (z.groupIndex == group && covers (z))
+        const auto& z = zones.getReference (zi);
+        if (note >= z.loNote && note <= z.hiNote && velocity >= z.loVel && velocity <= z.hiVel)
         {
-            candidates.add (i);
+            if (nCand < kMaxCandidates)
+                candidates[nCand++] = zi;
             roundRobin = z.roundRobin;
-            rrMode     = z.rrMode;
+            rrMode     = &z.rrMode;
         }
     }
-    if (candidates.isEmpty())
+    if (nCand == 0)
         return nullptr;
-    if (candidates.size() == 1 || ! roundRobin)
+    if (nCand == 1 || ! roundRobin)
         return &zones.getReference (candidates[0]);
 
     int pick = 0;
-    if (rrMode == "round_robin" || rrMode == "round-robin")
+    if (rrMode != nullptr && (*rrMode == "round_robin" || *rrMode == "round-robin"))
     {
-        const int c = (group >= 0 && group < rrCounter.size()) ? rrCounter[group] : 0;
-        pick = c % candidates.size();
-        if (group >= 0 && group < rrCounter.size())
+        const int c = (group < rrCounter.size()) ? rrCounter[group] : 0;
+        pick = c % nCand;
+        if (group < rrCounter.size())
             rrCounter.set (group, c + 1);
     }
     else // "random" (and any unknown mode)
     {
-        pick = rrRandom.nextInt (candidates.size());
-        if (group >= 0 && group < rrLast.size() && pick == rrLast[group])
-            pick = (pick + 1) % candidates.size();   // avoid immediate repeat
+        pick = rrRandom.nextInt (nCand);
+        if (group < rrLast.size() && pick == rrLast[group])
+            pick = (pick + 1) % nCand;   // avoid immediate repeat
     }
 
-    if (group >= 0 && group < rrLast.size())
+    if (group < rrLast.size())
         rrLast.set (group, pick);
 
     return &zones.getReference (candidates[pick]);
@@ -446,13 +460,14 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
         {
             if (! v.active || v.fadingOut)
                 continue;
-            for (const auto& t : zone.tags)
-                if (v.silencedByTags.contains (t))
-                {
-                    v.fadingOut = true;
-                    v.declickDelta = -1.0f / (float) fadeOutSamples;
-                    break;
-                }
+            if (v.silencedByTags != nullptr)
+                for (const auto& t : zone.tags)
+                    if (v.silencedByTags->contains (t))
+                    {
+                        v.fadingOut = true;
+                        v.declickDelta = -1.0f / (float) fadeOutSamples;
+                        break;
+                    }
         }
     }
 
@@ -463,8 +478,7 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->note = note;
     v->isRelease = zone.releaseTrigger;
     v->groupIndex = zone.groupIndex;
-    v->tags = zone.tags;
-    v->silencedByTags = zone.silencedByTags;
+    v->silencedByTags = &zone.silencedByTags;   // pointer into the stable zone (no per-note alloc)
     // Independent per-voice drift: random depth (0.4..1) + random phase for both the pitch
     // and volume drift LFOs, so every note wanders on its own.
     v->pitchDriftDepth = 0.4f + 0.6f * driftRandom.nextFloat();

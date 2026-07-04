@@ -42,6 +42,47 @@ void EmbeddedFlacSource::registerFlac (const juce::String& id, const void* data,
     samples[id.toStdString()] = std::move (e);
 }
 
+bool EmbeddedFlacSource::openPack (const juce::File& dataFile, const juce::File& indexFile)
+{
+    if (! dataFile.existsAsFile() || ! indexFile.existsAsFile())
+        return false;
+
+    pack = std::make_unique<juce::MemoryMappedFile> (dataFile, juce::MemoryMappedFile::readOnly);
+    const auto* base = static_cast<const char*> (pack->getData());
+    const auto  mapSize = (juce::int64) pack->getSize();
+    if (base == nullptr || mapSize <= 0)
+    {
+        pack.reset();
+        return false;
+    }
+
+    juce::var index;
+    if (juce::JSON::parse (indexFile.loadFileAsString(), index).failed() || ! index.isArray())
+    {
+        pack.reset();
+        return false;
+    }
+
+    // Index is an array of { id, o(ffset), l(ength) } — register each as a lazy slice.
+    for (const auto& entry : *index.getArray())
+    {
+        if (auto* o = entry.getDynamicObject())
+        {
+            const auto id     = o->getProperty ("id").toString();
+            const auto offset = (juce::int64) o->getProperty ("o");
+            const auto length = (juce::int64) o->getProperty ("l");
+            if (id.isNotEmpty() && offset >= 0 && length > 0 && offset + length <= mapSize)
+                registerFlac (id, base + offset, (size_t) length);
+        }
+    }
+    return true;
+}
+
+bool EmbeddedFlacSource::isRegistered (const juce::String& id) const
+{
+    return samples.find (id.toStdString()) != samples.end();
+}
+
 const SampleBuffer* EmbeddedFlacSource::get (const juce::String& id) const
 {
     auto it = samples.find (id.toStdString());
@@ -50,24 +91,52 @@ const SampleBuffer* EmbeddedFlacSource::get (const juce::String& id) const
 
 const SampleBuffer* EmbeddedFlacSource::acquire (const juce::String& id)
 {
-    auto it = samples.find (id.toStdString());
-    if (it == samples.end())
-        return nullptr;
+    const auto key = id.toStdString();
 
-    auto& e = it->second;
-    if (e.pcm == nullptr)   // first user → decode
+    // Phase 1 (locked, quick): if already decoded, just pin it; else grab the compressed
+    // bytes to decode. We do NOT decode under the lock — that would serialise the parallel
+    // build workers (decode is the slow part). The map structure is stable during a build
+    // (all entries registered up front), so concurrent finds are safe.
+    const void* data = nullptr;
+    size_t numBytes = 0;
     {
-        e.pcm = std::make_unique<SampleBuffer>();
-        if (! decodeInto (*e.pcm, e.data, e.numBytes))
-            e.pcm.reset();
+        const std::lock_guard<std::mutex> lock (mutex);
+        auto it = samples.find (key);
+        if (it == samples.end())
+            return nullptr;
+        auto& e = it->second;
+        if (e.pcm != nullptr)
+        {
+            if (! e.pinned) ++e.refCount;
+            return e.pcm.get();
+        }
+        data = e.data; numBytes = e.numBytes;
     }
-    if (! e.pinned)
-        ++e.refCount;
-    return e.pcm.get();
+
+    // Phase 2 (unlocked, slow): decode. Distinct ids decode concurrently; two threads on
+    // the same id both decode and the loser's buffer is discarded below (harmless — the
+    // build hands each worker distinct ids, so that doesn't happen in practice).
+    auto decoded = std::make_unique<SampleBuffer>();
+    if (! decodeInto (*decoded, data, numBytes))
+        decoded.reset();
+
+    // Phase 3 (locked, quick): publish + pin.
+    {
+        const std::lock_guard<std::mutex> lock (mutex);
+        auto it = samples.find (key);
+        if (it == samples.end())
+            return nullptr;
+        auto& e = it->second;
+        if (e.pcm == nullptr)
+            e.pcm = std::move (decoded);
+        if (! e.pinned) ++e.refCount;
+        return e.pcm.get();
+    }
 }
 
 void EmbeddedFlacSource::release (const juce::String& id)
 {
+    const std::lock_guard<std::mutex> lock (mutex);
     auto it = samples.find (id.toStdString());
     if (it == samples.end())
         return;

@@ -8,6 +8,7 @@
 #include "SampleSource.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -27,6 +28,16 @@ public:
         the last release(). `data` must stay valid for the source's lifetime (it's the
         plugin's embedded BinaryData). This is the low-RAM per-mode path. */
     void registerFlac (const juce::String& id, const void* data, size_t numBytes);
+
+    /** Memory-map a sample pack file (concatenated FLAC blobs) and register each id
+        from its JSON index ({"flac:x": [offset, length], …}) as a slice of the mapping.
+        The OS pages in only the slices actually decoded, so a multi-GB pack costs no
+        launch time or resident RAM — the alternative to compiling samples into the
+        binary. Returns false if the file or index can't be opened. */
+    bool openPack (const juce::File& dataFile, const juce::File& indexFile);
+
+    /** True if an id has been registered (embedded or packed), decoded or not. */
+    bool isRegistered (const juce::String& id) const;
 
     const SampleBuffer* get (const juce::String& id) const override;
     const SampleBuffer* acquire (const juce::String& id) override;
@@ -48,6 +59,12 @@ private:
 
     juce::AudioFormatManager formats;
     std::unordered_map<std::string, Entry> samples;
+    std::unique_ptr<juce::MemoryMappedFile> pack;   // backing store for packed sample slices
+    // acquire()/release() may now run on a background load thread while the message
+    // thread retires an old mode — serialise them. get() (audio thread) stays lock-free:
+    // it only reads the CURRENT mode's already-decoded, ref-held entries, which are never
+    // the entry a concurrent acquire is decoding or a release is freeing.
+    std::mutex mutex;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (EmbeddedFlacSource)
 };

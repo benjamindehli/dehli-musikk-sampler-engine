@@ -80,6 +80,9 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     bottomPanel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (bottomPanel);
 
+    loadingOverlay.setVisible (false);
+    addChildComponent (loadingOverlay);   // shown by the timer while a mode decodes
+
     keyboard.setAvailableRange (24, 119);
     keyboard.setLowestVisibleKey (lowestVisibleKey);
     keyboard.setKeyPressBaseOctave (keyOctave);
@@ -366,6 +369,25 @@ void ManifestEditor::timerCallback()
 {
     refreshWidgets();
     outputMeter.setLevel (host.readOutputPeak());
+
+    host.pollEngine();   // message-thread housekeeping (free retired modes)
+
+    // Show the loading overlay while the active mode decodes on the background thread.
+    const bool loading = host.isLoading();
+    if (loading)
+    {
+        loadingOverlay.progress = juce::jlimit (0.0, 1.0, (double) host.loadProgress());
+        applyPreferredSize();   // keep the window at full size during load so the bar is visible
+                                // (the standalone's startup layout otherwise leaves it tiny)
+    }
+    if (loading != loadingOverlay.isVisible())
+    {
+        loadingOverlay.setVisible (loading);
+        if (loading)
+            loadingOverlay.toFront (false);
+        else
+            applyPreferredSize();   // load finished — re-assert the full window size
+    }
 }
 
 bool ManifestEditor::handleKey (const juce::KeyPress& key)
@@ -459,6 +481,8 @@ void ManifestEditor::resized()
 
     const float keyW = juce::jmax (12.0f, (float) keyboard.getWidth() / (float) countWhiteKeys (usedLow, usedHigh));
     keyboard.setKeyWidth (keyW);
+
+    loadingOverlay.setBounds (getLocalBounds());   // covers everything while decoding
 }
 
 } // namespace dm

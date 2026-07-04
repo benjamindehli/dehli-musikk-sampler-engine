@@ -46,6 +46,15 @@ public:
     /** Plugin display name (e.g. "Strykebrett") shown in the bottom strip. Empty → none. */
     virtual juce::String getPluginName() const { return {}; }
 
+    /** Async load state for the progress overlay. isLoading()=true while the active mode
+        is decoding on the background thread; loadProgress() is 0..1. */
+    virtual bool  isLoading() const { return false; }
+    virtual float loadProgress() const { return 1.0f; }
+
+    /** Called on the message thread each editor tick — lets the host do periodic
+        message-thread housekeeping (e.g. free retired modes). */
+    virtual void pollEngine() {}
+
     /** A UI button was clicked (its index in the tab). Lets the host resolve radio-style
         button groups by "last clicked wins" — momentary buttons that all target the same
         effects (e.g. Strykebrett's ensemble O/Acc/Solo/Organ). Default: no-op. */
@@ -105,6 +114,31 @@ private:
         }
     };
     BackdropPanel bottomPanel;
+
+    /** Full-cover overlay shown while the active mode decodes on the background thread.
+        The window is already at its manifest size, so this bar is actually visible. */
+    struct LoadingOverlay : juce::Component
+    {
+        double progress { 0.0 };
+        juce::ProgressBar bar { progress };
+        LoadingOverlay()
+        {
+            bar.setColour (juce::ProgressBar::backgroundColourId, juce::Colour (0xff2c2d2e));
+            bar.setColour (juce::ProgressBar::foregroundColourId, juce::Colour (0xff6a9bd1));
+            addAndMakeVisible (bar);
+            setInterceptsMouseClicks (true, true);   // swallow clicks on the loading face
+        }
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff141516).withAlpha (0.92f));
+            g.setColour (juce::Colour (0xffe8e9ea));
+            g.setFont (juce::Font (juce::FontOptions (16.0f)));
+            g.drawText ("Loading samples...", getLocalBounds().withTrimmedBottom (40),
+                        juce::Justification::centred);
+        }
+        void resized() override { bar.setBounds (getLocalBounds().withSizeKeepingCentre (300, 20)); }
+    };
+    LoadingOverlay loadingOverlay;
     WheelLookAndFeel wheelLnf;
     StandaloneWindowLookAndFeel standaloneLnf;
     juce::LookAndFeel_V4 stripLnf;   // grayscale scheme for the top-strip combo/steppers

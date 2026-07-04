@@ -20,6 +20,7 @@
 #include "audio/NoteSequencer.h"
 
 #include <atomic>
+#include <thread>
 
 namespace dm
 {
@@ -56,6 +57,16 @@ public:
     void releaseResources();
 
     int getActiveVoiceCount() const noexcept;   // approximate (audio-thread state)
+
+    /** True while a mode is being built/decoded on the background load thread — the
+        editor shows a progress overlay and the engine renders silence until it's ready. */
+    bool  isLoading() const noexcept   { return loading.load(); }
+    float loadProgress() const noexcept { return loadProgressValue.load(); }   // 0..1
+
+    /** Free a retired mode's decoded PCM back to the source. MESSAGE THREAD; call
+        periodically (e.g. from the editor timer) so a switched-away mode's RAM is
+        released promptly rather than lingering until the next build. */
+    void drainRetired();
 
     // Temporary dev FX controls — mode-aware: applied each block to the active
     // mode's first lowpass/convolution. Replaced by M4's data-driven UI + APVTS.
@@ -140,8 +151,13 @@ private:
         ~ModeRender() { if (src != nullptr) for (const auto& id : held) src->release (id); }
     };
 
-    ModeRender* buildMode (int index) const;   // message thread
-    void setCurrentDirect (ModeRender* mr);     // message thread, audio stopped
+    // Build a mode (decode its samples/IRs, wire voices+fx). Runs on the background load
+    // thread; reports 0..1 into *progress and bails early (returning a partial unit to
+    // delete) if *abort flips. Both may be null for a plain synchronous build.
+    ModeRender* buildMode (int index, std::atomic<float>* progress = nullptr,
+                           std::atomic<bool>* abort = nullptr) const;
+    void beginAsyncBuild (int index);           // message thread: (re)start the load thread
+    void joinBuildThread();                     // message thread: abort + join any running build
     void applyFxOverrides (ModeRender& mr);     // audio thread
     void resetOverrides();                      // clear per-mode UI overrides
 
@@ -154,8 +170,15 @@ private:
     int    activeModeIndex { 0 };
 
     ModeRender* current { nullptr };                 // audio-thread owned
-    std::atomic<ModeRender*> pending { nullptr };    // message → audio
+    std::atomic<ModeRender*> pending { nullptr };    // build → audio
     std::atomic<ModeRender*> retired { nullptr };    // audio → message (deferred free)
+
+    // Background mode-building: buildMode (decode) runs off the message thread so the
+    // editor stays live (full-size window + progress overlay) during the heavy decode.
+    std::thread        buildThread;
+    std::atomic<bool>  abortBuild { false };
+    std::atomic<bool>  loading { false };
+    std::atomic<float> loadProgressValue { 0.0f };
 
     // FX UI overrides: applied only once "touched", so untouched controls keep the
     // manifest defaults (and survive mode switches).

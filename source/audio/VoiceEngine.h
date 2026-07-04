@@ -155,8 +155,10 @@ private:
 
         bool loopEnabled = false;
         double loopEnd = 0.0, loopLen = 0.0, loopXf = 0.0;
-        juce::StringArray tags;
-        juce::StringArray silencedByTags;
+        // Points into the (stable) source Zone rather than copying — copying a
+        // StringArray per note-on is a heap allocation on the audio thread. The zone
+        // outlives every voice (voices are cleared before the zone list is rebuilt).
+        const juce::StringArray* silencedByTags = nullptr;   // tags this voice is choked by
         CurvedAdsr adsr;
         juce::uint32 startOrder = 0;
 
@@ -183,6 +185,7 @@ private:
     double sampleRate = 44100.0;
     int maxBlock = 512, numChans = 2;   // for sizing per-group scratch buffers
     juce::Array<Zone> zones;
+    std::vector<std::vector<int>> zonesByGroup;   // group index → its zone indices (note-on lookup, no O(all zones) scan)
     std::vector<Voice> voices;
 
     // Per-group insert FX (lowpass/gain chains). Built from each group's effects in

@@ -1,4 +1,5 @@
 #include "SamplerEngine.h"
+#include <cmath>
 
 namespace dm
 {
@@ -7,6 +8,7 @@ SamplerEngine::SamplerEngine()  = default;
 
 SamplerEngine::~SamplerEngine()
 {
+    joinBuildThread();
     delete current;
     delete pending.exchange (nullptr);
     delete retired.exchange (nullptr);
@@ -17,7 +19,8 @@ juce::String SamplerEngine::getVersion()
     return "dehli-musikk-sampler-engine 0.5.0 (M5)";
 }
 
-SamplerEngine::ModeRender* SamplerEngine::buildMode (int index) const
+SamplerEngine::ModeRender* SamplerEngine::buildMode (int index, std::atomic<float>* progress,
+                                                    std::atomic<bool>* abort) const
 {
     auto* mr = new ModeRender();
     mr->sequencer.prepare (sampleRate);
@@ -29,52 +32,125 @@ SamplerEngine::ModeRender* SamplerEngine::buildMode (int index) const
     {
         const auto& mode = library->modes.getReference (index);
 
-        // Acquire (decode) this mode's samples + IRs before building; released when
-        // the ModeRender is destroyed. So only the active mode's audio is in RAM.
+        // Gather the distinct sample + IR ids this mode needs, then decode them (the heavy
+        // part) reporting progress and honouring abort. Acquired PCM is released when the
+        // ModeRender is destroyed, so only live modes cost RAM.
         mr->src = source;
-        auto hold = [mr] (const juce::String& id)
+        juce::StringArray ids;
+        auto want = [&ids] (const juce::String& id)
         {
-            if (id.isNotEmpty() && ! mr->held.contains (id)) { mr->held.add (id); mr->src->acquire (id); }
+            if (id.isNotEmpty()) ids.addIfNotAlreadyThere (id);
         };
         for (const auto& g : mode.groups)
             for (const auto& s : g.samples)
-                hold (s.source);
+                want (s.source);
         for (const auto& e : mode.effects)
-            hold (e.ir);
+            want (e.ir);
         for (const auto& tab : mode.ui.tabs)   // runtime-switchable IRs (cabinet / Home-Church)
         {
             for (const auto& menu : tab.menus)
                 for (const auto& opt : menu.options)
                     for (const auto& b : opt.bindings)
                         if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
-                            hold (b.translationValue.toString());
+                            want (b.translationValue.toString());
             for (const auto& btn : tab.buttons)
                 for (const auto& st : btn.states)
                     for (const auto& b : st.bindings)
                         if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
-                            hold (b.translationValue.toString());
+                            want (b.translationValue.toString());
         }
 
+        // Register every id for release up front (single-threaded), then decode them in
+        // PARALLEL — FLAC decode is CPU-bound and per-sample independent, and acquire()
+        // now decodes outside its lock, so spreading the work across cores cuts the load
+        // time roughly by the core count. Workers pull ids off a shared atomic index.
+        for (const auto& id : ids)
+            mr->held.add (id);
+
+        const int total = juce::jmax (1, ids.size());
+        std::atomic<int> nextIndex { 0 };
+        std::atomic<int> completed { 0 };
+
+        auto worker = [&]
+        {
+            for (int i = nextIndex.fetch_add (1); i < ids.size(); i = nextIndex.fetch_add (1))
+            {
+                if (abort != nullptr && abort->load())
+                    return;
+                mr->src->acquire (ids[i]);   // decode (or bump refcount if already resident)
+                const int done = completed.fetch_add (1) + 1;
+                if (progress != nullptr)
+                    progress->store ((float) done / (float) total * 0.97f);   // headroom for wiring
+            }
+        };
+
+        const unsigned hw = std::thread::hardware_concurrency();
+        const int numThreads = juce::jlimit (1, 8, (int) (hw == 0 ? 4 : hw));
+        std::vector<std::thread> pool;
+        for (int t = 1; t < numThreads && t < ids.size(); ++t)
+            pool.emplace_back (worker);
+        worker();                       // the build thread decodes too
+        for (auto& t : pool)
+            t.join();
+
+        if (abort != nullptr && abort->load())
+            return mr;                  // caller deletes the partial unit
+
         mr->sequencer.configure (mode);
-        mr->voices.setMode (mode, *source);
+        mr->voices.setMode (mode, *source);   // samples now decoded → fast wiring
         mr->fx.setEffects (mode.effects, *source);
 
         // Re-apply any cabinet-menu IR selection so it survives a mode (re)build.
         for (int ei = 0; ei < kMaxEffects; ++ei)
             if (desiredIr[ei].isNotEmpty())
                 mr->fx.setEffectIr (ei, *source, desiredIr[ei]);
+
+        if (progress != nullptr)
+            progress->store (1.0f);
     }
     return mr;
 }
 
-void SamplerEngine::setCurrentDirect (ModeRender* mr)
+void SamplerEngine::joinBuildThread()
 {
-    // Audio is stopped here (prepareToPlay / setLibrary), so it's safe to replace
-    // the live unit directly. Drain any queued units first.
-    delete pending.exchange (nullptr);
+    if (buildThread.joinable())
+    {
+        abortBuild.store (true);
+        buildThread.join();
+    }
+    abortBuild.store (false);
+}
+
+void SamplerEngine::drainRetired()
+{
     delete retired.exchange (nullptr);
-    delete current;
-    current = mr;
+}
+
+void SamplerEngine::beginAsyncBuild (int index)
+{
+    // Message thread. Stop any in-flight build, free a retired unit, then decode the new
+    // mode on a background thread and publish it via `pending` when done. Until then the
+    // audio thread renders whatever `current` is (silence on first load).
+    joinBuildThread();
+    drainRetired();
+
+    loadProgressValue.store (0.0f);
+    loading.store (true);
+
+    const int idx = index;
+    buildThread = std::thread ([this, idx]
+    {
+        auto* mr = buildMode (idx, &loadProgressValue, &abortBuild);
+        if (abortBuild.load())
+        {
+            delete mr;               // discarded — superseded/closing
+        }
+        else if (auto* superseded = pending.exchange (mr))
+        {
+            delete superseded;       // a previous pending was never adopted
+        }
+        loading.store (false);
+    });
 }
 
 void SamplerEngine::prepare (double newSampleRate, int newMaxBlock, int newNumChannels)
@@ -83,9 +159,16 @@ void SamplerEngine::prepare (double newSampleRate, int newMaxBlock, int newNumCh
     maxBlockSize = juce::jmax (1, newMaxBlock);
     numChannels  = juce::jmax (1, newNumChannels);
 
-    // Rebuild the active mode for the new audio settings (audio is stopped).
+    // Rebuild the active mode for the new audio settings. Audio is stopped here, so we
+    // can drop the stale unit outright; the new one decodes on the background thread
+    // (the editor shows a progress overlay and we render silence until it publishes).
     if (library != nullptr)
-        setCurrentDirect (buildMode (activeModeIndex));
+    {
+        joinBuildThread();
+        delete current; current = nullptr;
+        delete pending.exchange (nullptr);
+        beginAsyncBuild (activeModeIndex);
+    }
 }
 
 void SamplerEngine::setLibrary (const PresetLibrary& lib, SampleSource& src)
@@ -95,8 +178,15 @@ void SamplerEngine::setLibrary (const PresetLibrary& lib, SampleSource& src)
     libraryGain = juce::Decibels::decibelsToGain ((float) lib.gainDb);   // pre-FX level trim (--gain)
     activeModeIndex = juce::jlimit (0, juce::jmax (0, lib.modes.size() - 1), activeModeIndex);
 
+    // Only build once prepared (prepare() builds otherwise — e.g. the constructor sets the
+    // library before the host calls prepareToPlay).
     if (sampleRate > 0.0)
-        setCurrentDirect (buildMode (activeModeIndex));
+    {
+        joinBuildThread();
+        delete current; current = nullptr;
+        delete pending.exchange (nullptr);
+        beginAsyncBuild (activeModeIndex);
+    }
 }
 
 int SamplerEngine::getNumModes() const noexcept
@@ -168,14 +258,9 @@ void SamplerEngine::setActiveMode (int index)
     if (sampleRate <= 0.0)
         return; // not prepared yet; prepare() will build this mode
 
-    auto* mr = buildMode (index);
-
-    // Free a unit the audio thread already handed back.
-    delete retired.exchange (nullptr);
-
-    // Publish. If a previous pending was never adopted, it's ours to delete.
-    if (auto* superseded = pending.exchange (mr))
-        delete superseded;
+    // Decode + build the new mode on the background thread; the CURRENT mode keeps
+    // playing until it's published (no silent gap on switch), then gets retired.
+    beginAsyncBuild (index);
 }
 
 void SamplerEngine::applyFxOverrides (ModeRender& mr)
@@ -291,10 +376,28 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.applyGain (masterGain);
     if (uiMasterGain != 1.0f)   // user master output fader — the very last stage
         buffer.applyGain (uiMasterGain);
+
+    // Output safety limiter. Summing many voices (this organ stacks 9 drawbars ×
+    // double-track per note, then feeds the echo/reverb) can push well past full scale,
+    // which the audio device hard-clips into loud pops. This is transparent below ±0.95
+    // and smoothly asymptotes to ±1 above, so normal levels are untouched but overload
+    // saturates gently instead of cracking.
+    constexpr float kThresh = 0.95f, kRange = 1.0f - kThresh;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+    {
+        auto* d = buffer.getWritePointer (ch);
+        for (int i = 0, n = buffer.getNumSamples(); i < n; ++i)
+        {
+            const float x = d[i];
+            if      (x >  kThresh) d[i] =  kThresh + kRange * std::tanh ((x - kThresh) / kRange);
+            else if (x < -kThresh) d[i] = -kThresh + kRange * std::tanh ((x + kThresh) / kRange);
+        }
+    }
 }
 
 void SamplerEngine::releaseResources()
 {
+    joinBuildThread();   // no build may outlive the audio settings it was built for
     if (current != nullptr)
         current->voices.releaseResources();
 }
