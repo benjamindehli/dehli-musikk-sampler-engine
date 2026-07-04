@@ -337,6 +337,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
         ParameterID { id::masterOutput, 1 }, "Master Output",
         juce::NormalisableRange<float> (-60.0f, 6.0f, 0.1f), 0.0f));
 
+    // Global drift wheels (0..1, off by default), right of the keyboard. Independent
+    // per-voice pitch + volume wander in every plugin.
+    p.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { id::pitchDrift, 1 }, "Pitch Drift",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+    p.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { id::volumeDrift, 1 }, "Volume Drift",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
+
     // One float param per engine-driving control, keyed by label (deduped across
     // modes). Stored normalised 0..1; each mode maps it through its own control
     // range + bindings. The FIRST control seen for a given key sets the default.

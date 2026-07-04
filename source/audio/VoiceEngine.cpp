@@ -160,6 +160,7 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
 {
     allNotesOff();
     zones.clearQuick();
+    hasDriftGateButton = false;   // set below if any sample carries a per-sample drift marker
 
     const int numGroups = mode.groups.size();
     rrCounter.clearQuick(); rrCounter.insertMultiple (0, 0, numGroups);
@@ -177,7 +178,6 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupSustain.clearQuick(); groupSustain.insertMultiple (0, -1.0f, numGroups);
     groupRelease.clearQuick(); groupRelease.insertMultiple (0, -1.0f, numGroups);
     groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
-    hasPerSampleDrift = false; driftDepthThisBlock = 0.0f; driftRateHz = 0.71; driftSeed = 0;
     sustainValue = 0; sustainActive = false;
     for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
 
@@ -234,8 +234,14 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
             z.rootNote = s.rootNote;
             z.buffer = buffer;
             z.pitchKeyTrack = s.pitchKeyTrack || groupPitchKeyTrack;
-            z.pitchDrift = (float) s.pitchDrift.value_or (0.0);
-            if (z.pitchDrift > 0.0f) hasPerSampleDrift = true;
+
+            // A per-sample drift marker (fractional pitchKeyTrack in the DS source, e.g.
+            // Strykebrett) means this library has a dedicated Drift on/off button wired to
+            // a GLOBAL_TUNING modulator. We no longer use the value for depth (that's random
+            // per voice now), only as the signal that the drift wheels should be GATED by
+            // that button. Libraries without it leave drift always-on (wheel = 0 disables).
+            if (s.pitchDrift)
+                hasDriftGateButton = true;
 
             // Loop, validated against the actual decoded length — out-of-range
             // points (e.g. authored against a stale .dspreset length) fall back to
@@ -451,10 +457,12 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->groupIndex = zone.groupIndex;
     v->tags = zone.tags;
     v->silencedByTags = zone.silencedByTags;
-    v->pitchDrift = zone.pitchDrift;
-    // Independent per-voice drift phase, spread by the golden ratio so successive notes
-    // wander out of sync with each other.
-    v->driftPhase = std::fmod ((double) (driftSeed++) * 0.61803398875, 1.0) * juce::MathConstants<double>::twoPi;
+    // Independent per-voice drift: random depth (0.4..1) + random phase for both the pitch
+    // and volume drift LFOs, so every note wanders on its own.
+    v->pitchDriftDepth = 0.4f + 0.6f * driftRandom.nextFloat();
+    v->volDriftDepth   = 0.4f + 0.6f * driftRandom.nextFloat();
+    v->driftPhase      = driftRandom.nextDouble() * juce::MathConstants<double>::twoPi;
+    v->volDriftPhase   = driftRandom.nextDouble() * juce::MathConstants<double>::twoPi;
 
     double rate = zone.buffer->sampleRate / sampleRate;
     if (zone.pitchKeyTrack)
@@ -577,17 +585,27 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
         if (v.groupIndex >= 0 && v.groupIndex < groupTuningModMul.size())
             tuneMul *= groupTuningModMul[v.groupIndex];
 
-        // Independent per-voice pitch drift (string-machine oscillator wander): active when
-        // the Drift switch turned the GLOBAL_TUNING modulator on and this voice's sample has
-        // a drift depth. Block-rate (drift is <1 Hz). kDriftSemis is the tuning knob.
-        if (driftDepthThisBlock > 0.0f && v.pitchDrift > 0.0f)
+        // Independent per-voice drift (all plugins), block-rate (drift is <1 Hz). Each voice
+        // has a random depth + phase (see startVoice), so held notes wander on their own.
+        // The two right-side wheels set the amounts. kMax* are the swing at wheel=1, depth=1.
+        const auto twoPi = juce::MathConstants<double>::twoPi;
+        if (const float pDriftAmt = driftGateOpen ? pitchDriftAmount.load() : 0.0f; pDriftAmt > 0.0f)
         {
-            constexpr double kDriftSemis = 2.0;   // max ± semitones at pitchDrift 1.0 (tune by ear)
-            const double driftSemis = std::sin (v.driftPhase) * (double) v.pitchDrift * kDriftSemis;
+            constexpr double kMaxDriftSemis = 0.15;   // ± semitones (reduced)
+            const double driftSemis = std::sin (v.driftPhase) * (double) pDriftAmt * (double) v.pitchDriftDepth * kMaxDriftSemis;
             tuneMul *= std::pow (2.0, driftSemis / 12.0);
-            v.driftPhase += juce::MathConstants<double>::twoPi * driftRateHz * (double) numSamples / sampleRate;
-            if (v.driftPhase >= juce::MathConstants<double>::twoPi)
-                v.driftPhase = std::fmod (v.driftPhase, juce::MathConstants<double>::twoPi);
+            v.driftPhase += twoPi * driftRateHz * (double) numSamples / sampleRate;
+            if (v.driftPhase >= twoPi) v.driftPhase = std::fmod (v.driftPhase, twoPi);
+        }
+
+        // Volume drift → a per-block gain multiplier folded into `g` in the sample loop.
+        float volDriftMul = 1.0f;
+        if (const float vDriftAmt = driftGateOpen ? volumeDriftAmount.load() : 0.0f; vDriftAmt > 0.0f)
+        {
+            constexpr float kMaxVolDrift = 0.2f;   // ±20% gain at wheel=1, depth=1
+            volDriftMul = 1.0f + (float) std::sin (v.volDriftPhase) * vDriftAmt * v.volDriftDepth * kMaxVolDrift;
+            v.volDriftPhase += twoPi * volDriftRateHz * (double) numSamples / sampleRate;
+            if (v.volDriftPhase >= twoPi) v.volDriftPhase = std::fmod (v.volDriftPhase, twoPi);
         }
 
         // Voices in a group with its own FX chain render into that group's scratch
@@ -614,7 +632,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             float trem = 1.0f;
             if (instTremActive)    trem *= instTrem[(size_t) (startSample + i)];
             if (groupTremActive)   trem *= groupTrem[(size_t) v.groupIndex][(size_t) (startSample + i)];
-            const float g = env * v.gain * v.declickGain * gv * gtv * gg * trem;
+            const float g = env * v.gain * v.declickGain * gv * gtv * gg * trem * volDriftMul;
 
             for (int ch = 0; ch < outChannels; ++ch)
             {
@@ -682,7 +700,10 @@ void VoiceEngine::applyLfoBlock (int numSamples)
         }
     globalTuningMul = 1.0;
     for (auto& g : groupTuningModMul) g = 1.0;
-    driftDepthThisBlock = 0.0f;   // set by the GLOBAL_TUNING modulator below when per-sample drift is active
+    // Drift gate: for a library with a dedicated Drift button (hasDriftGateButton), the
+    // wheels only take effect while that button's GLOBAL_TUNING modulator is engaged
+    // (depth > 0). Libraries without such a button leave the gate open (wheel controls).
+    driftGateOpen = ! hasDriftGateButton;
 
     // Tuning of the tremulant relative to the preset's binding ranges: the amplitude
     // (gain) swing on a per-group LEVEL effect is deepened a little, and pitch vibrato
@@ -718,6 +739,15 @@ void VoiceEngine::applyLfoBlock (int numSamples)
             const double outMax = b.translationOutputMax.value_or (1.0);
             const double val = outMin + u * (outMax - outMin);
 
+            if (b.parameter == "GLOBAL_TUNING" && hasDriftGateButton)
+            {
+                // This library's Drift button rides GLOBAL_TUNING: use its depth purely as
+                // the on/off gate for the drift wheels (no global wow of its own).
+                if (m.depth > 1.0e-4f)
+                    driftGateOpen = true;
+                continue;
+            }
+
             if (b.parameter == "GLOBAL_TUNING" || (b.parameter == "GROUP_TUNING" && b.groupIndex))
             {
                 // Pitch modulation (vibrato / wow). A binding with an explicit output
@@ -725,16 +755,6 @@ void VoiceEngine::applyLfoBlock (int numSamples)
                 // Without a range, `modAmount` alone is near-zero, so treat it as a
                 // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible gentle
                 // wander that centres on the true pitch.
-                // Per-sample drift: this GLOBAL_TUNING modulator drives an INDEPENDENT
-                // per-voice drift (its depth = the Drift button's on/off) instead of the
-                // shared globalTuningMul; the actual pitch swing is per voice (see renderChunk).
-                if (b.parameter == "GLOBAL_TUNING" && hasPerSampleDrift)
-                {
-                    driftDepthThisBlock = m.depth;
-                    driftRateHz = m.freqHz;
-                    continue;
-                }
-
                 const bool hasRange = b.translationOutputMin.has_value() || b.translationOutputMax.has_value();
                 const double semis = hasRange ? val * kTuneScale
                                               : waveMid * (double) m.depth * kWowSemis;

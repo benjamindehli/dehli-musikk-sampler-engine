@@ -30,6 +30,8 @@ namespace id
     inline constexpr const char* pitchBendRange = "pitchBendRange";
     inline constexpr const char* chordOrder     = "chordOrder";   // first dropdown menu
     inline constexpr const char* masterOutput   = "masterOutput"; // user master output fader (dB)
+    inline constexpr const char* pitchDrift     = "pitchDrift";   // global pitch-drift wheel (0..1)
+    inline constexpr const char* volumeDrift    = "volumeDrift";  // global volume-drift wheel (0..1)
 }
 
 /** Build the APVTS layout for a whole library (auto-union of every mode's

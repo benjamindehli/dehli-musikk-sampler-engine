@@ -271,6 +271,10 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
             engine.setPitchBendRange (br->load());
         if (auto* mo = apvts->getRawParameterValue (params::id::masterOutput))
             engine.setMasterOutputGain (juce::Decibels::decibelsToGain (mo->load(), -60.0f));
+        if (auto* pd = apvts->getRawParameterValue (params::id::pitchDrift))
+            engine.setPitchDriftAmount (pd->load());
+        if (auto* vd = apvts->getRawParameterValue (params::id::volumeDrift))
+            engine.setVolumeDriftAmount (vd->load());
         if (const auto* m = getActiveMode())
         {
             params::applyCcToParams (midi, *m, *apvts);

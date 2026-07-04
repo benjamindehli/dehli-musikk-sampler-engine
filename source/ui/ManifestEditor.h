@@ -84,7 +84,24 @@ private:
     juce::Label    versionLabel, modeLabel, bendLabel;
     juce::ComboBox modeSelector;
     ColouredKeyboard keyboard;
-    juce::Slider pitchWheel, modWheel;
+    juce::Slider pitchWheel, modWheel;                 // left of the keyboard
+    juce::Slider pitchDriftWheel, volDriftWheel;       // right of the keyboard
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> pitchDriftAttachment, volDriftAttachment;
+    juce::Label pitchWheelLabel, modWheelLabel, pitchDriftLabel, volDriftLabel;   // captions under each wheel
+    juce::Label leftGroupLabel, rightGroupLabel;   // headers over each wheel pair ("Controls" / "Drift")
+
+    /** Translucent backdrop behind the wheels/labels/keyboard row. A real component
+        (layered above the manifest face but below the wheels) so it shows over a plugin's
+        opaque background image, giving the white labels contrast on any theme. */
+    struct BackdropPanel : juce::Component
+    {
+        void paint (juce::Graphics& g) override
+        {
+            g.setColour (juce::Colour (0xff000102).withAlpha (0.5f));
+            g.fillRoundedRectangle (getLocalBounds().toFloat(), 6.0f);
+        }
+    };
+    BackdropPanel bottomPanel;
     WheelLookAndFeel wheelLnf;
     StandaloneWindowLookAndFeel standaloneLnf;
     juce::LookAndFeel_V4 stripLnf;   // grayscale scheme for the top-strip combo/steppers

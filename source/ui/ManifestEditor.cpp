@@ -65,6 +65,9 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     };
     addAndMakeVisible (modeSelector);
 
+    bottomPanel.setInterceptsMouseClicks (false, false);
+    addAndMakeVisible (bottomPanel);
+
     keyboard.setAvailableRange (24, 119);
     keyboard.setLowestVisibleKey (lowestVisibleKey);
     keyboard.setKeyPressBaseOctave (keyOctave);
@@ -87,6 +90,36 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     modWheel.onValueChange = [this] { host.setModWheel ((int) modWheel.getValue()); };
     modWheel.setLookAndFeel (&wheelLnf);
     addAndMakeVisible (modWheel);
+
+    // Two drift wheels right of the keyboard: pitch drift + volume drift (all plugins).
+    for (juce::Slider* w : { &pitchDriftWheel, &volDriftWheel })
+    {
+        w->setSliderStyle (juce::Slider::LinearVertical);
+        w->setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        w->setLookAndFeel (&wheelLnf);
+        addAndMakeVisible (*w);
+    }
+    pitchDriftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        host.getApvts(), params::id::pitchDrift, pitchDriftWheel);
+    volDriftAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        host.getApvts(), params::id::volumeDrift, volDriftWheel);
+
+    // A header centred over each wheel pair, and a caption under each wheel. No per-label
+    // background — a single translucent panel behind the whole row (see paint()) carries
+    // the contrast, so white text reads on any plugin background.
+    const std::pair<juce::Label*, const char*> caps[] = {
+        { &leftGroupLabel,  "Controls" }, { &rightGroupLabel, "Drift" },   // headers (over pairs)
+        { &pitchWheelLabel, "Bend" }, { &modWheelLabel, "Mod" },           // left captions
+        { &pitchDriftLabel, "Pitch" }, { &volDriftLabel, "Volume" } };     // right captions
+    for (const auto& c : caps)
+    {
+        c.first->setText (c.second, juce::dontSendNotification);
+        c.first->setJustificationType (juce::Justification::centred);
+        c.first->setColour (juce::Label::textColourId, juce::Colour (0xffffffff));
+        c.first->setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
+        c.first->setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (*c.first);
+    }
 
     bendLabel.setText ("Bend", juce::dontSendNotification);
     bendLabel.setJustificationType (juce::Justification::centredRight);
@@ -148,6 +181,8 @@ ManifestEditor::~ManifestEditor()
     host.onModeChanged = nullptr;
     pitchWheel.setLookAndFeel (nullptr);
     modWheel.setLookAndFeel (nullptr);
+    pitchDriftWheel.setLookAndFeel (nullptr);
+    volDriftWheel.setLookAndFeel (nullptr);
     modeSelector.setLookAndFeel (nullptr);
     bendRangeSlider.setLookAndFeel (nullptr);
     masterSlider.setLookAndFeel (nullptr);
@@ -224,6 +259,10 @@ void ManifestEditor::rebuildUi()
         setParam (params::id::chordOrder, (float) idx);
     };
     addAndMakeVisible (*uiComponent);
+    // z-order (back → front): manifest face, then the translucent backdrop, then the
+    // wheels/labels/keyboard sit on top. Push the panel back first so the face lands
+    // behind it after uiComponent->toBack().
+    bottomPanel.toBack();
     uiComponent->toBack();
 
     keyboard.setColourRanges (ui.keyboardColors);
@@ -357,14 +396,40 @@ void ManifestEditor::resized()
         uiComponent->setBounds (area);
 
     const int kbHeight = 90, margin = 10;
-    const int wheelW = 22, wheelGap = 6;
+    const int wheelW = 22, wheelGap = 6, labelH = 13;
     const int wheelTop = area.getBottom() - margin - kbHeight;
+    const int wheelH   = kbHeight - 2 * labelH;   // header above + caption below → wheel vertically centred
+    const int wheelY   = wheelTop + labelH;
 
-    pitchWheel.setBounds (area.getX() + margin,             wheelTop, wheelW, kbHeight);
-    modWheel.setBounds   (pitchWheel.getRight() + wheelGap, wheelTop, wheelW, kbHeight);
+    auto placeWheel = [&] (juce::Slider& w, juce::Label& lbl, int x)
+    {
+        w.setBounds (x, wheelY, wheelW, wheelH);
+        lbl.setBounds (x - 8, wheelY + wheelH, wheelW + 16, labelH);   // caption under the wheel
+    };
 
-    const int sideGap = modWheel.getRight() + margin;
-    keyboard.setBounds (sideGap, wheelTop, area.getRight() - 2 * sideGap, kbHeight);
+    // Two wheels each side → the keyboard stays centred.
+    const int lx = area.getX() + margin;
+    placeWheel (pitchWheel, pitchWheelLabel, lx);
+    placeWheel (modWheel,   modWheelLabel,   lx + wheelW + wheelGap);
+
+    const int rx2 = area.getRight() - margin - wheelW;   // outermost right wheel
+    const int rx1 = rx2 - wheelW - wheelGap;             // inner right wheel
+    placeWheel (pitchDriftWheel, pitchDriftLabel, rx1);
+    placeWheel (volDriftWheel,   volDriftLabel,   rx2);
+
+    // A header centred over each wheel pair.
+    const int pairW = 2 * wheelW + wheelGap;
+    leftGroupLabel.setBounds  (lx,  wheelTop, pairW, labelH);
+    rightGroupLabel.setBounds (rx1, wheelTop, pairW, labelH);
+
+    const int kbLeft  = modWheel.getRight() + margin;
+    const int kbRight = pitchDriftWheel.getX() - margin;
+    keyboard.setBounds (kbLeft, wheelTop, juce::jmax (0, kbRight - kbLeft), kbHeight);
+
+    // One translucent panel behind the whole row (wheels + labels + keyboard).
+    bottomPanel.setBounds (juce::Rectangle<int>::leftTopRightBottom (
+        lx - margin / 2, wheelTop - 4,
+        rx2 + wheelW + margin / 2, wheelTop + kbHeight + 4));
 
     const float keyW = juce::jmax (12.0f, (float) keyboard.getWidth() / (float) countWhiteKeys (usedLow, usedHigh));
     keyboard.setKeyWidth (keyW);
