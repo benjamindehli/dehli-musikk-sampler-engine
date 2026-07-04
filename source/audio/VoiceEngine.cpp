@@ -169,6 +169,7 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupVolume.clearQuick();    groupVolume.insertMultiple (0, 1.0f, numGroups);
     groupTagVolume.clearQuick(); groupTagVolume.insertMultiple (0, 1.0f, numGroups);
     groupGain.clearQuick();      groupGain.insertMultiple (0, 1.0f, numGroups);
+    groupPan.clearQuick();       groupPan.insertMultiple (0, 0.0f, numGroups);   // 0 = centred
     groupEnabled.clearQuick();   groupEnabled.insertMultiple (0, true, numGroups);
     groupReleaseTrigger.clearQuick(); groupReleaseTrigger.insertMultiple (0, false, numGroups);
     groupCcLo.clearQuick();  groupCcLo.insertMultiple (0, -1, numGroups);
@@ -615,6 +616,16 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             && groupChains[(size_t) v.groupIndex] != nullptr)
             target = &groupBuffers[(size_t) v.groupIndex];
 
+        // Per-group stereo balance (double-track "Stereo"): centre = unity both sides,
+        // so a mono source panned hard-left keeps full level on L and silences R.
+        float panL = 1.0f, panR = 1.0f;
+        if (v.groupIndex >= 0 && v.groupIndex < groupPan.size())
+        {
+            const float pan = groupPan[v.groupIndex];
+            if      (pan < 0.0f) panR = 1.0f + pan;   // toward left  → attenuate R
+            else if (pan > 0.0f) panL = 1.0f - pan;   // toward right → attenuate L
+        }
+
         for (int i = 0; i < numSamples; ++i)
         {
             if (! v.loopEnabled && v.position >= (double) frames)   // one-shot end
@@ -641,7 +652,8 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                                   ? readLooped (v.buffer->audio, srcCh, v.position,
                                                 v.loopEnd, v.loopLen, v.loopXf)
                                   : interpolate (v.buffer->audio, srcCh, v.position);
-                target->addSample (ch, startSample + i, s * g);
+                const float panMul = (outChannels >= 2) ? (ch == 0 ? panL : (ch == 1 ? panR : 1.0f)) : 1.0f;
+                target->addSample (ch, startSample + i, s * g * panMul);
             }
 
             v.position += v.rate * pitchBendMul * tuneMul;
@@ -878,6 +890,12 @@ void VoiceEngine::setAmpRelease (float s) { ovRelease = s; }
 void VoiceEngine::setAmpAttackCurve  (float c) { ovAttackCurve  = c; }
 void VoiceEngine::setAmpDecayCurve   (float c) { ovDecayCurve   = c; }
 void VoiceEngine::setAmpReleaseCurve (float c) { ovReleaseCurve = c; }
+
+void VoiceEngine::setGroupPan (int g, float pan)
+{
+    if (g >= 0 && g < groupPan.size())
+        groupPan.set (g, juce::jlimit (-1.0f, 1.0f, pan));
+}
 
 void VoiceEngine::setGroupAmpAttack  (int g, float s) { if (g >= 0 && g < groupAttack.size())  groupAttack.set  (g, s); }
 void VoiceEngine::setGroupAmpDecay   (int g, float s) { if (g >= 0 && g < groupDecay.size())   groupDecay.set   (g, s); }

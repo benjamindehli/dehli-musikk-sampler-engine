@@ -79,6 +79,9 @@ public:
     /** Per-group output gain in dB (group-level `gain` effect). */
     void setGroupGain (int groupIndex, float db);
 
+    /** Per-group stereo pan (-1 left … 0 centre … +1 right). Double-track "Stereo" mode. */
+    void setGroupPan (int groupIndex, float pan);
+
     /** Set modulator `position`'s depth 0..1 (MOD_AMOUNT) / rate in Hz (FREQUENCY).
         A mode can have several modulators; `position` selects which (from the binding). */
     void setLfoDepth (int position, float depth);
@@ -166,6 +169,7 @@ private:
     FxOverride ovGroupGain[kMaxGroupVol];     // group-level gain effect (dB)
     FxOverride ovGroupEnabled[kMaxGroupVol];
     FxOverride ovGroupTuning[kMaxGroupVol];
+    FxOverride ovGroupPan[kMaxGroupVol];      // per-group stereo pan (double-track "Stereo")
     static constexpr int kMaxEffects = 8;
     FxOverride ovEffectEnabled[kMaxEffects];
     // Per-effect-index params, so several same-type instrument effects are independent

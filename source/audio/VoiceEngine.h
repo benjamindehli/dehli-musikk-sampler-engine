@@ -96,6 +96,11 @@ public:
         affect the same group without clobbering each other. */
     void setGroupGain (int groupIndex, float db);
 
+    /** Per-group stereo pan (-1 = hard left … 0 centre … +1 = hard right), a linear
+        balance on the mono source (centre = unity both sides). Drives the double-track
+        "Stereo" mode (one track left, the other right). */
+    void setGroupPan (int groupIndex, float pan);
+
     /** Global amp velocity-tracking override (AMP_VEL_TRACK, 0..1). Negative = use
         each group's own velTrack. How much note velocity scales voice volume. */
     void setAmpVelTrack (float amount) { ovVelTrack = amount; }
@@ -197,6 +202,7 @@ private:
     static constexpr float kNoCurve = -1000.0f;
     float ovAttackCurve { kNoCurve }, ovDecayCurve { kNoCurve }, ovReleaseCurve { kNoCurve };
     juce::Array<float> groupAttack, groupDecay, groupSustain, groupRelease;   // per-group (-1 = none)
+    juce::Array<float> groupPan;   // per-group balance (-1 left … 0 centre … +1 right)
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
 
     // ── Modulators (LFOs) ──────────────────────────────────────────────────

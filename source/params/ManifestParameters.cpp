@@ -247,6 +247,9 @@ static void applyBinding (SamplerEngine& eng, const Mode& mode, const Binding& b
     else if (p == "ENV_ATTACK_CURVE")    eng.setAmpAttackCurve  ((float) value);
     else if (p == "ENV_DECAY_CURVE")     eng.setAmpDecayCurve   ((float) value);
     else if (p == "ENV_RELEASE_CURVE")   eng.setAmpReleaseCurve ((float) value);
+    // Per-group pan (DecentSampler -100 left … +100 right → -1..+1). From the double-track
+    // "Stereo" button: track A panned left, track B right (or both centred when off).
+    else if (p == "PAN")                 { if (grp >= 0) eng.setGroupPan (grp, (float) value / 100.0f); }
     else if (p == "AMP_VOLUME")          { if (grp >= 0) eng.setGroupVolume (grp, (float) value); else eng.setMasterVolume ((float) value); }
     else if (p == "GROUP_TUNING")        eng.setGroupTuning (grp >= 0 ? grp : 0, (float) value);
     else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);

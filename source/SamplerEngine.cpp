@@ -135,6 +135,8 @@ void SamplerEngine::resetOverrides()
         g.touched.store (false);
     for (auto& g : ovGroupTuning)
         g.touched.store (false);
+    for (auto& g : ovGroupPan)
+        g.touched.store (false);
     for (int i = 0; i < kMaxEffects; ++i)
     {
         ovEffectEnabled[i].touched.store (false);
@@ -233,6 +235,10 @@ void SamplerEngine::applyFxOverrides (ModeRender& mr)
     for (int i = 0; i < kMaxGroupVol; ++i)
         if (ovGroupTuning[i].touched.load())
             mr.voices.setGroupTuning (i, ovGroupTuning[i].value.load());
+
+    for (int i = 0; i < kMaxGroupVol; ++i)
+        if (ovGroupPan[i].touched.load())
+            mr.voices.setGroupPan (i, ovGroupPan[i].value.load());
 }
 
 void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
@@ -400,6 +406,15 @@ void SamplerEngine::setGroupGain (int groupIndex, float db)
     {
         ovGroupGain[groupIndex].value.store (db);
         ovGroupGain[groupIndex].touched.store (true);
+    }
+}
+
+void SamplerEngine::setGroupPan (int groupIndex, float pan)
+{
+    if (groupIndex >= 0 && groupIndex < kMaxGroupVol)
+    {
+        ovGroupPan[groupIndex].value.store (pan);
+        ovGroupPan[groupIndex].touched.store (true);
     }
 }
 
