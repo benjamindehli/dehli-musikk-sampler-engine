@@ -85,6 +85,7 @@ public:
     }
     float readOutputPeak() override { return outputPeak.exchange (0.0f, std::memory_order_relaxed); }
     juce::String getPluginVersion() const override { return assets.version; }
+    juce::String getPluginName() const override { return getName(); }
     void noteButtonClicked (int buttonIndex) override
     {
         if (buttonIndex >= 0 && buttonIndex < kMaxUiButtons)

@@ -40,8 +40,11 @@ public:
         implementation reads-and-resets. Default 0 = no meter (host opts in). */
     virtual float readOutputPeak() { return 0.0f; }
 
-    /** Plugin version string (e.g. "0.1.0") shown in the top strip. Empty → no label. */
+    /** Plugin version string (e.g. "0.1.0") shown in the bottom strip. Empty → no version. */
     virtual juce::String getPluginVersion() const { return {}; }
+
+    /** Plugin display name (e.g. "Strykebrett") shown in the bottom strip. Empty → none. */
+    virtual juce::String getPluginName() const { return {}; }
 
     /** A UI button was clicked (its index in the tab). Lets the host resolve radio-style
         button groups by "last clicked wins" — momentary buttons that all target the same
@@ -81,7 +84,7 @@ private:
 
     ManifestEditorHost& host;
 
-    juce::Label    versionLabel, modeLabel, bendLabel;
+    juce::Label    versionLabel, modeLabel, bendLabel, creditLabel;   // versionLabel + creditLabel: bottom strip
     juce::ComboBox modeSelector;
     ColouredKeyboard keyboard;
     juce::Slider pitchWheel, modWheel;                 // left of the keyboard

@@ -36,19 +36,31 @@ int countWhiteKeys (int lo, int hi)
     return juce::jmax (1, n);
 }
 
-constexpr int kTopStrip = 28;
+constexpr int kTopStrip    = 28;
+constexpr int kBottomStrip = 18;   // credit / plugin-name footer (smaller than the top strip)
 } // namespace
 
 ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     : host (h),
       keyboard (h.getKeyboardState(), juce::MidiKeyboardComponent::horizontalKeyboard)
 {
-    const auto pluginVer = host.getPluginVersion();
-    versionLabel.setText (pluginVer.isNotEmpty() ? "v" + pluginVer : juce::String(),
-                          juce::dontSendNotification);
+    // Bottom strip: credit on the left, "<Plugin> v<version>" on the right — small, muted.
+    const auto pluginVer  = host.getPluginVersion();
+    const auto pluginName = host.getPluginName();
+    juce::String rightText = pluginName;
+    if (pluginVer.isNotEmpty())
+        rightText = (rightText.isNotEmpty() ? rightText + "  v" : "v") + pluginVer;
+    versionLabel.setText (rightText, juce::dontSendNotification);
     versionLabel.setJustificationType (juce::Justification::centredRight);
-    versionLabel.setFont (juce::Font (juce::FontOptions (12.0f)));
+    versionLabel.setFont (juce::Font (juce::FontOptions (10.0f)));
+    versionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff808182));   // muted
     addAndMakeVisible (versionLabel);
+
+    creditLabel.setText ("Benjamin Dehli  /  Dehli Musikk", juce::dontSendNotification);
+    creditLabel.setJustificationType (juce::Justification::centredLeft);
+    creditLabel.setFont (juce::Font (juce::FontOptions (10.0f)));
+    creditLabel.setColour (juce::Label::textColourId, juce::Colour (0xff808182));   // muted
+    addAndMakeVisible (creditLabel);
 
     modeLabel.setText ("Mode", juce::dontSendNotification);
     addAndMakeVisible (modeLabel);
@@ -226,8 +238,8 @@ int ManifestEditor::preferredHeight() const
 {
     if (const auto* m = host.getActiveMode())
         if (m->ui.height > 0)
-            return juce::jmax (1, m->ui.height - m->ui.cropTop) + kTopStrip;   // cropTop trims the top
-    return 375 + kTopStrip;
+            return juce::jmax (1, m->ui.height - m->ui.cropTop) + kTopStrip + kBottomStrip;   // cropTop trims the top
+    return 375 + kTopStrip + kBottomStrip;
 }
 
 void ManifestEditor::rebuildUi()
@@ -384,13 +396,16 @@ void ManifestEditor::resized()
     bendLabel.setBounds (top.removeFromLeft (40));
     bendRangeSlider.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, kCtrlH));
 
-    // Right side: version label, then one group laid out left→right —
-    // "Out" label · master fader · level meter.
-    versionLabel.setBounds (top.removeFromRight (90));
+    // Top-right group laid out left→right — "Out" label · master fader · level meter.
     auto outArea = top.removeFromRight (230).reduced (8, 3);
     meterLabel.setBounds (outArea.removeFromLeft (28));                 // "Out"
     outputMeter.setBounds (outArea.removeFromRight (60).reduced (0, 4)); // meter on the right
     masterSlider.setBounds (outArea.reduced (6, 0));                    // fader fills the middle
+
+    // Bottom strip: credit (left) / plugin name + version (right).
+    auto footer = area.removeFromBottom (kBottomStrip).reduced (10, 0);
+    creditLabel.setBounds  (footer.removeFromLeft  (footer.getWidth() / 2));
+    versionLabel.setBounds (footer);
 
     if (uiComponent != nullptr)
         uiComponent->setBounds (area);
