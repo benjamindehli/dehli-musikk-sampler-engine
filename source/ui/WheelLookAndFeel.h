@@ -28,16 +28,16 @@ public:
         auto slot = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height).reduced (0.5f);
         const float r = 3.0f;
 
-        g.setColour (juce::Colour (0xffa8a8a8));                       // slot/border (neutral gray)
+        g.setColour (juce::Colour (0xff2c2d2e));                       // slot/border (light shade of the face)
         g.fillRoundedRectangle (slot, r);
 
-        auto face = slot.reduced (1.0f);                               // neutral gray, centre #d3d3d3 (like the keyboard arrows)
-        g.setGradientFill (juce::ColourGradient (juce::Colour (0xffe3e3e3), face.getCentreX(), face.getY(),
-                                                 juce::Colour (0xffc3c3c3), face.getCentreX(), face.getBottom(), false));
+        auto face = slot.reduced (1.0f);                               // dark wheel face: light top → dark bottom
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2c2d2e), face.getCentreX(), face.getY(),
+                                                 juce::Colour (0xff191a1b), face.getCentreX(), face.getBottom(), false));
         g.fillRoundedRectangle (face, r);
 
         const float ty = juce::jlimit (face.getY() + 1.0f, face.getBottom() - 1.0f, sliderPos);
-        g.setColour (juce::Colour (0xff4a4a4a));                       // position ridge (neutral dark)
+        g.setColour (juce::Colour (0xfffdfeff));                       // position ridge (bright — reads on the dark face)
         g.fillRect (face.getX(), ty - 1.0f, face.getWidth(), 2.0f);
 
         g.setColour (juce::Colours::black.withAlpha (0.25f));

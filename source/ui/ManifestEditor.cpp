@@ -63,6 +63,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     addAndMakeVisible (creditLabel);
 
     modeLabel.setText ("Mode", juce::dontSendNotification);
+    modeLabel.setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
     addAndMakeVisible (modeLabel);
 
     const auto modeNames = host.getModeNames();
@@ -130,7 +131,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     {
         c.first->setText (c.second, juce::dontSendNotification);
         c.first->setJustificationType (juce::Justification::centred);
-        c.first->setColour (juce::Label::textColourId, juce::Colour (0xffffffff));
+        c.first->setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
         c.first->setFont (juce::Font (juce::FontOptions().withHeight (10.0f)));
         c.first->setInterceptsMouseClicks (false, false);
         addAndMakeVisible (*c.first);
@@ -138,6 +139,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
 
     bendLabel.setText ("Bend", juce::dontSendNotification);
     bendLabel.setJustificationType (juce::Justification::centredRight);
+    bendLabel.setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
     addAndMakeVisible (bendLabel);
 
     bendRangeSlider.setSliderStyle (juce::Slider::IncDecButtons);
@@ -149,7 +151,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
 
     // Performance/fidelity toggle: when on (default), notes skip drawbars pulled fully
     // down; off = every group triggers so raising a drawbar mid-note brings it in.
-    skipMutedButton.setColour (juce::ToggleButton::textColourId, juce::Colour (0xffbfc0c1));
+    skipMutedButton.setColour (juce::ToggleButton::textColourId, juce::Colour (0xfffdfeff));
     skipMutedButton.setTooltip ("On: don't trigger drawbars/groups that are fully down (saves polyphony). "
                                 "Off: always trigger, so raising a drawbar while a note is held brings it in.");
     addAndMakeVisible (skipMutedButton);
@@ -185,6 +187,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
 
     meterLabel.setText ("Out", juce::dontSendNotification);
     meterLabel.setJustificationType (juce::Justification::centredRight);
+    meterLabel.setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
     addAndMakeVisible (meterLabel);
     addAndMakeVisible (outputMeter);   // click the meter to reset its clip indicator
 
@@ -419,7 +422,7 @@ void ManifestEditor::shiftKeyboardOctave (int deltaOctaves)
 
 void ManifestEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (juce::Colour (0xff1a1a1a));
+    g.fillAll (juce::Colour (0xff191a1b));   // top + bottom strip background
 }
 
 void ManifestEditor::resized()
@@ -452,41 +455,45 @@ void ManifestEditor::resized()
     if (uiComponent != nullptr)
         uiComponent->setBounds (area);
 
-    const int kbHeight = 90, margin = 10;
-    const int wheelW = 22, wheelGap = 6, labelH = 13;
-    const int wheelTop = area.getBottom() - margin - kbHeight;
+    const int kbHeight = 90, vMargin = 10;
+    const int edgeMargin = 6;   // translucent panel ↔ window left/right edges
+    const int gap = 8;          // panel ↔ wheels, wheel ↔ wheel, wheels ↔ keyboard
+    const int wheelW = 20, labelH = 13;
+    const int wheelTop = area.getBottom() - vMargin - kbHeight;
     const int wheelH   = kbHeight - 2 * labelH;   // header above + caption below → wheel vertically centred
     const int wheelY   = wheelTop + labelH;
 
     auto placeWheel = [&] (juce::Slider& w, juce::Label& lbl, int x)
     {
         w.setBounds (x, wheelY, wheelW, wheelH);
-        lbl.setBounds (x - 8, wheelY + wheelH, wheelW + 16, labelH);   // caption under the wheel
+        lbl.setBounds (x - 8, wheelY + wheelH, wheelW + 16, labelH);   // caption centred under the wheel
     };
 
-    // Two wheels each side → the keyboard stays centred.
-    const int lx = area.getX() + margin;
-    placeWheel (pitchWheel, pitchWheelLabel, lx);
-    placeWheel (modWheel,   modWheelLabel,   lx + wheelW + wheelGap);
+    const int panelLeft  = area.getX() + edgeMargin;
+    const int panelRight = area.getRight() - edgeMargin;
 
-    const int rx2 = area.getRight() - margin - wheelW;   // outermost right wheel
-    const int rx1 = rx2 - wheelW - wheelGap;             // inner right wheel
+    // Two wheels each side, `gap` in from the panel → the keyboard stays centred.
+    const int lx = panelLeft + gap;
+    placeWheel (pitchWheel, pitchWheelLabel, lx);
+    placeWheel (modWheel,   modWheelLabel,   lx + wheelW + gap);
+
+    const int rx2 = panelRight - gap - wheelW;   // outermost right wheel
+    const int rx1 = rx2 - wheelW - gap;          // inner right wheel
     placeWheel (pitchDriftWheel, pitchDriftLabel, rx1);
     placeWheel (volDriftWheel,   volDriftLabel,   rx2);
 
     // A header centred over each wheel pair.
-    const int pairW = 2 * wheelW + wheelGap;
+    const int pairW = 2 * wheelW + gap;
     leftGroupLabel.setBounds  (lx,  wheelTop, pairW, labelH);
     rightGroupLabel.setBounds (rx1, wheelTop, pairW, labelH);
 
-    const int kbLeft  = modWheel.getRight() + margin;
-    const int kbRight = pitchDriftWheel.getX() - margin;
+    const int kbLeft  = modWheel.getRight() + gap;
+    const int kbRight = pitchDriftWheel.getX() - gap;
     keyboard.setBounds (kbLeft, wheelTop, juce::jmax (0, kbRight - kbLeft), kbHeight);
 
     // One translucent panel behind the whole row (wheels + labels + keyboard).
     bottomPanel.setBounds (juce::Rectangle<int>::leftTopRightBottom (
-        lx - margin / 2, wheelTop - 4,
-        rx2 + wheelW + margin / 2, wheelTop + kbHeight + 4));
+        panelLeft, wheelTop - 4, panelRight, wheelTop + kbHeight + 4));
 
     const float keyW = juce::jmax (12.0f, (float) keyboard.getWidth() / (float) countWhiteKeys (usedLow, usedHigh));
     keyboard.setKeyWidth (keyW);
