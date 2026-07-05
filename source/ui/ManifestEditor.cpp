@@ -62,11 +62,14 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     creditLabel.setColour (juce::Label::textColourId, juce::Colour (0xff808182));   // muted
     addAndMakeVisible (creditLabel);
 
+    const auto modeNames = host.getModeNames();
+    showModeSelector = modeNames.size() > 1;   // a single-mode plugin has nothing to select
+
     modeLabel.setText ("Mode", juce::dontSendNotification);
     modeLabel.setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
-    addAndMakeVisible (modeLabel);
+    modeLabel.setVisible (showModeSelector);
+    addChildComponent (modeLabel);
 
-    const auto modeNames = host.getModeNames();
     for (int i = 0; i < modeNames.size(); ++i)
         modeSelector.addItem (modeNames[i], i + 1);
     if (! modeNames.isEmpty())
@@ -76,7 +79,8 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     {
         setParam (params::id::mode, (float) (modeSelector.getSelectedId() - 1));
     };
-    addAndMakeVisible (modeSelector);
+    modeSelector.setVisible (showModeSelector);
+    addChildComponent (modeSelector);
 
     bottomPanel.setInterceptsMouseClicks (false, false);
     addAndMakeVisible (bottomPanel);
@@ -152,8 +156,9 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     // Performance/fidelity toggle: when on (default), notes skip drawbars pulled fully
     // down; off = every group triggers so raising a drawbar mid-note brings it in.
     skipMutedButton.setColour (juce::ToggleButton::textColourId, juce::Colour (0xfffdfeff));
-    skipMutedButton.setTooltip ("On: don't trigger drawbars/groups that are fully down (saves polyphony). "
-                                "Off: always trigger, so raising a drawbar while a note is held brings it in.");
+    skipMutedButton.setTooltip ("Poly-save: notes skip drawbars/groups pulled fully down, saving "
+                                "polyphony and CPU. Turn off to let raising a drawbar while a note is "
+                                "held bring it in (uses more voices).");
     addAndMakeVisible (skipMutedButton);
     skipMutedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         host.getApvts(), params::id::skipMuted, skipMutedButton);
@@ -433,9 +438,12 @@ void ManifestEditor::resized()
     // Combo + steppers are trimmed to the text-box height (22) and centred in the
     // strip so their heights match the number inputs.
     constexpr int kCtrlH = 22;
-    modeLabel.setBounds (top.removeFromLeft (46));
-    modeSelector.setBounds (top.removeFromLeft (220).withSizeKeepingCentre (220, kCtrlH));
-    top.removeFromLeft (12);
+    if (showModeSelector)   // single-mode plugins hide the selector; the rest shift left
+    {
+        modeLabel.setBounds (top.removeFromLeft (46));
+        modeSelector.setBounds (top.removeFromLeft (220).withSizeKeepingCentre (220, kCtrlH));
+        top.removeFromLeft (12);
+    }
     bendLabel.setBounds (top.removeFromLeft (40));
     bendRangeSlider.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, kCtrlH));
     top.removeFromLeft (16);

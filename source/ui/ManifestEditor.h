@@ -145,7 +145,7 @@ private:
     juce::Component::SafePointer<juce::DocumentWindow> themedWindow;   // standalone window we styled (if any)
     juce::Slider bendRangeSlider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bendRangeAttachment;
-    juce::ToggleButton skipMutedButton { "Skip silent" };   // skip triggering muted groups (drawbars fully down)
+    juce::ToggleButton skipMutedButton { "Poly-save" };   // skip triggering muted groups (drawbars fully down)
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> skipMutedAttachment;
     juce::Slider masterSlider;   // master output fader (top strip, between "Out" and the meter)
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
@@ -155,7 +155,10 @@ private:
     int keyOctave { 6 };
     int lowestVisibleKey { 36 };
     int usedLow { 36 }, usedHigh { 96 };
+    bool showModeSelector { true };   // hidden for single-mode plugins (nothing to pick)
     std::unique_ptr<ManifestUiComponent> uiComponent;
+
+    juce::TooltipWindow tooltipWindow { this };   // shows control tooltips (e.g. Poly-save)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestEditor)
 };
