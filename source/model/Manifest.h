@@ -347,6 +347,14 @@ struct KeyboardColor
     juce::String color;          // ARGB hex
 };
 
+// When button `fromButton` is set to state `fromState`, the editor also forces button
+// `toButton` to state `toState`. Used e.g. so turning Stereo on auto-enables Double Track.
+struct ButtonLink
+{
+    int fromButton = -1, fromState = -1;
+    int toButton   = -1, toState   = -1;
+};
+
 struct Ui
 {
     juce::String background;     // bg image asset id
@@ -363,6 +371,7 @@ struct Ui
     // e.g. whiteKeyTint "30ffcc00" = subtle yellow on white keys only. Empty = none.
     juce::String whiteKeyTint;
     juce::String blackKeyTint;
+    juce::Array<ButtonLink> buttonLinks;   // "when button X → state S, set button Y → state T"
 };
 
 // ---------------------------------------------------------------------------

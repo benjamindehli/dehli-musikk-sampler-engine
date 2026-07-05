@@ -405,6 +405,19 @@ Ui parseUi (const var& v)
             ui.keyboardColors.add (kc);
         }
     }
+
+    if (auto* links = get (v, "buttonLinks").getArray())
+    {
+        for (auto& l : *links)
+        {
+            ButtonLink bl;
+            bl.fromButton = intg (l, "fromButton", -1);
+            bl.fromState  = intg (l, "fromState", -1);
+            bl.toButton   = intg (l, "toButton", -1);
+            bl.toState    = intg (l, "toState", -1);
+            ui.buttonLinks.add (bl);
+        }
+    }
     return ui;
 }
 

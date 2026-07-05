@@ -277,6 +277,14 @@ void ManifestEditor::rebuildUi()
     {
         setParam (params::buttonParamId (buttonIndex).toRawUTF8(), (float) stateIndex);
         host.noteButtonClicked (buttonIndex);   // radio groups: last clicked wins
+
+        // Button links: e.g. turning Stereo on auto-enables Double Track. Fire the
+        // dependent button's param (its widget refreshes + the host applies it).
+        if (const auto* m = host.getActiveMode())
+            for (const auto& link : m->ui.buttonLinks)
+                if (link.fromButton == buttonIndex && link.fromState == stateIndex
+                    && link.toButton >= 0 && link.toState >= 0)
+                    setParam (params::buttonParamId (link.toButton).toRawUTF8(), (float) link.toState);
     };
     uiComponent->onMenuChanged = [this] (const Menu&, int idx)
     {

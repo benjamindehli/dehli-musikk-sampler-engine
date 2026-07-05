@@ -387,6 +387,21 @@ var writeUi (const Ui& ui)
     kb.set ("colors", fromArray (colors));
     o.set ("keyboard", kb.toVar());
 
+    if (! ui.buttonLinks.isEmpty())
+    {
+        juce::Array<var> links;
+        for (const auto& bl : ui.buttonLinks)
+        {
+            Obj lo;
+            lo.set ("fromButton", bl.fromButton);
+            lo.set ("fromState", bl.fromState);
+            lo.set ("toButton", bl.toButton);
+            lo.set ("toState", bl.toState);
+            links.add (lo.toVar());
+        }
+        o.set ("buttonLinks", fromArray (links));
+    }
+
     return o.toVar();
 }
 
