@@ -40,6 +40,10 @@ public:
         implementation reads-and-resets. Default 0 = no meter (host opts in). */
     virtual float readOutputPeak() { return 0.0f; }
 
+    /** Per-channel output peaks since the previous call, for the stereo meter. Default:
+        mono — both channels get readOutputPeak(). */
+    virtual void readOutputPeaks (float& outL, float& outR) { outL = outR = readOutputPeak(); }
+
     /** Plugin version string (e.g. "0.1.0") shown in the bottom strip. Empty → no version. */
     virtual juce::String getPluginVersion() const { return {}; }
 

@@ -15,15 +15,17 @@ class LevelMeter : public juce::Component
 public:
     LevelMeter() { setInterceptsMouseClicks (true, false); }
 
-    /** peakLinear = max |sample| over the block(s) since the last call (0 .. >1). */
-    void setLevel (float peakLinear)
+    /** Stereo peaks (max |sample| per channel over the block(s) since the last call). */
+    void setLevels (float peakL, float peakR)
     {
-        const float db = peakLinear > 1.0e-6f ? juce::Decibels::gainToDecibels (peakLinear) : -120.0f;
-        if (db >= displayDb) displayDb = db;                              // instant attack
-        else                 displayDb = juce::jmax (db, displayDb - 2.0f); // ~2 dB/tick decay
-        if (peakLinear >= 1.0f) clipped = true;                          // latch clip
+        updateChannel (displayDbL, peakL);
+        updateChannel (displayDbR, peakR);
+        if (peakL >= 1.0f || peakR >= 1.0f) clipped = true;   // latch clip (either channel)
         repaint();
     }
+
+    /** Mono convenience — drives both channels the same. */
+    void setLevel (float peakLinear) { setLevels (peakLinear, peakLinear); }
 
     void mouseDown (const juce::MouseEvent&) override { clipped = false; repaint(); }
 
@@ -34,8 +36,30 @@ public:
         auto clipArea = r.removeFromRight (clipW);
         r.removeFromRight (2.0f);
 
+        // Split the height into two stacked horizontal bars: L on top, R below.
+        const float gap = 1.0f;
+        const float barH = (r.getHeight() - gap) * 0.5f;
+        auto lArea = r.removeFromTop (barH);
+        r.removeFromTop (gap);
+        drawBar (g, lArea, displayDbL);
+        drawBar (g, r,     displayDbR);
+
+        g.setColour (clipped ? juce::Colours::red : juce::Colour (0xff3a2222));
+        g.fillRoundedRectangle (clipArea, 2.0f);
+    }
+
+private:
+    static void updateChannel (float& displayDb, float peakLinear)
+    {
+        const float db = peakLinear > 1.0e-6f ? juce::Decibels::gainToDecibels (peakLinear) : -120.0f;
+        if (db >= displayDb) displayDb = db;                              // instant attack
+        else                 displayDb = juce::jmax (db, displayDb - 2.0f); // ~2 dB/tick decay
+    }
+
+    static void drawBar (juce::Graphics& g, juce::Rectangle<float> area, float displayDb)
+    {
         g.setColour (juce::Colour (0xff1b1b1b));
-        g.fillRoundedRectangle (r, 2.0f);
+        g.fillRoundedRectangle (area, 1.5f);
 
         constexpr float kMinDb = -48.0f;
         const float norm = juce::jlimit (0.0f, 1.0f, (displayDb - kMinDb) / (0.0f - kMinDb));
@@ -45,15 +69,11 @@ public:
                                  : displayDb > -12.0f ? juce::Colour (0xffe6c100)   // amber
                                                       : juce::Colour (0xff39d353);  // green
             g.setColour (c);
-            g.fillRoundedRectangle (r.withWidth (r.getWidth() * norm), 2.0f);
+            g.fillRoundedRectangle (area.withWidth (area.getWidth() * norm), 1.5f);
         }
-
-        g.setColour (clipped ? juce::Colours::red : juce::Colour (0xff3a2222));
-        g.fillRoundedRectangle (clipArea, 2.0f);
     }
 
-private:
-    float displayDb { -120.0f };
+    float displayDbL { -120.0f }, displayDbR { -120.0f };
     bool  clipped { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LevelMeter)

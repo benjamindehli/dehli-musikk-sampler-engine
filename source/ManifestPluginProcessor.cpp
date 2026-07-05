@@ -317,10 +317,13 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     engine.processBlock (buffer, midi, getPlayHead());
 
-    // Output peak for the editor's level meter (max-since-read; meter resets it).
-    const float blockPeak = buffer.getMagnitude (0, buffer.getNumSamples());
-    if (blockPeak > outputPeak.load (std::memory_order_relaxed))
-        outputPeak.store (blockPeak, std::memory_order_relaxed);
+    // Per-channel output peak for the editor's stereo level meter (max-since-read; the
+    // meter resets it). Mono output feeds both bars the same.
+    const int n = buffer.getNumSamples();
+    const float peakL = buffer.getMagnitude (0, 0, n);
+    const float peakR = buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : peakL;
+    if (peakL > outputPeakL.load (std::memory_order_relaxed)) outputPeakL.store (peakL, std::memory_order_relaxed);
+    if (peakR > outputPeakR.load (std::memory_order_relaxed)) outputPeakR.store (peakR, std::memory_order_relaxed);
 }
 
 juce::AudioProcessorEditor* ManifestPluginProcessor::createEditor()

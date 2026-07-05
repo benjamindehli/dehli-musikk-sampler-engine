@@ -385,7 +385,9 @@ void ManifestEditor::refreshWidgets()
 void ManifestEditor::timerCallback()
 {
     refreshWidgets();
-    outputMeter.setLevel (host.readOutputPeak());
+    float peakL = 0.0f, peakR = 0.0f;
+    host.readOutputPeaks (peakL, peakR);
+    outputMeter.setLevels (peakL, peakR);
 
     host.pollEngine();   // message-thread housekeeping (free retired modes)
 

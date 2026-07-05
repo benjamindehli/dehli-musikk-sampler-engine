@@ -91,7 +91,12 @@ public:
         if (i < 0 || i >= library.modes.size()) return nullptr;
         return &library.modes.getReference (i);
     }
-    float readOutputPeak() override { return outputPeak.exchange (0.0f, std::memory_order_relaxed); }
+    float readOutputPeak() override { return outputPeakL.exchange (0.0f, std::memory_order_relaxed); }
+    void readOutputPeaks (float& outL, float& outR) override
+    {
+        outL = outputPeakL.exchange (0.0f, std::memory_order_relaxed);
+        outR = outputPeakR.exchange (0.0f, std::memory_order_relaxed);
+    }
     juce::String getPluginVersion() const override { return assets.version; }
     juce::String getPluginName() const override { return getName(); }
     bool  isLoading() const override    { return engine.isLoading(); }
@@ -132,7 +137,8 @@ private:
     static constexpr int kMaxUiButtons = 64;
     std::atomic<std::uint32_t> buttonClickSeq[kMaxUiButtons] {};
     std::atomic<std::uint32_t> clickCounter { 0 };
-    std::atomic<float> outputPeak { 0.0f };   // max |sample| since the editor last read it
+    std::atomic<float> outputPeakL { 0.0f };   // per-channel max |sample| since the editor last read
+    std::atomic<float> outputPeakR { 0.0f };
     juce::StringArray irButtonParams;         // button params that swap a convolution IR
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestPluginProcessor)
