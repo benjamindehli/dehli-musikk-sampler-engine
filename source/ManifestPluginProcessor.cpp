@@ -98,16 +98,26 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
     library = parsed.library;
     sampleSource = std::make_unique<EmbeddedFlacSource>();
 
-    // Large libraries ship their samples as a memory-mapped pack (samples.pak + .json
-    // index) rather than compiled into the binary — register those first; anything the
-    // pack doesn't cover (IRs, or samples for a plugin that still embeds) falls back to
-    // the embedded BinaryData below.
-    if (assets.packFile != juce::File() && assets.packFile.existsAsFile())
+    // Samples ship as a memory-mapped pack (samples.pak + .json index) in a shared support
+    // folder rather than compiled into the binary — register those first; anything the pack
+    // doesn't cover (IRs, or a plugin built with --no-pack-samples) falls back to embedded
+    // BinaryData below. The pack path defaults to the shared folder keyed by product name;
+    // a plugin may override it via Assets::packFile. Missing pack → embedded fallback.
+    juce::File packFile = assets.packFile;
+    if (packFile == juce::File() && assets.name.isNotEmpty())
     {
-        const auto indexFile = juce::File (assets.packFile.getFullPathName() + ".json");
-        if (! sampleSource->openPack (assets.packFile, indexFile))
+        auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
+       #if JUCE_MAC
+        dir = dir.getChildFile ("Application Support");   // userApplicationDataDirectory is ~/Library on macOS
+       #endif
+        packFile = dir.getChildFile ("DehliMusikk").getChildFile (assets.name).getChildFile ("samples.pak");
+    }
+    if (packFile.existsAsFile())
+    {
+        const auto indexFile = juce::File (packFile.getFullPathName() + ".json");
+        if (! sampleSource->openPack (packFile, indexFile))
             DBG ("ManifestPluginProcessor: sample pack present but failed to open: "
-                 << assets.packFile.getFullPathName());
+                 << packFile.getFullPathName());
     }
 
     // Every referenced sample/IR id resolves to "<stem>.flac" in the bundle.
