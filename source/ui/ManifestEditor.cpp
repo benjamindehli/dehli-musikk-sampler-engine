@@ -408,7 +408,9 @@ bool ManifestEditor::handleKey (const juce::KeyPress& key)
 
 void ManifestEditor::shiftKeyboardOctave (int deltaOctaves)
 {
-    keyOctave = juce::jlimit (1, 9, keyOctave + deltaOctaves);
+    // Min 0 (not 1) so the QWERTY play-octave can reach MIDI note 0 (C-2) — SubC's range
+    // starts there. Matches the load-time init clamp; min 1 stranded octave 0 after any shift.
+    keyOctave = juce::jlimit (0, 9, keyOctave + deltaOctaves);
     keyboard.setKeyPressBaseOctave (keyOctave);
 
     // Scroll the visible window ONLY when the range is genuinely wider than the keyboard.
