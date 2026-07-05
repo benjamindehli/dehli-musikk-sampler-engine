@@ -449,8 +449,13 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
             }
             else if (b.parameter == "TAG_ENABLED")
             {
-                const double sel = mn + (double) norm * (mx - mn);   // selector value in control range
-                const bool on = evalTable (b.translationTable, sel) > 0.5;
+                // Table selector → discrete on/off at 0.5. A linear/no-table binding (e.g.
+                // StyloPoly's noise-on knob, which enables its group as the knob leaves 0)
+                // has no table, so evalTable would return 0 and wrongly disable it forever —
+                // fall back to the mapped value being positive.
+                const bool on = b.translationTable.isNotEmpty()
+                                  ? evalTable (b.translationTable, mn + (double) norm * (mx - mn)) > 0.5
+                                  : outputValue (b, norm, mn, mx) > 1.0e-6;
                 for (int gi = 0; gi < mode.groups.size(); ++gi)
                     if (mode.groups.getReference (gi).tags.contains (b.identifier))
                         engine.setGroupEnabled (gi, on);

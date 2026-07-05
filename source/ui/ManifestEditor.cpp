@@ -25,17 +25,6 @@ juce::Range<int> usedNoteRange (const Mode& m)
     return { lo, hi };
 }
 
-int countWhiteKeys (int lo, int hi)
-{
-    int n = 0;
-    for (int note = lo; note <= hi; ++note)
-    {
-        const int pc = note % 12;
-        if (pc == 0 || pc == 2 || pc == 4 || pc == 5 || pc == 7 || pc == 9 || pc == 11) ++n;
-    }
-    return juce::jmax (1, n);
-}
-
 constexpr int kTopStrip    = 28;
 constexpr int kBottomStrip = 18;   // credit / plugin-name footer (smaller than the top strip)
 } // namespace
@@ -422,8 +411,27 @@ void ManifestEditor::shiftKeyboardOctave (int deltaOctaves)
     keyOctave = juce::jlimit (1, 9, keyOctave + deltaOctaves);
     keyboard.setKeyPressBaseOctave (keyOctave);
 
-    lowestVisibleKey = juce::jlimit (usedLow, juce::jmax (usedLow, usedHigh - 12),
-                                     lowestVisibleKey + deltaOctaves * 12);
+    // Scroll the visible window ONLY when the range is genuinely wider than the keyboard.
+    // When the whole range fits, scrolling would expose blank keyboard past the last key
+    // (a shadowless white "box" beyond E5). When it doesn't fit, clamp the first visible key
+    // so the highest key stays flush against the right edge rather than leaving that same gap.
+    const float totalW = keyboard.getTotalKeyboardWidth();
+    const float viewW  = (float) keyboard.getWidth();
+    if (totalW <= viewW + 1.0f)
+    {
+        lowestVisibleKey = usedLow;
+    }
+    else
+    {
+        const float maxScroll = totalW - viewW;
+        int maxFirst = usedLow;
+        for (int n = usedLow; n <= usedHigh; ++n)
+        {
+            if (keyboard.getKeyStartPosition (n) <= maxScroll) maxFirst = n;
+            else break;
+        }
+        lowestVisibleKey = juce::jlimit (usedLow, maxFirst, lowestVisibleKey + deltaOctaves * 12);
+    }
     keyboard.setLowestVisibleKey (lowestVisibleKey);
 }
 
@@ -499,14 +507,30 @@ void ManifestEditor::resized()
 
     const int kbLeft  = modWheel.getRight() + gap;
     const int kbRight = pitchDriftWheel.getX() - gap;
-    keyboard.setBounds (kbLeft, wheelTop, juce::jmax (0, kbRight - kbLeft), kbHeight);
+    const int availW  = juce::jmax (0, kbRight - kbLeft);
+    keyboard.setBounds (kbLeft, wheelTop, availW, kbHeight);   // provisional; may shrink to fit below
 
     // One translucent panel behind the whole row (wheels + labels + keyboard).
     bottomPanel.setBounds (juce::Rectangle<int>::leftTopRightBottom (
         panelLeft, wheelTop - 4, panelRight, wheelTop + kbHeight + 4));
 
-    const float keyW = juce::jmax (12.0f, (float) keyboard.getWidth() / (float) countWhiteKeys (usedLow, usedHigh));
-    keyboard.setKeyWidth (keyW);
+    // Probe the component's OWN white-key count at keyWidth 1 — counting them ourselves is
+    // off-by-one vs what MidiKeyboardComponent renders at the range ends. Then pick an INTEGER
+    // key width: floor (integer division) so the keys never spill past the width.
+    keyboard.setKeyWidth (1.0f);
+    const int whiteKeys = juce::jmax (1, (int) keyboard.getTotalKeyboardWidth());
+    const int keyW      = juce::jmax (12, availW / whiteKeys);
+    keyboard.setKeyWidth ((float) keyW);
+
+    // When the range fits, size the keyboard to EXACTLY its keys and centre it. Otherwise MKC
+    // paints the leftover component width as blank white keys past the last note — a shadowless
+    // "box" you can still scroll/drag into even at a near-exact fit (rounding leaves the content
+    // a hair wider than the view). Sizing the component to the content removes that region
+    // entirely; the small centred margin shows the dark panel behind, not white. A range too
+    // wide to fit keeps the full width and scrolls (its own high keys, never blank space).
+    const int contentW = whiteKeys * keyW;
+    if (contentW < availW)
+        keyboard.setBounds (kbLeft + (availW - contentW) / 2, wheelTop, contentW, kbHeight);
 
     loadingOverlay.setBounds (getLocalBounds());   // covers everything while decoding
 }
