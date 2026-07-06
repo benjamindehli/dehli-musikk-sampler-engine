@@ -37,6 +37,15 @@ float renderNote (dm::SamplerEngine& engine, int note)
     return out.getSample (0, 200);
 }
 
+// Modes build ASYNCHRONOUSLY (setLibrary/setActiveMode start a background decode; the
+// engine renders silence until the next processBlock adopts the published unit). Real
+// hosts see the loading overlay; the test must wait for the build before rendering.
+void waitForBuild (dm::SamplerEngine& engine)
+{
+    for (int i = 0; i < 5000 && engine.isLoading(); ++i)
+        juce::Thread::sleep (1);
+}
+
 class SamplerEngineTests : public juce::UnitTest
 {
 public:
@@ -71,6 +80,7 @@ public:
         dm::SamplerEngine engine;
         engine.prepare (kSR, 512, 1);
         engine.setLibrary (parsed.library, source);
+        waitForBuild (engine);
 
         expectEquals (engine.getNumModes(), 2);
         expectEquals (engine.getModeNames().joinIntoString (","), juce::String ("Alpha,Beta"));
@@ -81,11 +91,13 @@ public:
 
         // Switch to mode 1; the next processBlock adopts it → sample B (0.25).
         engine.setActiveMode (1);
+        waitForBuild (engine);
         expectEquals (engine.getActiveModeIndex(), 1);
         expectWithinAbsoluteError (renderNote (engine, 60), 0.25f, 0.02f);
 
         // And back to mode 0.
         engine.setActiveMode (0);
+        waitForBuild (engine);
         expectWithinAbsoluteError (renderNote (engine, 60), 0.50f, 0.02f);
 
         // Out-of-range switch is ignored.

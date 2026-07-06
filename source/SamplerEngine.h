@@ -149,6 +149,13 @@ private:
         SampleSource* src = nullptr;
         juce::StringArray held;
         ~ModeRender() { if (src != nullptr) for (const auto& id : held) src->release (id); }
+
+        // Intrusive link for the retired list: the audio thread pushes swapped-out
+        // modes onto a lock-free stack (see processBlock); the message thread drains
+        // it. A single slot would LEAK a mode (and its held PCM) if two swaps happen
+        // between drains — e.g. fast mode switches, or a host running with no editor
+        // open (nothing pumping drainRetired).
+        ModeRender* nextRetired = nullptr;
     };
 
     // Build a mode (decode its samples/IRs, wire voices+fx). Runs on the background load
@@ -169,9 +176,13 @@ private:
     int    numChannels { 2 };
     int    activeModeIndex { 0 };
 
-    ModeRender* current { nullptr };                 // audio-thread owned
+    // `current` is written by the audio thread (adopting a published mode) and read by
+    // message-thread accessors (voice count, IR swaps, group setters) — atomic so those
+    // reads are well-defined. `retired` is the head of an intrusive lock-free stack
+    // (chained via ModeRender::nextRetired) so no swap is ever lost between drains.
+    std::atomic<ModeRender*> current { nullptr };    // audio-thread owned (atomic for x-thread reads)
     std::atomic<ModeRender*> pending { nullptr };    // build → audio
-    std::atomic<ModeRender*> retired { nullptr };    // audio → message (deferred free)
+    std::atomic<ModeRender*> retired { nullptr };    // audio → message (deferred free), intrusive stack
 
     // Background mode-building: buildMode (decode) runs off the message thread so the
     // editor stays live (full-size window + progress overlay) during the heavy decode.

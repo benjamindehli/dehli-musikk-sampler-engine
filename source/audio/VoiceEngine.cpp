@@ -9,6 +9,10 @@ namespace
 constexpr int kMaxVoices = 128;  // headroom for heavy layering (the cassette organ stacks 9 drawbars
                                  // × double-track per note); balanced against per-voice render CPU —
                                  // 256 could overrun on big chords. skip-muted keeps the live count low.
+constexpr int kStealFadeVoices = 8;   // extra slots reserved for STOLEN voices: the victim's state is
+                                      // copied here to ramp out over the ~4 ms declick instead of the
+                                      // new note hard-cutting its waveform (audible click). Never
+                                      // allocated directly — allocateVoice scans only [0, kMaxVoices).
 
 // Modulator waveform shape name → index, and the shape's value at a phase (cycles) → -1..1.
 int lfoShapeFromString (const juce::String& s)
@@ -132,7 +136,7 @@ float readLooped (const juce::AudioBuffer<float>& buf, int ch, double pos,
 
 VoiceEngine::VoiceEngine()
 {
-    voices.resize (kMaxVoices);
+    voices.resize (kMaxVoices + kStealFadeVoices);   // tail slots = steal fade-outs only
 }
 
 void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int numChannels)
@@ -409,15 +413,37 @@ const VoiceEngine::Zone* VoiceEngine::pickZoneInGroup (int group, int note, int 
 
 VoiceEngine::Voice* VoiceEngine::allocateVoice()
 {
-    for (auto& v : voices)
-        if (! v.active)
-            return &v;
+    // Regular slots only — the tail slots are reserved for steal fade-outs below.
+    for (int i = 0; i < kMaxVoices; ++i)
+        if (! voices[(size_t) i].active)
+            return &voices[(size_t) i];
 
-    // Steal the oldest active voice.
+    // All busy: steal the oldest. Overwriting it in place would hard-cut its waveform
+    // at a non-zero value (audible click), so first COPY its playing state into a
+    // reserved fade slot, where it ramps to silence over the ~4 ms declick, then hand
+    // the original slot to the new note. Voice holds no heap-owning members (buffers/
+    // tags are pointers into stable storage), so the copy is allocation-free.
     Voice* oldest = &voices.front();
-    for (auto& v : voices)
-        if (v.startOrder < oldest->startOrder)
-            oldest = &v;
+    for (int i = 1; i < kMaxVoices; ++i)
+        if (voices[(size_t) i].startOrder < oldest->startOrder)
+            oldest = &voices[(size_t) i];
+
+    Voice* fade = nullptr;
+    for (int i = kMaxVoices; i < (int) voices.size(); ++i)
+        if (! voices[(size_t) i].active)
+            { fade = &voices[(size_t) i]; break; }
+    if (fade == nullptr)   // every fade slot busy — reuse the quietest (nearest silence, least clicky)
+        for (int i = kMaxVoices; i < (int) voices.size(); ++i)
+            if (fade == nullptr || voices[(size_t) i].declickGain < fade->declickGain)
+                fade = &voices[(size_t) i];
+
+    if (fade != nullptr)
+    {
+        *fade = *oldest;
+        fade->fadingOut = true;
+        fade->declickDelta = -1.0f / (float) juce::jmax (1, (int) (sampleRate * 0.004));
+        oldest->active = false;   // slot is now free for the new note
+    }
     return oldest;
 }
 

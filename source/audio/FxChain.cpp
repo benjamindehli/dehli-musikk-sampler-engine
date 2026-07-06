@@ -14,7 +14,7 @@ void FxChain::prepare (double sampleRate, int maxBlockSize, int numChannels)
     for (auto& slotPtr : slots)
     {
         auto& s = *slotPtr;
-        if (s.kind == Kind::lowpass)
+        if (s.kind == Kind::lowpass || s.kind == Kind::highpass)   // both use `filter`
             s.filter.prepare (spec);
         if (s.convolution != nullptr)
             s.convolution->prepare (spec);
@@ -37,7 +37,7 @@ void FxChain::reset()
 {
     for (auto& slotPtr : slots)
     {
-        if (slotPtr->kind == Kind::lowpass)
+        if (slotPtr->kind == Kind::lowpass || slotPtr->kind == Kind::highpass)
             slotPtr->filter.reset();
         if (slotPtr->convolution != nullptr)
             slotPtr->convolution->reset();
@@ -285,32 +285,41 @@ void FxChain::setEffectEnabled (int index, bool enabled)
 
 void FxChain::setEffectParam (int index, const juce::String& parameter, float value)
 {
+    if      (parameter == "FX_FILTER_FREQUENCY") setEffectParam (index, FxParam::filterFrequency, value);
+    else if (parameter == "FX_FILTER_RESONANCE") setEffectParam (index, FxParam::filterResonance, value);
+    else if (parameter == "FX_MOD_RATE")         setEffectParam (index, FxParam::modRate, value);
+    else if (parameter == "FX_MOD_DEPTH")        setEffectParam (index, FxParam::modDepth, value);
+    else if (parameter == "FX_FEEDBACK")         setEffectParam (index, FxParam::feedback, value);
+    else if (parameter == "FX_MIX")              setEffectParam (index, FxParam::mix, value);
+    else if (parameter == "FX_DRIVE")            setEffectParam (index, FxParam::drive, value);
+    else if (parameter == "LEVEL")               setEffectParam (index, FxParam::level, value);
+    else if (parameter == "FX_OUTPUT_LEVEL")     setEffectParam (index, FxParam::outputLevel, value);
+    else if (parameter == "ENABLED")             setEffectParam (index, FxParam::enabled, value);
+}
+
+void FxChain::setEffectParam (int index, FxParam parameter, float value) noexcept
+{
     if (index < 0 || index >= (int) slots.size())
         return;
 
     auto& s = *slots[(size_t) index];
-    if (parameter == "FX_FILTER_FREQUENCY")
-        s.frequency.store (value);
-    else if (parameter == "FX_FILTER_RESONANCE")
-        s.resonance.store (value);
-    else if (parameter == "FX_MOD_RATE")
-        s.modRate.store (value);
-    else if (parameter == "FX_MOD_DEPTH")
-        s.modDepth.store (value);
-    else if (parameter == "FX_FEEDBACK")
-        s.modFeedback.store (value);
-    else if (parameter == "FX_MIX")
-        s.mix.store (value);
-    else if (parameter == "FX_DRIVE")
-        s.drive.store (value);
-    else if (parameter == "LEVEL")             // gain effect, level in dB
-        s.gainLinear.store (juce::Decibels::decibelsToGain (value));
-    else if (parameter == "FX_OUTPUT_LEVEL")
-        // Meaning depends on the slot kind: wave_shaper output (linear 0..1) vs
-        // convolution wet trim (dB). We know the kind here, so route by it.
-        (s.kind == Kind::waveShaper ? s.output : s.wetGainDb).store (value);
-    else if (parameter == "ENABLED")
-        s.enabled.store (value > 0.5f);
+    switch (parameter)
+    {
+        case FxParam::filterFrequency: s.frequency.store (value);   break;
+        case FxParam::filterResonance: s.resonance.store (value);   break;
+        case FxParam::modRate:         s.modRate.store (value);     break;
+        case FxParam::modDepth:        s.modDepth.store (value);    break;
+        case FxParam::feedback:        s.modFeedback.store (value); break;
+        case FxParam::mix:             s.mix.store (value);         break;
+        case FxParam::drive:           s.drive.store (value);       break;
+        case FxParam::level:           s.gainLinear.store (juce::Decibels::decibelsToGain (value)); break;   // gain effect, dB
+        case FxParam::outputLevel:
+            // Meaning depends on the slot kind: wave_shaper output (linear 0..1) vs
+            // convolution wet trim (dB). We know the kind here, so route by it.
+            (s.kind == Kind::waveShaper ? s.output : s.wetGainDb).store (value);
+            break;
+        case FxParam::enabled:         s.enabled.store (value > 0.5f); break;
+    }
 }
 
 void FxChain::setEffectIr (int index, const SampleSource& source, const juce::String& irId)

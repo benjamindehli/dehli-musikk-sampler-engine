@@ -7,6 +7,7 @@ namespace dm
 void NoteSequencer::prepare (double newSampleRate)
 {
     sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
+    active.reserve (16);   // avoid the first few audio-thread growths (see startActive)
     reset();
 }
 
@@ -56,20 +57,36 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     if (sequences.isEmpty())
         return;
 
-    Active a;
+    // Runs on the audio thread (a trigger key was pressed) — RECYCLE a finished slot
+    // rather than erase+push_back: a recycled slot's `fired` vector keeps its capacity,
+    // so steady-state triggering is allocation-free. The list only grows (rarely) to
+    // the high-water mark of CONCURRENT sequences.
+    Active* slot = nullptr;
+    for (auto& existing : active)
+        if (existing.done) { slot = &existing; break; }
+    if (slot == nullptr)
+    {
+        active.emplace_back();
+        slot = &active.back();
+    }
+
+    Active& a = *slot;
     a.seqIndex   = juce::jlimit (0, sequences.size() - 1, t.sequence + indexOffset.load());
     a.transpose  = t.transpose;
     a.velocity   = t.trackVelocity ? velocity : 1.0f;
     a.loop       = t.loop;
     a.triggerNote = triggerNote;
     a.startStream = startStream;
+    a.nextNote   = 0;
+    a.stopping   = false;
+    a.stopStream = 0;
+    a.done       = false;
+    a.fired.clear();   // keeps capacity
 
     double rate = rateOverride.load();
     if (rate <= 0.0) rate = t.rate;
     if (rate <= 0.0) rate = 10.0;
     a.samplesPerStep = sampleRate / rate;
-
-    active.push_back (std::move (a));
 }
 
 void NoteSequencer::advanceActive (Active& a, juce::MidiBuffer& out, int numSamples)
@@ -201,12 +218,17 @@ void NoteSequencer::process (const juce::MidiBuffer& in, juce::MidiBuffer& out, 
         }
     }
 
-    for (auto& a : active)
-        advanceActive (a, out, numSamples);
+    // Zero-length blocks (some hosts send them around transport ops) would hit
+    // jlimit(0, numSamples-1, …) with an inverted range inside advanceActive; the
+    // pass-through above already handled any MIDI safely, so just skip advancing.
+    if (numSamples <= 0)
+        return;
 
-    active.erase (std::remove_if (active.begin(), active.end(),
-                                  [] (const Active& a) { return a.done; }),
-                  active.end());
+    // Done slots stay in the list for reuse by startActive (their `fired` capacity
+    // is the point) — advanceActive just skips them. No erase → no churn.
+    for (auto& a : active)
+        if (! a.done)
+            advanceActive (a, out, numSamples);
 
     streamPos += numSamples;
 }

@@ -40,6 +40,13 @@ public:
     // --- runtime control (thread-safe) ---
     void setEffectEnabled (int index, bool enabled);
     void setEffectParam (int index, const juce::String& parameter, float value);
+
+    /** Enum-addressed variant for the AUDIO THREAD: constructing a juce::String from a
+        literal heap-allocates, and SamplerEngine::applyFxOverrides runs every block —
+        this overload is allocation-free. The string overload delegates here. */
+    enum class FxParam { filterFrequency, filterResonance, modRate, modDepth, feedback,
+                         mix, drive, level, outputLevel, enabled };
+    void setEffectParam (int index, FxParam parameter, float value) noexcept;
     int  getNumEffects() const noexcept { return (int) slots.size(); }
 
     /** Reload a convolution slot's impulse response at runtime (e.g. a cabinet

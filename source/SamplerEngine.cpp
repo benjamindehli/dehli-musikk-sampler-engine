@@ -9,9 +9,9 @@ SamplerEngine::SamplerEngine()  = default;
 SamplerEngine::~SamplerEngine()
 {
     joinBuildThread();
-    delete current;
+    delete current.exchange (nullptr);
     delete pending.exchange (nullptr);
-    delete retired.exchange (nullptr);
+    drainRetired();
 }
 
 juce::String SamplerEngine::getVersion()
@@ -123,7 +123,14 @@ void SamplerEngine::joinBuildThread()
 
 void SamplerEngine::drainRetired()
 {
-    delete retired.exchange (nullptr);
+    // Take the whole retired stack in one exchange, then delete the chain. Message
+    // thread only — deleting a ModeRender releases its held PCM back to the source.
+    for (auto* p = retired.exchange (nullptr); p != nullptr;)
+    {
+        auto* next = p->nextRetired;
+        delete p;
+        p = next;
+    }
 }
 
 void SamplerEngine::beginAsyncBuild (int index)
@@ -165,7 +172,7 @@ void SamplerEngine::prepare (double newSampleRate, int newMaxBlock, int newNumCh
     if (library != nullptr)
     {
         joinBuildThread();
-        delete current; current = nullptr;
+        delete current.exchange (nullptr);
         delete pending.exchange (nullptr);
         beginAsyncBuild (activeModeIndex);
     }
@@ -183,7 +190,7 @@ void SamplerEngine::setLibrary (const PresetLibrary& lib, SampleSource& src)
     if (sampleRate > 0.0)
     {
         joinBuildThread();
-        delete current; current = nullptr;
+        delete current.exchange (nullptr);
         delete pending.exchange (nullptr);
         beginAsyncBuild (activeModeIndex);
     }
@@ -265,19 +272,22 @@ void SamplerEngine::setActiveMode (int index)
 
 void SamplerEngine::applyFxOverrides (ModeRender& mr)
 {
+    // Audio thread — use the enum-addressed FxChain setters: the string overload would
+    // construct a juce::String (heap alloc) per touched param per block, forever.
+    using P = FxChain::FxParam;
     if (ovLowpassEnabled.touched.load()) mr.fx.setLowpassEnabled (ovLowpassEnabled.value.load() > 0.5f);
     for (int i = 0; i < kMaxEffects; ++i)
     {
         if (ovEffectEnabled[i].touched.load()) mr.fx.setEffectEnabled (i, ovEffectEnabled[i].value.load() > 0.5f);
-        if (ovEffectMix[i].touched.load())     mr.fx.setEffectParam (i, "FX_MIX",          ovEffectMix[i].value.load());
-        if (ovEffectDrive[i].touched.load())   mr.fx.setEffectParam (i, "FX_DRIVE",        ovEffectDrive[i].value.load());
-        if (ovEffectLevel[i].touched.load())   mr.fx.setEffectParam (i, "LEVEL",           ovEffectLevel[i].value.load());
-        if (ovEffectOutput[i].touched.load())  mr.fx.setEffectParam (i, "FX_OUTPUT_LEVEL", ovEffectOutput[i].value.load());
-        if (ovEffectFreq[i].touched.load())    mr.fx.setEffectParam (i, "FX_FILTER_FREQUENCY", ovEffectFreq[i].value.load());
-        if (ovEffectReso[i].touched.load())      mr.fx.setEffectParam (i, "FX_FILTER_RESONANCE", ovEffectReso[i].value.load());
-        if (ovEffectModRate[i].touched.load())   mr.fx.setEffectParam (i, "FX_MOD_RATE",  ovEffectModRate[i].value.load());
-        if (ovEffectModDepth[i].touched.load())  mr.fx.setEffectParam (i, "FX_MOD_DEPTH", ovEffectModDepth[i].value.load());
-        if (ovEffectFeedback[i].touched.load())  mr.fx.setEffectParam (i, "FX_FEEDBACK",  ovEffectFeedback[i].value.load());
+        if (ovEffectMix[i].touched.load())     mr.fx.setEffectParam (i, P::mix,             ovEffectMix[i].value.load());
+        if (ovEffectDrive[i].touched.load())   mr.fx.setEffectParam (i, P::drive,           ovEffectDrive[i].value.load());
+        if (ovEffectLevel[i].touched.load())   mr.fx.setEffectParam (i, P::level,           ovEffectLevel[i].value.load());
+        if (ovEffectOutput[i].touched.load())  mr.fx.setEffectParam (i, P::outputLevel,     ovEffectOutput[i].value.load());
+        if (ovEffectFreq[i].touched.load())    mr.fx.setEffectParam (i, P::filterFrequency, ovEffectFreq[i].value.load());
+        if (ovEffectReso[i].touched.load())      mr.fx.setEffectParam (i, P::filterResonance, ovEffectReso[i].value.load());
+        if (ovEffectModRate[i].touched.load())   mr.fx.setEffectParam (i, P::modRate,  ovEffectModRate[i].value.load());
+        if (ovEffectModDepth[i].touched.load())  mr.fx.setEffectParam (i, P::modDepth, ovEffectModDepth[i].value.load());
+        if (ovEffectFeedback[i].touched.load())  mr.fx.setEffectParam (i, P::feedback, ovEffectFeedback[i].value.load());
     }
     if (ovLowpassFreq.touched.load())    mr.fx.setLowpassFrequency (ovLowpassFreq.value.load());
     if (ovReverbMix.touched.load())      mr.fx.setReverbMix (ovReverbMix.value.load());
@@ -333,35 +343,41 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused (playHead);   // M6 reads transport for the auto-strum sequencer
 
     // Adopt a newly-built mode, if one was published. Hand the old one back to the
-    // message thread for deletion (never free on the audio thread).
+    // message thread for deletion (never free on the audio thread) by PUSHING it onto
+    // the retired stack — a plain store would drop (leak) a previously-retired mode
+    // still waiting to be drained.
     if (auto* next = pending.exchange (nullptr))
     {
-        auto* old = current;
-        current = next;
-        retired.store (old);   // old may be nullptr; that's fine
+        if (auto* old = current.exchange (next))
+        {
+            old->nextRetired = retired.load (std::memory_order_relaxed);
+            while (! retired.compare_exchange_weak (old->nextRetired, old))
+            {}   // only drainRetired's exchange(nullptr) can race us; retry is cheap
+        }
     }
 
-    if (current == nullptr)
+    auto* cur = current.load (std::memory_order_relaxed);   // audio thread is the only writer
+    if (cur == nullptr)
     {
         buffer.clear();
         return;
     }
 
     if (ovSequencerRateTouched.load())
-        current->sequencer.setRate (ovSequencerRate.load());
+        cur->sequencer.setRate (ovSequencerRate.load());
     if (ovSequencerIndexTouched.load())
-        current->sequencer.setIndexOffset (ovSequencerIndex.load());
+        cur->sequencer.setIndexOffset (ovSequencerIndex.load());
 
-    applyFxOverrides (*current);
-    current->voices.setPitchBendRange (pitchBendRange.load());
-    current->voices.setPitchDriftAmount (pitchDriftAmount.load());
-    current->voices.setVolumeDriftAmount (volumeDriftAmount.load());
-    current->voices.setSkipMutedGroups (skipMutedGroups.load());
+    applyFxOverrides (*cur);
+    cur->voices.setPitchBendRange (pitchBendRange.load());
+    cur->voices.setPitchDriftAmount (pitchDriftAmount.load());
+    cur->voices.setVolumeDriftAmount (volumeDriftAmount.load());
+    cur->voices.setSkipMutedGroups (skipMutedGroups.load());
 
     // Sequencer turns trigger keys into the strummed/played notes; non-trigger
     // keys pass straight through.
-    current->sequencer.process (midi, sequencedMidi, buffer.getNumSamples());
-    current->voices.processBlock (buffer, sequencedMidi);
+    cur->sequencer.process (midi, sequencedMidi, buffer.getNumSamples());
+    cur->voices.processBlock (buffer, sequencedMidi);
 
     // Per-library trim (--gain) applied BEFORE the FX: DecentSampler reduces level
     // ahead of its effects, so the (input-level-dependent) wave_shaper sees the same
@@ -371,7 +387,7 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     // wave_shaper the chain is linear, so pre- vs post-FX placement is equivalent.)
     if (libraryGain != 1.0f)
         buffer.applyGain (libraryGain);
-    current->fx.process (buffer);
+    cur->fx.process (buffer);
     if (masterGain != 1.0f)
         buffer.applyGain (masterGain);
     if (uiMasterGain != 1.0f)   // user master output fader — the very last stage
@@ -398,13 +414,13 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
 void SamplerEngine::releaseResources()
 {
     joinBuildThread();   // no build may outlive the audio settings it was built for
-    if (current != nullptr)
-        current->voices.releaseResources();
+    if (auto* c = current.load())
+        c->voices.releaseResources();
 }
 
 int SamplerEngine::getActiveVoiceCount() const noexcept
 {
-    auto* c = current;
+    auto* c = current.load();
     return c != nullptr ? c->voices.getActiveVoiceCount() : 0;
 }
 
@@ -491,8 +507,8 @@ void SamplerEngine::setEffectIr (int effectIndex, const juce::String& irId)
     if (effectIndex < 0 || effectIndex >= kMaxEffects)
         return;
     desiredIr[effectIndex] = irId;
-    if (current != nullptr && source != nullptr)
-        current->fx.setEffectIr (effectIndex, *source, irId);
+    if (auto* c = current.load(); c != nullptr && source != nullptr)
+        c->fx.setEffectIr (effectIndex, *source, irId);
 }
 
 void SamplerEngine::setGroupTagVolume (int groupIndex, float volume)
@@ -576,15 +592,16 @@ void SamplerEngine::setGroupEffectParam (int groupIndex, int effectIndex,
     // Applied directly to the live mode's per-group chain. applyToEngine re-applies
     // these every block (idempotent), so after a mode swap the next block restores
     // the knob values over the freshly-built mode's manifest defaults.
-    if (current != nullptr)
-        current->voices.setGroupEffectParam (groupIndex, effectIndex, parameter, value);
+    if (auto* c = current.load())
+        c->voices.setGroupEffectParam (groupIndex, effectIndex, parameter, value);
 }
 
 void SamplerEngine::setGroupAmp (int groupIndex, const juce::String& parameter, float value)
 {
-    if (current == nullptr)
+    auto* c = current.load();
+    if (c == nullptr)
         return;
-    auto& v = current->voices;
+    auto& v = c->voices;
     if      (parameter == "ENV_ATTACK")  v.setGroupAmpAttack  (groupIndex, value);
     else if (parameter == "ENV_DECAY")   v.setGroupAmpDecay   (groupIndex, value);
     else if (parameter == "ENV_SUSTAIN") v.setGroupAmpSustain (groupIndex, value);
