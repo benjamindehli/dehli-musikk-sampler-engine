@@ -39,24 +39,10 @@ namespace id
     engine-supported controls/buttons/menus, + mode + pitch-bend range). */
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLibrary& library);
 
-/** Apply the current parameter values to the engine for `mode`. Idempotent; call
-    every block so a mode switch (which resets engine overrides) is re-honoured.
-    `buttonClickSeq` (per-tab-button-index click counters, or nullptr) orders the button
-    application by recency: buttons are applied oldest-click-first so that among any set
-    of buttons targeting the SAME effect (a radio group, e.g. Strykebrett's ensemble
-    O/Acc/Solo/Organ) the most recently clicked one wins — and clicking an unrelated
-    button never disturbs that. Never-clicked buttons keep index order. */
-void applyToEngine (SamplerEngine& engine, const Mode& mode,
-                    juce::AudioProcessorValueTreeState& apvts,
-                    const std::atomic<std::uint32_t>* buttonClickSeq = nullptr);
-
-/** Map incoming MIDI CC (mod wheel etc.) to params per the mode's CC bindings. */
-void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
-                      juce::AudioProcessorValueTreeState& apvts);
-
-/** Apply note key-switches (e.g. low keys selecting the chord-order menu). */
-void applyNoteSwitches (const juce::MidiBuffer& midi, const Mode& mode,
-                        juce::AudioProcessorValueTreeState& apvts);
+// The per-block param→engine application lives in CompiledMode (CompiledMode.h):
+// each mode's bindings are compiled ONCE at load into an allocation-free plan the
+// audio thread applies every block. (The old applyToEngine/applyCcToParams/
+// applyNoteSwitches re-did string lookups, table parsing and tag scans per block.)
 
 /** The float param ids a control's bindings drive (for the editor to write/reflect). */
 juce::StringArray controlParamIds (const Control& c);

@@ -84,6 +84,10 @@ public:
         + Room convolutions) be addressed independently. */
     void setEffectParam (int effectIndex, const juce::String& parameter, float value);
 
+    /** Enum-addressed variant for the audio thread / compiled binding plans —
+        no string work. The string overload delegates here. */
+    void setEffectParam (int effectIndex, FxChain::FxParam parameter, float value) noexcept;
+
     /** Reload a convolution effect's IR (cabinet selector). MESSAGE THREAD only. */
     void setEffectIr (int effectIndex, const juce::String& irId);
 
@@ -120,7 +124,13 @@ public:
     void setGroupEnabled (int groupIndex, bool enabled);
     void setGroupTuning (int groupIndex, float semitones);   // GROUP_TUNING
     void setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value);
+    void setGroupEffectParam (int groupIndex, int effectIndex, FxChain::FxParam parameter, float value);   // enum variant (compiled plans)
     void setGroupAmp (int groupIndex, const juce::String& parameter, float value);   // per-group ENV_*
+    // Explicit per-stage variants (compiled plans; avoid the string dispatch).
+    void setGroupAmpAttack  (int groupIndex, float seconds);
+    void setGroupAmpDecay   (int groupIndex, float seconds);
+    void setGroupAmpSustain (int groupIndex, float level);
+    void setGroupAmpRelease (int groupIndex, float seconds);
 
     /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
     void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }

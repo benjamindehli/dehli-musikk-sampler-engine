@@ -463,18 +463,37 @@ void SamplerEngine::setWaveShaperOutput (float l) { ovWaveOutput.value.store (l)
 
 void SamplerEngine::setEffectParam (int effectIndex, const juce::String& parameter, float value)
 {
+    if      (parameter == "FX_MIX")              setEffectParam (effectIndex, FxChain::FxParam::mix, value);
+    else if (parameter == "FX_DRIVE")            setEffectParam (effectIndex, FxChain::FxParam::drive, value);
+    else if (parameter == "LEVEL")               setEffectParam (effectIndex, FxChain::FxParam::level, value);
+    else if (parameter == "FX_OUTPUT_LEVEL")     setEffectParam (effectIndex, FxChain::FxParam::outputLevel, value);
+    else if (parameter == "FX_FILTER_FREQUENCY") setEffectParam (effectIndex, FxChain::FxParam::filterFrequency, value);
+    else if (parameter == "FX_FILTER_RESONANCE") setEffectParam (effectIndex, FxChain::FxParam::filterResonance, value);
+    else if (parameter == "FX_MOD_RATE")         setEffectParam (effectIndex, FxChain::FxParam::modRate, value);
+    else if (parameter == "FX_MOD_DEPTH")        setEffectParam (effectIndex, FxChain::FxParam::modDepth, value);
+    else if (parameter == "FX_FEEDBACK")         setEffectParam (effectIndex, FxChain::FxParam::feedback, value);
+    else if (parameter == "ENABLED")             setEffectParam (effectIndex, FxChain::FxParam::enabled, value);
+}
+
+void SamplerEngine::setEffectParam (int effectIndex, FxChain::FxParam parameter, float value) noexcept
+{
     if (effectIndex < 0 || effectIndex >= kMaxEffects)
         return;
-    FxOverride* o = parameter == "FX_MIX"              ? &ovEffectMix[effectIndex]
-                  : parameter == "FX_DRIVE"            ? &ovEffectDrive[effectIndex]
-                  : parameter == "LEVEL"               ? &ovEffectLevel[effectIndex]
-                  : parameter == "FX_OUTPUT_LEVEL"     ? &ovEffectOutput[effectIndex]
-                  : parameter == "FX_FILTER_FREQUENCY" ? &ovEffectFreq[effectIndex]
-                  : parameter == "FX_FILTER_RESONANCE" ? &ovEffectReso[effectIndex]
-                  : parameter == "FX_MOD_RATE"         ? &ovEffectModRate[effectIndex]
-                  : parameter == "FX_MOD_DEPTH"        ? &ovEffectModDepth[effectIndex]
-                  : parameter == "FX_FEEDBACK"         ? &ovEffectFeedback[effectIndex]
-                                                       : nullptr;
+    using P = FxChain::FxParam;
+    FxOverride* o = nullptr;
+    switch (parameter)
+    {
+        case P::mix:             o = &ovEffectMix[effectIndex];      break;
+        case P::drive:           o = &ovEffectDrive[effectIndex];    break;
+        case P::level:           o = &ovEffectLevel[effectIndex];    break;
+        case P::outputLevel:     o = &ovEffectOutput[effectIndex];   break;
+        case P::filterFrequency: o = &ovEffectFreq[effectIndex];     break;
+        case P::filterResonance: o = &ovEffectReso[effectIndex];     break;
+        case P::modRate:         o = &ovEffectModRate[effectIndex];  break;
+        case P::modDepth:        o = &ovEffectModDepth[effectIndex]; break;
+        case P::feedback:        o = &ovEffectFeedback[effectIndex]; break;
+        case P::enabled:         o = &ovEffectEnabled[effectIndex];  value = value > 0.5f ? 1.0f : 0.0f; break;
+    }
     if (o != nullptr) { o->value.store (value); o->touched.store (true); }
 }
 
@@ -589,23 +608,31 @@ void SamplerEngine::setGroupTuning (int groupIndex, float semitones)
 void SamplerEngine::setGroupEffectParam (int groupIndex, int effectIndex,
                                          const juce::String& parameter, float value)
 {
-    // Applied directly to the live mode's per-group chain. applyToEngine re-applies
+    // Applied directly to the live mode's per-group chain. The compiled plan re-applies
     // these every block (idempotent), so after a mode swap the next block restores
     // the knob values over the freshly-built mode's manifest defaults.
     if (auto* c = current.load())
         c->voices.setGroupEffectParam (groupIndex, effectIndex, parameter, value);
 }
 
+void SamplerEngine::setGroupEffectParam (int groupIndex, int effectIndex,
+                                         FxChain::FxParam parameter, float value)
+{
+    if (auto* c = current.load())
+        c->voices.setGroupEffectParam (groupIndex, effectIndex, parameter, value);
+}
+
 void SamplerEngine::setGroupAmp (int groupIndex, const juce::String& parameter, float value)
 {
-    auto* c = current.load();
-    if (c == nullptr)
-        return;
-    auto& v = c->voices;
-    if      (parameter == "ENV_ATTACK")  v.setGroupAmpAttack  (groupIndex, value);
-    else if (parameter == "ENV_DECAY")   v.setGroupAmpDecay   (groupIndex, value);
-    else if (parameter == "ENV_SUSTAIN") v.setGroupAmpSustain (groupIndex, value);
-    else if (parameter == "ENV_RELEASE") v.setGroupAmpRelease (groupIndex, value);
+    if      (parameter == "ENV_ATTACK")  setGroupAmpAttack  (groupIndex, value);
+    else if (parameter == "ENV_DECAY")   setGroupAmpDecay   (groupIndex, value);
+    else if (parameter == "ENV_SUSTAIN") setGroupAmpSustain (groupIndex, value);
+    else if (parameter == "ENV_RELEASE") setGroupAmpRelease (groupIndex, value);
 }
+
+void SamplerEngine::setGroupAmpAttack  (int g, float s) { if (auto* c = current.load()) c->voices.setGroupAmpAttack  (g, s); }
+void SamplerEngine::setGroupAmpDecay   (int g, float s) { if (auto* c = current.load()) c->voices.setGroupAmpDecay   (g, s); }
+void SamplerEngine::setGroupAmpSustain (int g, float l) { if (auto* c = current.load()) c->voices.setGroupAmpSustain (g, l); }
+void SamplerEngine::setGroupAmpRelease (int g, float s) { if (auto* c = current.load()) c->voices.setGroupAmpRelease (g, s); }
 
 } // namespace dm

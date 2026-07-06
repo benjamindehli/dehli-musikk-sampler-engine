@@ -31,6 +31,16 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
                                 apvts->addParameterListener (pid, this);
                             }
                         }
+
+    // Compile every mode's param→engine bindings once (the APVTS layout is final here);
+    // processBlock indexes by the active mode. Also resolve the global param pointers.
+    for (const auto& m : library.modes)
+        compiledModes.push_back (std::make_unique<params::CompiledMode> (m, *apvts));
+    prmPitchBendRange = apvts->getRawParameterValue (params::id::pitchBendRange);
+    prmMasterOutput   = apvts->getRawParameterValue (params::id::masterOutput);
+    prmPitchDrift     = apvts->getRawParameterValue (params::id::pitchDrift);
+    prmVolumeDrift    = apvts->getRawParameterValue (params::id::volumeDrift);
+    prmSkipMuted      = apvts->getRawParameterValue (params::id::skipMuted);
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor()
@@ -307,21 +317,21 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     if (loaded && apvts != nullptr)
     {
-        if (auto* br = apvts->getRawParameterValue (params::id::pitchBendRange))
-            engine.setPitchBendRange (br->load());
-        if (auto* mo = apvts->getRawParameterValue (params::id::masterOutput))
-            engine.setMasterOutputGain (juce::Decibels::decibelsToGain (mo->load(), -60.0f));
-        if (auto* pd = apvts->getRawParameterValue (params::id::pitchDrift))
-            engine.setPitchDriftAmount (pd->load());
-        if (auto* vd = apvts->getRawParameterValue (params::id::volumeDrift))
-            engine.setVolumeDriftAmount (vd->load());
-        if (auto* sm = apvts->getRawParameterValue (params::id::skipMuted))
-            engine.setSkipMutedGroups (sm->load() > 0.5f);
-        if (const auto* m = getActiveMode())
+        if (prmPitchBendRange) engine.setPitchBendRange (prmPitchBendRange->load());
+        if (prmMasterOutput)   engine.setMasterOutputGain (juce::Decibels::decibelsToGain (prmMasterOutput->load(), -60.0f));
+        if (prmPitchDrift)     engine.setPitchDriftAmount (prmPitchDrift->load());
+        if (prmVolumeDrift)    engine.setVolumeDriftAmount (prmVolumeDrift->load());
+        if (prmSkipMuted)      engine.setSkipMutedGroups (prmSkipMuted->load() > 0.5f);
+
+        // The active mode's pre-compiled binding plan (built once in the constructor):
+        // allocation-free CC routing, note switches and param→engine apply.
+        const int mi = engine.getActiveModeIndex();
+        if (mi >= 0 && mi < (int) compiledModes.size())
         {
-            params::applyCcToParams (midi, *m, *apvts);
-            params::applyNoteSwitches (midi, *m, *apvts);
-            params::applyToEngine (engine, *m, *apvts, buttonClickSeq);
+            const auto& cm = *compiledModes[(size_t) mi];
+            cm.applyCc (midi);
+            cm.applyNoteSwitches (midi);
+            cm.apply (engine, buttonClickSeq);
         }
     }
 

@@ -1039,4 +1039,12 @@ void VoiceEngine::setGroupEffectParam (int groupIndex, int effectIndex, const ju
         setGroupGain (groupIndex, value);   // fallback: group with no chain (e.g. a single gain effect)
 }
 
+void VoiceEngine::setGroupEffectParam (int groupIndex, int effectIndex, FxChain::FxParam parameter, float value)
+{
+    if (groupIndex >= 0 && (size_t) groupIndex < groupChains.size() && groupChains[(size_t) groupIndex])
+        groupChains[(size_t) groupIndex]->setEffectParam (effectIndex, parameter, value);
+    else if (parameter == FxChain::FxParam::level)
+        setGroupGain (groupIndex, value);   // fallback: group with no chain (e.g. a single gain effect)
+}
+
 } // namespace dm

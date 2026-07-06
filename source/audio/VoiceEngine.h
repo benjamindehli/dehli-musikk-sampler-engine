@@ -90,6 +90,7 @@ public:
     /** Set a parameter on one of a group's per-group insert effects (by effectIndex):
         FX_FILTER_FREQUENCY / LEVEL / FX_MIX etc. (e.g. an organ swell filter). */
     void setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value);
+    void setGroupEffectParam (int groupIndex, int effectIndex, FxChain::FxParam parameter, float value);   // enum variant
 
     /** Per-group output gain in dB (group-level `gain` effect LEVEL). Independent of
         setGroupVolume — the two multiply, so a tag mixer and a group gain can both

@@ -14,6 +14,7 @@
 #include "audio/EmbeddedFlacSource.h"
 #include "model/ManifestLoader.h"
 #include "params/ManifestParameters.h"
+#include "params/CompiledMode.h"
 #include "ui/ManifestEditor.h"
 #include <atomic>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace dm
 {
@@ -130,10 +132,22 @@ private:
     SamplerEngine engine;
     std::unique_ptr<juce::AudioProcessorValueTreeState> apvts;
 
+    // Per-mode compiled binding plans (params/CompiledMode.h), built once in the
+    // constructor (message thread; modes + APVTS layout never change afterwards).
+    // processBlock indexes by the active mode — allocation-free apply.
+    std::vector<std::unique_ptr<params::CompiledMode>> compiledModes;
+
+    // Always-present global params, resolved once (string map lookups per block add up).
+    std::atomic<float>* prmPitchBendRange { nullptr };
+    std::atomic<float>* prmMasterOutput   { nullptr };
+    std::atomic<float>* prmPitchDrift     { nullptr };
+    std::atomic<float>* prmVolumeDrift    { nullptr };
+    std::atomic<float>* prmSkipMuted      { nullptr };
+
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };
     // Per-button click sequence (radio groups resolve to most-recently-clicked). Read on
-    // the audio thread by applyToEngine; bumped on the message thread by noteButtonClicked.
+    // the audio thread by CompiledMode::apply; bumped on the message thread by noteButtonClicked.
     static constexpr int kMaxUiButtons = 64;
     std::atomic<std::uint32_t> buttonClickSeq[kMaxUiButtons] {};
     std::atomic<std::uint32_t> clickCounter { 0 };

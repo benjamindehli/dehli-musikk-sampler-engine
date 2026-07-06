@@ -1,4 +1,5 @@
 #include "ManifestParameters.h"
+#include "CompiledMode.h"
 #include <set>
 #include <map>
 #include <algorithm>
@@ -95,15 +96,11 @@ static juce::String controlKey (const juce::String& label)
     return "ctl_" + label.toLowerCase().replaceCharacters (" :-/.,()#&", "__________");
 }
 
-// Map a normalised knob value to the engine value: a binding's explicit output
-// range (DecentSampler translationOutputMin/Max) if present, else the control's
-// own min..max range times the factor.
-// "in,out;in,out;..." lookup — piecewise-linear interpolation between the points
-// (DecentSampler curve tables, e.g. a Saturation knob's FX_DRIVE / FX_OUTPUT_LEVEL).
-// Clamps to the first/last output outside the table's input range.
-static double evalTableLinear (const juce::String& table, double x)
+// "in,out;in,out;..." translation tables — parsed ONCE at compile time (CompiledMode)
+// into point lists, in document order, then evaluated numerically per block.
+static std::vector<std::pair<double, double>> parseTable (const juce::String& table)
 {
-    double prevIn = 0.0, prevOut = 0.0; bool havePrev = false;
+    std::vector<std::pair<double, double>> pts;
     int start = 0;
     while (start < table.length())
     {
@@ -111,54 +108,40 @@ static double evalTableLinear (const juce::String& table, double x)
         if (semi < 0) semi = table.length();
         const int comma = table.indexOfChar (start, ',');
         if (comma > start && comma < semi)
-        {
-            const double in  = table.substring (start, comma).getDoubleValue();
-            const double out = table.substring (comma + 1, semi).getDoubleValue();
-            if (x <= in)
-            {
-                if (! havePrev || ! (in > prevIn)) return out;   // before first point / vertical step
-                const double t = (x - prevIn) / (in - prevIn);
-                return prevOut + t * (out - prevOut);
-            }
-            prevIn = in; prevOut = out; havePrev = true;
-        }
+            pts.emplace_back (table.substring (start, comma).getDoubleValue(),
+                              table.substring (comma + 1, semi).getDoubleValue());
         start = semi + 1;
+    }
+    return pts;
+}
+
+// Piecewise-linear interpolation between the points (DecentSampler curve tables,
+// e.g. a Saturation knob's FX_DRIVE). Clamps to the first/last output outside the
+// table's input range.
+static double evalPtsLinear (const std::vector<std::pair<double, double>>& pts, double x)
+{
+    double prevIn = 0.0, prevOut = 0.0; bool havePrev = false;
+    for (const auto& [in, out] : pts)
+    {
+        if (x <= in)
+        {
+            if (! havePrev || ! (in > prevIn)) return out;   // before first point / vertical step
+            const double t = (x - prevIn) / (in - prevIn);
+            return prevOut + t * (out - prevOut);
+        }
+        prevIn = in; prevOut = out; havePrev = true;
     }
     return havePrev ? prevOut : 0.0;   // past the last point → last output
 }
 
-static double outputValue (const Binding& b, float norm, double mn, double mx)
-{
-    // translationReversed flips the knob's sense — apply it once here so it works
-    // for ALL binding kinds (table, explicit output range, and plain linear).
-    if (b.translationReversed) norm = 1.0f - norm;
-
-    if (b.translationTable.isNotEmpty())
-        return evalTableLinear (b.translationTable, mn + (double) norm * (mx - mn));
-    if (b.translationOutputMin && b.translationOutputMax)
-        return *b.translationOutputMin + (double) norm * (*b.translationOutputMax - *b.translationOutputMin);
-    return (mn + (double) norm * (mx - mn)) * b.factor.value_or (1.0);
-}
-
-// "in,out;in,out;..." lookup — returns the output whose input is closest to `x`
-// (DecentSampler step/radio tables for TAG_ENABLED/VISIBLE/OPACITY selectors).
-static double evalTable (const juce::String& table, double x)
+// Nearest-input lookup (DecentSampler step/radio tables for TAG_ENABLED selectors).
+static double evalPtsNearest (const std::vector<std::pair<double, double>>& pts, double x)
 {
     double bestOut = 0.0, bestDist = 1.0e18;
-    int start = 0;
-    while (start < table.length())
+    for (const auto& [in, out] : pts)
     {
-        int semi = table.indexOfChar (start, ';');
-        if (semi < 0) semi = table.length();
-        const int comma = table.indexOfChar (start, ',');
-        if (comma > start && comma < semi)
-        {
-            const double in  = table.substring (start, comma).getDoubleValue();
-            const double out = table.substring (comma + 1, semi).getDoubleValue();
-            const double d = in > x ? in - x : x - in;
-            if (d < bestDist) { bestDist = d; bestOut = out; }
-        }
-        start = semi + 1;
+        const double d = in > x ? in - x : x - in;
+        if (d < bestDist) { bestDist = d; bestOut = out; }
     }
     return bestOut;
 }
@@ -200,70 +183,6 @@ static int modSlotFor (const Mode& mode, const Binding& b)
     return b.position.value_or (0);
 }
 
-static void applyBinding (SamplerEngine& eng, const Mode& mode, const Binding& b, double value)
-{
-    const auto& p = b.parameter;
-    const int  fx  = effectSlotFor (mode, b);   // instrument effect slot (id-resolved)
-    const int  grp = groupSlotFor (mode, b);    // group index (id-resolved)
-    // Group-level effect (level="group" + effectIndex): a per-group insert chain
-    // (organ swell filter, loudness gain, …) — route to that group's chain by (group, slot).
-    const bool groupEffect = b.level == "group" && grp >= 0 && b.effectIndex;
-    const bool groupLevel  = b.level == "group" && grp >= 0;
-
-    if (p == "FX_FILTER_FREQUENCY")
-    {
-        // Address the specific effect when its id resolves — a mode can have several
-        // filters (e.g. a lowpass AND a highpass); routing all of them to "the lowpass"
-        // would let one clobber the other. Fall back to the first lowpass only when no
-        // target is given.
-        if      (groupEffect)   eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value);
-        else if (fx >= 0)       eng.setEffectParam (fx, p, (float) value);
-        else                    eng.setLowpassFrequency ((float) value);
-    }
-    // VCF resonance + chorus/phaser modulation params: route to the addressed effect.
-    else if (p == "FX_FILTER_RESONANCE") { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); }
-    else if (p == "FX_MOD_RATE" || p == "FX_MOD_DEPTH" || p == "FX_FEEDBACK") { if (fx >= 0) eng.setEffectParam (fx, p, (float) value); }
-    // Effect params: address a specific instrument effect by id when known;
-    // FxChain routes FX_OUTPUT_LEVEL by the slot's kind (wave_shaper vs convolution).
-    else if (p == "FX_MIX")              { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setReverbMix ((float) value); }
-    else if (p == "FX_DRIVE")            { if (groupEffect) eng.setGroupEffectParam (grp, *b.effectIndex, p, (float) value); else if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setWaveShaperDrive ((float) value); }
-    else if (p == "FX_OUTPUT_LEVEL")     { if (fx >= 0) eng.setEffectParam (fx, p, (float) value); else eng.setReverbWetGainDb ((float) value); }
-    else if (p == "LEVEL")
-    {
-        // group-level gain: per-group chain if it has one (else falls back to a
-        // per-group output gain inside the engine); instrument gain → by id.
-        if      (groupLevel)    eng.setGroupEffectParam (grp, b.effectIndex.value_or (0), p, (float) value);
-        else if (fx >= 0)       eng.setEffectParam (fx, p, (float) value);
-        else                    eng.setGain ((float) value);
-    }
-    else if (p == "SEQ_PLAYBACK_RATE")   eng.setSequencerRate (value);
-    // ENV_* with a group target → that group only (e.g. organ "loudness" lengthening
-    // just the reed groups' attack); without → the global amp envelope.
-    else if (p == "ENV_ATTACK")          { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpAttack ((float) value); }
-    else if (p == "ENV_DECAY")           { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpDecay ((float) value); }
-    else if (p == "ENV_SUSTAIN")         { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpSustain ((float) value); }
-    else if (p == "ENV_RELEASE")         { if (groupLevel) eng.setGroupAmp (grp, p, (float) value); else eng.setAmpRelease ((float) value); }
-    // Envelope curve shapes (-100 log … 0 linear … +100 exp). Instrument-level here.
-    else if (p == "ENV_ATTACK_CURVE")    eng.setAmpAttackCurve  ((float) value);
-    else if (p == "ENV_DECAY_CURVE")     eng.setAmpDecayCurve   ((float) value);
-    else if (p == "ENV_RELEASE_CURVE")   eng.setAmpReleaseCurve ((float) value);
-    // Per-group pan (DecentSampler -100 left … +100 right → -1..+1). From the double-track
-    // "Stereo" button: track A panned left, track B right (or both centred when off).
-    else if (p == "PAN")                 { if (grp >= 0) eng.setGroupPan (grp, (float) value / 100.0f); }
-    else if (p == "AMP_VOLUME")          { if (grp >= 0) eng.setGroupVolume (grp, (float) value); else eng.setMasterVolume ((float) value); }
-    else if (p == "GROUP_TUNING")        eng.setGroupTuning (grp >= 0 ? grp : 0, (float) value);
-    else if (p == "AMP_VEL_TRACK")       eng.setAmpVelTrack ((float) value);
-    else if (p == "MOD_AMOUNT")          eng.setLfoDepth (modSlotFor (mode, b), (float) value);
-    else if (p == "FREQUENCY")           eng.setLfoRate  (modSlotFor (mode, b), (float) value);
-    else if (p == "ENABLED")
-    {
-        const bool on = value > 0.5;
-        if (b.level == "group" && grp >= 0) eng.setGroupEnabled (grp, on);
-        else if (fx >= 0)                   eng.setEffectEnabled (fx, on);
-    }
-    // AMP_VEL_TRACK etc.: no engine runtime param yet.
-}
-
 static bool bindingIsTrue (const Binding& b)
 {
     if (b.translationValue.isBool()) return (bool) b.translationValue;
@@ -281,36 +200,6 @@ static double buttonBindingValue (const Binding& b)
     if (s.equalsIgnoreCase ("true"))  return 1.0;
     if (s.equalsIgnoreCase ("false")) return 0.0;
     return s.getDoubleValue();   // "4.11", "0.2", "4277", "1"/"0", …
-}
-
-static void applyButtonState (SamplerEngine& eng, const Mode& mode, const ButtonState& st)
-{
-    for (const auto& b : st.bindings)
-    {
-        // PATH (sample swap) and FX_IR_FILE (convolution IR) are applied on the message
-        // thread by the processor (async IR reload), not from here. Everything else —
-        // including MOD_AMOUNT/FREQUENCY, which now carry the modulator index via
-        // `position` (from DecentSampler's modulatorIndex) — routes through applyBinding,
-        // so e.g. a hi-fi/lo-fi switch can zero the lo-fi modulators in hi-fi.
-        if (b.parameter == "PATH" || b.parameter == "FX_IR_FILE") continue;
-
-        if (b.parameter == "TAG_ENABLED")
-        {
-            // Enable/disable every group carrying the named tag (e.g. a damping switch
-            // swapping between "damped" and "sustained" groups). Not handled by applyBinding.
-            const bool on = bindingIsTrue (b);
-            for (int gi = 0; gi < mode.groups.size(); ++gi)
-                if (mode.groups.getReference (gi).tags.contains (b.identifier))
-                    eng.setGroupEnabled (gi, on);
-            continue;
-        }
-
-        // Everything else (ENABLED, FX_DRIVE, FX_OUTPUT_LEVEL, FX_FILTER_FREQUENCY,
-        // AMP_VEL_TRACK, MOD_AMOUNT, …) carries a fixed value → route through the same
-        // type-aware path the UI controls use, so a hi-fi/lo-fi switch actually applies
-        // the wave_shaper's drive + output level (and any filter settings).
-        applyBinding (eng, mode, b, buttonBindingValue (b));
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,71 +294,341 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
 
 // ---------------------------------------------------------------------------
 
-void applyToEngine (SamplerEngine& engine, const Mode& mode,
-                    juce::AudioProcessorValueTreeState& apvts,
-                    const std::atomic<std::uint32_t>* buttonClickSeq)
+// ---------------------------------------------------------------------------
+// CompiledMode — see CompiledMode.h. Built once per mode on the message thread;
+// apply()/applyCc()/applyNoteSwitches() are the audio-thread replacements for the
+// old per-block applyToEngine/applyCcToParams/applyNoteSwitches (whose string
+// ladders + table re-parsing this compiles away).
+// ---------------------------------------------------------------------------
+
+double CompiledMode::Xform::eval (float norm) const noexcept
 {
+    const double n = reversed ? 1.0 - (double) norm : (double) norm;
+    switch (kind)
+    {
+        case Kind::tableLinear:  return evalPtsLinear  (pts, mn + n * (mx - mn));
+        case Kind::tableNearest: return evalPtsNearest (pts, mn + n * (mx - mn));
+        case Kind::outRange:     return outMin + n * (outMax - outMin);
+        case Kind::linear:       break;
+    }
+    return (mn + n * (mx - mn)) * factor;
+}
+
+CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState& apvts)
+{
+    // Note key-switches are tab-independent.
+    chordParam = apvts.getParameter (id::chordOrder);
+    for (const auto& ks : mode.menuKeySwitches)
+        noteSwitches.push_back ({ ks.note, ks.option });
+
     if (mode.ui.tabs.isEmpty())
         return;
     const auto& tab = mode.ui.tabs.getReference (0);
 
-    auto raw = [&apvts] (juce::StringRef pid) -> float
+    // The value transform, mirroring the old outputValue() exactly. TAG_ENABLED table
+    // selectors use NEAREST lookup on the raw selector value (no reversal) — also as before.
+    auto makeXform = [] (const Binding& b, double mn, double mx, bool nearestTable)
     {
-        if (auto* a = apvts.getRawParameterValue (pid)) return a->load();
-        return 0.0f;
+        Xform x;
+        x.mn = mn; x.mx = mx;
+        if (nearestTable)
+        {
+            x.kind = Xform::Kind::tableNearest;
+            x.pts  = parseTable (b.translationTable);
+            return x;
+        }
+        x.reversed = b.translationReversed;
+        if (b.translationTable.isNotEmpty())
+        {
+            x.kind = Xform::Kind::tableLinear;
+            x.pts  = parseTable (b.translationTable);
+        }
+        else if (b.translationOutputMin && b.translationOutputMax)
+        {
+            x.kind   = Xform::Kind::outRange;
+            x.outMin = *b.translationOutputMin;
+            x.outMax = *b.translationOutputMax;
+        }
+        else
+        {
+            x.kind   = Xform::Kind::linear;
+            x.factor = b.factor.value_or (1.0);
+        }
+        return x;
     };
 
+    auto tagGroups = [&mode] (const juce::String& tag)
+    {
+        std::vector<int> g;
+        for (int gi = 0; gi < mode.groups.size(); ++gi)
+            if (mode.groups.getReference (gi).tags.contains (tag))
+                g.push_back (gi);
+        return g;
+    };
+
+    // The routing half of the old applyBinding ladder, resolved NOW: parameter name →
+    // engine setter, id/index → slot, level → group vs instrument. Returns nullptr for
+    // bindings the engine doesn't act on (same as applyBinding's silent fall-through).
+    auto compileRoute = [&mode] (const Binding& b) -> Route
+    {
+        using E = SamplerEngine;
+        using P = FxChain::FxParam;
+        const auto& p  = b.parameter;
+        const int  fx  = effectSlotFor (mode, b);   // instrument effect slot (id-resolved)
+        const int  grp = groupSlotFor (mode, b);    // group index (id-resolved)
+        const bool groupEffect = b.level == "group" && grp >= 0 && b.effectIndex.has_value();
+        const bool groupLevel  = b.level == "group" && grp >= 0;
+        const int  gei = b.effectIndex.value_or (0);
+
+        // FX param routed group-chain → addressed instrument effect → semantic fallback.
+        auto fxRoute = [&] (P fp, Route fallback, bool allowGroup = true) -> Route
+        {
+            if (allowGroup && groupEffect)
+                return [grp, gei, fp] (E& e, double v) { e.setGroupEffectParam (grp, gei, fp, (float) v); };
+            if (fx >= 0)
+                return [fx, fp] (E& e, double v) { e.setEffectParam (fx, fp, (float) v); };
+            return fallback;
+        };
+
+        if (p == "FX_FILTER_FREQUENCY") return fxRoute (P::filterFrequency, [] (E& e, double v) { e.setLowpassFrequency ((float) v); });
+        if (p == "FX_FILTER_RESONANCE") return fxRoute (P::filterResonance, nullptr);
+        if (p == "FX_MOD_RATE")         return fxRoute (P::modRate,  nullptr, false);
+        if (p == "FX_MOD_DEPTH")        return fxRoute (P::modDepth, nullptr, false);
+        if (p == "FX_FEEDBACK")         return fxRoute (P::feedback, nullptr, false);
+        if (p == "FX_MIX")              return fxRoute (P::mix,   [] (E& e, double v) { e.setReverbMix ((float) v); });
+        if (p == "FX_DRIVE")            return fxRoute (P::drive, [] (E& e, double v) { e.setWaveShaperDrive ((float) v); });
+        if (p == "FX_OUTPUT_LEVEL")     return fxRoute (P::outputLevel, [] (E& e, double v) { e.setReverbWetGainDb ((float) v); }, false);
+        if (p == "LEVEL")
+        {
+            // group-level gain: per-group chain if it has one (else falls back to a
+            // per-group output gain inside the engine); instrument gain → by id.
+            if (groupLevel) return [grp, gei] (E& e, double v) { e.setGroupEffectParam (grp, gei, P::level, (float) v); };
+            if (fx >= 0)    return [fx]       (E& e, double v) { e.setEffectParam (fx, P::level, (float) v); };
+            return [] (E& e, double v) { e.setGain ((float) v); };
+        }
+        if (p == "SEQ_PLAYBACK_RATE")   return [] (E& e, double v) { e.setSequencerRate (v); };
+        // ENV_* with a group target → that group only; without → the global amp envelope.
+        if (p == "ENV_ATTACK")  { if (groupLevel) return [grp] (E& e, double v) { e.setGroupAmpAttack  (grp, (float) v); }; return [] (E& e, double v) { e.setAmpAttack  ((float) v); }; }
+        if (p == "ENV_DECAY")   { if (groupLevel) return [grp] (E& e, double v) { e.setGroupAmpDecay   (grp, (float) v); }; return [] (E& e, double v) { e.setAmpDecay   ((float) v); }; }
+        if (p == "ENV_SUSTAIN") { if (groupLevel) return [grp] (E& e, double v) { e.setGroupAmpSustain (grp, (float) v); }; return [] (E& e, double v) { e.setAmpSustain ((float) v); }; }
+        if (p == "ENV_RELEASE") { if (groupLevel) return [grp] (E& e, double v) { e.setGroupAmpRelease (grp, (float) v); }; return [] (E& e, double v) { e.setAmpRelease ((float) v); }; }
+        if (p == "ENV_ATTACK_CURVE")  return [] (E& e, double v) { e.setAmpAttackCurve  ((float) v); };
+        if (p == "ENV_DECAY_CURVE")   return [] (E& e, double v) { e.setAmpDecayCurve   ((float) v); };
+        if (p == "ENV_RELEASE_CURVE") return [] (E& e, double v) { e.setAmpReleaseCurve ((float) v); };
+        // DecentSampler pan is -100..+100 → engine -1..+1 (double-track "Stereo" button).
+        if (p == "PAN")               { if (grp >= 0) return [grp] (E& e, double v) { e.setGroupPan (grp, (float) v / 100.0f); }; return nullptr; }
+        if (p == "AMP_VOLUME")
+        {
+            if (grp >= 0) return [grp] (E& e, double v) { e.setGroupVolume (grp, (float) v); };
+            return [] (E& e, double v) { e.setMasterVolume ((float) v); };
+        }
+        if (p == "GROUP_TUNING")      { const int g = grp >= 0 ? grp : 0; return [g] (E& e, double v) { e.setGroupTuning (g, (float) v); }; }
+        if (p == "AMP_VEL_TRACK")     return [] (E& e, double v) { e.setAmpVelTrack ((float) v); };
+        if (p == "MOD_AMOUNT")        { const int m = modSlotFor (mode, b); return [m] (E& e, double v) { e.setLfoDepth (m, (float) v); }; }
+        if (p == "FREQUENCY")         { const int m = modSlotFor (mode, b); return [m] (E& e, double v) { e.setLfoRate  (m, (float) v); }; }
+        if (p == "ENABLED")
+        {
+            if (b.level == "group" && grp >= 0) return [grp] (E& e, double v) { e.setGroupEnabled (grp, v > 0.5); };
+            if (fx >= 0)                        return [fx]  (E& e, double v) { e.setEffectEnabled (fx, v > 0.5); };
+            return nullptr;
+        }
+        return nullptr;   // not an engine parameter
+    };
+
+    // ---- knobs/faders ------------------------------------------------------
     for (const auto& c : tab.controls)
     {
         if (! controlDrivesEngine (c))
             continue;
 
-        // One param per control (keyed by label); every binding maps that same
-        // knob position through its own translation to its engine target.
+        ControlItem item;
+        item.param = apvts.getRawParameterValue (controlKey (c.label));
+        if (item.param == nullptr)
+            continue;
         const double mn = c.min.value_or (0.0), mx = c.max.value_or (1.0);
-        const float  norm = raw (controlKey (c.label));
 
         for (const auto& b : c.bindings)
         {
-            // Tag-addressed volume: TAG_VOLUME, or AMP_VOLUME at level="tag" (e.g. the
-            // Mechanical Noise knob targets the key-on/key-off tags). Resolve the tag
-            // to its groups — NOT master (which is AMP_VOLUME with no group/tag).
+            // Tag-addressed volume: TAG_VOLUME, or AMP_VOLUME at level="tag" — resolve
+            // the tag to its groups NOW (was a per-block scan).
             const bool tagVolume = b.parameter == "TAG_VOLUME"
                                 || (b.parameter == "AMP_VOLUME" && b.level == "tag" && b.identifier.isNotEmpty());
             if (tagVolume)
             {
-                const float v = (float) outputValue (b, norm, mn, mx);
-                for (int gi = 0; gi < mode.groups.size(); ++gi)
-                    if (mode.groups.getReference (gi).tags.contains (b.identifier))
-                        engine.setGroupTagVolume (gi, v);
-            }
-            else if (floatSpecFor (b.parameter) != nullptr)
-            {
-                applyBinding (engine, mode, b, outputValue (b, norm, mn, mx));
+                auto groups = tagGroups (b.identifier);
+                if (groups.empty()) continue;
+                Op op;
+                op.xform = makeXform (b, mn, mx, false);
+                op.route = [groups = std::move (groups)] (SamplerEngine& e, double v)
+                {
+                    for (int g : groups) e.setGroupTagVolume (g, (float) v);
+                };
+                item.ops.push_back (std::move (op));
             }
             else if (b.parameter == "TAG_ENABLED")
             {
-                // Table selector → discrete on/off at 0.5. A linear/no-table binding (e.g.
-                // StyloPoly's noise-on knob, which enables its group as the knob leaves 0)
-                // has no table, so evalTable would return 0 and wrongly disable it forever —
-                // fall back to the mapped value being positive.
-                const bool on = b.translationTable.isNotEmpty()
-                                  ? evalTable (b.translationTable, mn + (double) norm * (mx - mn)) > 0.5
-                                  : outputValue (b, norm, mn, mx) > 1.0e-6;
-                for (int gi = 0; gi < mode.groups.size(); ++gi)
-                    if (mode.groups.getReference (gi).tags.contains (b.identifier))
-                        engine.setGroupEnabled (gi, on);
+                // Table selector → nearest lookup, on at > 0.5. Linear/no-table (e.g.
+                // StyloPoly's noise-on knob) → mapped value, on as it leaves 0.
+                auto groups = tagGroups (b.identifier);
+                if (groups.empty()) continue;
+                const bool useTable = b.translationTable.isNotEmpty();
+                Op op;
+                op.xform = makeXform (b, mn, mx, useTable);
+                const double thresh = useTable ? 0.5 : 1.0e-6;
+                op.route = [groups = std::move (groups), thresh] (SamplerEngine& e, double v)
+                {
+                    const bool on = v > thresh;
+                    for (int g : groups) e.setGroupEnabled (g, on);
+                };
+                item.ops.push_back (std::move (op));
+            }
+            else if (floatSpecFor (b.parameter) != nullptr)
+            {
+                if (auto route = compileRoute (b))
+                    item.ops.push_back ({ makeXform (b, mn, mx, false), std::move (route) });
             }
         }
+        if (! item.ops.empty())
+            controls.push_back (std::move (item));
     }
 
-    // Apply buttons oldest-click-first (never-clicked keep index order). Among any set
-    // of buttons targeting the SAME effect (a radio group, e.g. the ensemble O/Acc/Solo/
-    // Organ), the most-recently-clicked is applied LAST and wins — and clicking an
-    // unrelated button doesn't change the ensemble's winner. Snapshot the seq first so
-    // the sort sees a stable ordering.
+    // ---- buttons (fixed values baked in) ------------------------------------
+    for (int i = 0; i < tab.buttons.size(); ++i)
+    {
+        const auto& btn = tab.buttons.getReference (i);
+        ButtonPlan bp;
+        bp.numStates = btn.states.size();
+        bp.param = apvts.getRawParameterValue (buttonId (i));   // null for single-state buttons → state 0
+
+        for (const auto& st : btn.states)
+        {
+            std::vector<std::function<void (SamplerEngine&)>> ops;
+            for (const auto& b : st.bindings)
+            {
+                // PATH (sample swap) and FX_IR_FILE (convolution IR) are applied on the
+                // message thread by the processor (async IR reload), not from here.
+                if (b.parameter == "PATH" || b.parameter == "FX_IR_FILE")
+                    continue;
+
+                if (b.parameter == "TAG_ENABLED")
+                {
+                    // Enable/disable every group carrying the named tag (e.g. a damping
+                    // switch swapping "damped"/"sustained" groups).
+                    auto groups = tagGroups (b.identifier);
+                    if (groups.empty()) continue;
+                    const bool on = bindingIsTrue (b);
+                    ops.push_back ([groups = std::move (groups), on] (SamplerEngine& e)
+                    {
+                        for (int g : groups) e.setGroupEnabled (g, on);
+                    });
+                    continue;
+                }
+
+                // Everything else (ENABLED, FX_DRIVE, MOD_AMOUNT, …) carries a fixed value.
+                if (auto route = compileRoute (b))
+                {
+                    const double v = buttonBindingValue (b);
+                    ops.push_back ([route = std::move (route), v] (SamplerEngine& e) { route (e, v); });
+                }
+            }
+            bp.stateOps.push_back (std::move (ops));
+        }
+        buttons.push_back (std::move (bp));
+    }
+
+    // ---- first dropdown menu (chord order / amp-cabinet selector) -----------
+    for (const auto& m : tab.menus)
+        if (! m.options.isEmpty())
+        {
+            MenuPlan mp;
+            mp.selParam = apvts.getRawParameterValue (id::chordOrder);
+            for (const auto& opt : m.options)
+            {
+                MenuPlan::Option o;
+                o.seqIndex = opt.seqIndex;
+                for (const auto& b : opt.bindings)
+                {
+                    // Cheap FX bindings only; FX_IR_FILE (heavy IR reload) stays on the
+                    // message thread. Effect resolved by id with effectIndex fallback.
+                    const int ei = effectSlotFor (mode, b);
+                    if (ei < 0)
+                        continue;
+                    using P = FxChain::FxParam;
+                    if (b.parameter == "ENABLED")
+                    {
+                        const bool on = bindingIsTrue (b);
+                        o.ops.push_back ([ei, on] (SamplerEngine& e) { e.setEffectEnabled (ei, on); });
+                    }
+                    else if (b.parameter == "FX_MIX" || b.parameter == "FX_DRIVE" || b.parameter == "FX_OUTPUT_LEVEL")
+                    {
+                        const float v = b.translationValue.toString().getFloatValue();
+                        const P fp = b.parameter == "FX_MIX" ? P::mix
+                                   : b.parameter == "FX_DRIVE" ? P::drive : P::outputLevel;
+                        o.ops.push_back ([ei, fp, v] (SamplerEngine& e) { e.setEffectParam (ei, fp, v); });
+                    }
+                }
+                mp.options.push_back (std::move (o));
+            }
+            menu = std::move (mp);
+            break;
+        }
+
+    // ---- CC bindings → pre-matched target params -----------------------------
+    for (const auto& cb : mode.ccBindings)
+    {
+        CcPlan plan;
+        plan.cc      = cb.cc;
+        plan.normMin = (float) cb.normMin;
+        plan.normMax = (float) cb.normMax;
+
+        // When the CC binding names its target (id, or controlIndex in regenerated
+        // manifests) drive ONLY that control; legacy fallback drives every control
+        // sharing the parameter+group. Same matching as before, resolved once.
+        for (const auto& c : tab.controls)
+        {
+            if (! controlDrivesEngine (c)) continue;
+
+            bool matches = false;
+            if (cb.targetId.isNotEmpty())
+            {
+                matches = (c.id == cb.targetId);
+            }
+            else if (cb.controlIndex)
+            {
+                matches = c.controlIndex && *c.controlIndex == *cb.controlIndex;
+            }
+            else
+            {
+                for (const auto& b : c.bindings)
+                    if (b.parameter == cb.parameter
+                        && (! cb.groupIndex || b.groupIndex.value_or (0) == *cb.groupIndex))
+                    { matches = true; break; }
+            }
+
+            if (matches)
+                if (auto* prm = apvts.getParameter (controlKey (c.label)))
+                    plan.targets.push_back (prm);
+        }
+        if (! plan.targets.empty())
+            ccs.push_back (std::move (plan));
+    }
+}
+
+CompiledMode::~CompiledMode() = default;
+
+void CompiledMode::apply (SamplerEngine& engine, const std::atomic<std::uint32_t>* buttonClickSeq) const
+{
+    for (const auto& item : controls)
+    {
+        const float norm = item.param->load();
+        for (const auto& op : item.ops)
+            op.route (engine, op.xform.eval (norm));
+    }
+
+    // Buttons oldest-click-first (never-clicked keep index order): among buttons
+    // targeting the SAME effect (a radio group) the most-recently-clicked wins.
     constexpr int kMaxBtn = 64;
-    const int nB = juce::jmin (tab.buttons.size(), kMaxBtn);
+    const int nB = juce::jmin ((int) buttons.size(), kMaxBtn);
     int order[kMaxBtn];
     std::uint32_t seq[kMaxBtn];
     for (int i = 0; i < nB; ++i) { order[i] = i; seq[i] = buttonClickSeq ? buttonClickSeq[i].load() : 0u; }
@@ -477,40 +636,28 @@ void applyToEngine (SamplerEngine& engine, const Mode& mode,
 
     for (int k = 0; k < nB; ++k)
     {
-        const int i = order[k];
-        const auto& btn = tab.buttons.getReference (i);
-        if (btn.states.isEmpty()) continue;
-        const int stateIndex = juce::jlimit (0, btn.states.size() - 1, (int) raw (buttonId (i)));
-        applyButtonState (engine, mode, btn.states.getReference (stateIndex));
+        const auto& bp = buttons[(size_t) order[k]];
+        if (bp.stateOps.empty()) continue;
+        const int st = juce::jlimit (0, (int) bp.stateOps.size() - 1,
+                                     bp.param != nullptr ? (int) bp.param->load() : 0);
+        for (const auto& op : bp.stateOps[(size_t) st])
+            op (engine);
     }
 
-    for (const auto& menu : tab.menus)
-        if (! menu.options.isEmpty())
-        {
-            const int sel = juce::jlimit (0, menu.options.size() - 1, (int) raw (id::chordOrder));
-            const auto& opt = menu.options.getReference (sel);
-            engine.setSequencerIndexOffset (opt.seqIndex);   // chord-order menu (Omni)
-
-            // Amp/cabinet-style menu: apply the option's cheap effect bindings here.
-            // FX_IR_FILE (heavy IR reload) is applied on the message thread instead.
-            for (const auto& b : opt.bindings)
-            {
-                if (! b.effectIndex)
-                    continue;
-                const int ei = *b.effectIndex;
-                if (b.parameter == "ENABLED")
-                    engine.setEffectEnabled (ei, bindingIsTrue (b));
-                else if (b.parameter == "FX_MIX" || b.parameter == "FX_DRIVE" || b.parameter == "FX_OUTPUT_LEVEL")
-                    engine.setEffectParam (ei, b.parameter, b.translationValue.toString().getFloatValue());
-            }
-            break;
-        }
+    if (menu.has_value() && ! menu->options.empty())
+    {
+        const int sel = juce::jlimit (0, (int) menu->options.size() - 1,
+                                      menu->selParam != nullptr ? (int) menu->selParam->load() : 0);
+        const auto& opt = menu->options[(size_t) sel];
+        engine.setSequencerIndexOffset (opt.seqIndex);   // chord-order menu (Omni)
+        for (const auto& op : opt.ops)
+            op (engine);
+    }
 }
 
-void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
-                      juce::AudioProcessorValueTreeState& apvts)
+void CompiledMode::applyCc (const juce::MidiBuffer& midi) const
 {
-    if (mode.ccBindings.isEmpty())
+    if (ccs.empty())
         return;
 
     for (const auto meta : midi)
@@ -520,56 +667,22 @@ void applyCcToParams (const juce::MidiBuffer& midi, const Mode& mode,
             continue;
 
         const int   cc = msg.getControllerNumber();
-        const float v  = msg.getControllerValue() / 127.0f;
+        const float v  = (float) msg.getControllerValue() / 127.0f;
 
-        for (const auto& cb : mode.ccBindings)
+        for (const auto& plan : ccs)
         {
-            if (cb.cc != cc)
+            if (plan.cc != cc)
                 continue;
-            if (mode.ui.tabs.isEmpty())
-                continue;
-            const float norm = juce::jlimit (0.0f, 1.0f,
-                                             (float) (cb.normMin + v * (cb.normMax - cb.normMin)));
-            // When the CC binding names its specific target control (controlIndex —
-            // regenerated manifests), drive ONLY that control. Otherwise (legacy
-            // manifests that lost the index) fall back to driving EVERY control sharing
-            // the parameter+group — which is how a mod wheel→MOD_AMOUNT opened both of
-            // the 4-track/Wurli tremolo-depth knobs. Precise targeting fixes libraries
-            // like EDB-Orgel where FREQUENCY is shared by the vibrato, every tremolo LFO,
-            // and a stray velocity control — the mod wheel must move only the vibrato.
-            for (const auto& c : mode.ui.tabs.getReference (0).controls)
-            {
-                if (! controlDrivesEngine (c)) continue;
-
-                bool matches = false;
-                if (cb.targetId.isNotEmpty())
-                {
-                    matches = (c.id == cb.targetId);        // id-based target (preferred)
-                }
-                else if (cb.controlIndex)
-                {
-                    matches = c.controlIndex && *c.controlIndex == *cb.controlIndex;
-                }
-                else
-                {
-                    for (const auto& b : c.bindings)
-                        if (b.parameter == cb.parameter
-                            && (! cb.groupIndex || b.groupIndex.value_or (0) == *cb.groupIndex))
-                        { matches = true; break; }
-                }
-
-                if (matches)
-                    if (auto* prm = apvts.getParameter (controlKey (c.label)))
-                        prm->setValueNotifyingHost (norm);
-            }
+            const float norm = juce::jlimit (0.0f, 1.0f, plan.normMin + v * (plan.normMax - plan.normMin));
+            for (auto* prm : plan.targets)
+                prm->setValueNotifyingHost (norm);
         }
     }
 }
 
-void applyNoteSwitches (const juce::MidiBuffer& midi, const Mode& mode,
-                        juce::AudioProcessorValueTreeState& apvts)
+void CompiledMode::applyNoteSwitches (const juce::MidiBuffer& midi) const
 {
-    if (mode.menuKeySwitches.isEmpty())
+    if (noteSwitches.empty() || chordParam == nullptr)
         return;
 
     for (const auto meta : midi)
@@ -578,10 +691,9 @@ void applyNoteSwitches (const juce::MidiBuffer& midi, const Mode& mode,
         if (! msg.isNoteOn())
             continue;
         const int note = msg.getNoteNumber();
-        for (const auto& ks : mode.menuKeySwitches)
+        for (const auto& ks : noteSwitches)
             if (ks.note == note)
-                if (auto* prm = apvts.getParameter (id::chordOrder))
-                    prm->setValueNotifyingHost (prm->convertTo0to1 ((float) ks.option));
+                chordParam->setValueNotifyingHost (chordParam->convertTo0to1 ((float) ks.option));
     }
 }
 
