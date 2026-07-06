@@ -70,6 +70,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/SamplerEngineTests.cpp
         tests/NoteSequencerTests.cpp
         tests/CompiledModeTests.cpp
+        tests/ManifestLintTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE

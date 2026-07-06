@@ -27,7 +27,7 @@ public:
 
     void runTest() override
     {
-        for (auto* name : { "bass.json", "drums.json", "wurli.json", "autostrum.json" })
+        for (auto* name : { "bass.json", "drums.json", "wurli.json", "autostrum.json", "kitchensink.json" })
             roundTrip (name);
     }
 
