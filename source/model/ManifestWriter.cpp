@@ -102,10 +102,13 @@ var writeSample (const Sample& s)
     o.setOpt ("onLoCC64", s.onLoCC64);
     o.setOpt ("onHiCC64", s.onHiCC64);
 
-    if (s.loop.enabled)
+    // Write the loop whenever ANY of it is authored — a DISABLED loop keeps its
+    // points (e.g. the converter disables out-of-range loops but the authored
+    // start/end must survive a round-trip so they can be re-enabled after fixing).
+    if (s.loop.enabled || s.loop.start || s.loop.end || s.loop.crossfade)
     {
         Obj loop;
-        loop.set ("enabled", true);
+        loop.set ("enabled", s.loop.enabled);
         loop.setOpt ("start", s.loop.start);
         loop.setOpt ("end", s.loop.end);
         loop.setOpt ("crossfade", s.loop.crossfade);

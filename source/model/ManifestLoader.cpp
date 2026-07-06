@@ -44,6 +44,41 @@ double dbl  (const var& v, const char* key, double def) { auto p = get (v, key);
 int    intg (const var& v, const char* key, int def)    { auto p = get (v, key); return p.isVoid() ? def : (int) p; }
 bool   boolean (const var& v, const char* key, bool def){ auto p = get (v, key); return p.isVoid() ? def : (bool) p; }
 
+// ---------------------------------------------------------------------------
+// Lint: unknown-key detection. A hand-authored typo ("lenghtFrames") used to be
+// silently ignored on load AND silently dropped on write — the field just
+// vanished. Every node parser now reports keys it doesn't recognise as WARNINGS
+// (never errors — newer manifests stay loadable by design, see the schema policy
+// in Manifest.h). The loader is single-use per call; loadManifest installs the
+// sink for its duration.
+// ---------------------------------------------------------------------------
+juce::StringArray* lintSink = nullptr;
+
+void checkKeys (const var& v, const char* node, std::initializer_list<const char*> allowed)
+{
+    if (lintSink == nullptr)
+        return;
+    if (auto* o = v.getDynamicObject())
+        for (const auto& p : o->getProperties())
+        {
+            const auto name = p.name.toString();
+            if (name.startsWith ("$"))   // split-manifest directives ($use/$ref)
+                continue;
+            bool known = false;
+            for (const auto* k : allowed)
+                if (name == k) { known = true; break; }
+            if (! known)
+                lintSink->addIfNotAlreadyThere (
+                    juce::String (node) + ": unknown key \"" + name + "\" — ignored (typo?)");
+        }
+}
+
+struct ScopedLintSink
+{
+    explicit ScopedLintSink (juce::StringArray& sink) { lintSink = &sink; }
+    ~ScopedLintSink() { lintSink = nullptr; }
+};
+
 juce::StringArray strArray (const var& v, const char* key)
 {
     juce::StringArray out;
@@ -58,6 +93,11 @@ juce::StringArray strArray (const var& v, const char* key)
 Binding parseBinding (const var& v)
 {
     Binding b;
+    checkKeys (v, "binding", { "type", "level", "targetId", "identifier", "translationTable",
+                               "translationReversed", "parameter", "translation", "modBehavior",
+                               "factor", "modAmount", "translationOutputMin", "translationOutputMax",
+                               "effectIndex", "controlIndex", "groupIndex", "noteIndex",
+                               "bindingIndex", "seqIndex", "position", "translationValue" });
     b.raw         = v;
     b.type        = str (v, "type");
     b.level       = str (v, "level");
@@ -98,6 +138,7 @@ juce::Array<Binding> parseBindings (const var& parent)
 Rect parseRect (const var& v)
 {
     Rect r;
+    checkKeys (v, "rect", { "x", "y", "width", "height" });
     r.x      = intg (v, "x", 0);
     r.y      = intg (v, "y", 0);
     r.width  = intg (v, "width", 0);
@@ -108,6 +149,8 @@ Rect parseRect (const var& v)
 AmpEnvelope parseAmp (const var& v)
 {
     AmpEnvelope a;
+    checkKeys (v, "amp", { "attack", "decay", "sustain", "release", "volume", "velTrack",
+                           "enabled", "attackCurve", "decayCurve", "releaseCurve" });
     a.attack   = dbl (v, "attack", 0.0);
     a.decay    = dbl (v, "decay", 0.0);
     a.sustain  = dbl (v, "sustain", 1.0);
@@ -124,6 +167,10 @@ AmpEnvelope parseAmp (const var& v)
 Sample parseSample (const var& v, ManifestParseResult& res, const juce::String& where)
 {
     Sample s;
+    checkKeys (v, "sample", { "source", "loNote", "hiNote", "rootNote", "lengthFrames",
+                              "sampleRate", "pitchKeyTrack", "pitchDrift", "start", "end",
+                              "volume", "seqPosition", "ampEnvEnabled", "onLoCC64", "onHiCC64",
+                              "loop" });
     s.source = str (v, "source");
     if (s.source.isEmpty())
         res.errors.add (where + ": sample missing \"source\"");
@@ -148,6 +195,7 @@ Sample parseSample (const var& v, ManifestParseResult& res, const juce::String& 
     auto loop = get (v, "loop");
     if (! loop.isVoid())
     {
+        checkKeys (loop, "sample.loop", { "enabled", "start", "end", "crossfade" });
         s.loop.enabled   = boolean (loop, "enabled", false);
         s.loop.start     = optI (loop, "start");
         s.loop.end       = optI (loop, "end");
@@ -161,6 +209,10 @@ Effect parseEffect (const var& v);   // defined below
 Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& where)
 {
     Group g;
+    checkKeys (v, "group", { "uid", "tags", "trigger", "loopCrossfadeMode", "velocity",
+                             "roundRobin", "silencing", "attack", "decay", "sustain", "release",
+                             "volume", "velTrack", "ampEnvEnabled", "pitchKeyTrack",
+                             "effects", "samples" });
     g.uid               = str (v, "uid");
     g.tags              = strArray (v, "tags");
     g.trigger           = str (v, "trigger");
@@ -168,6 +220,7 @@ Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& wh
 
     if (auto vel = get (v, "velocity"); ! vel.isVoid())
     {
+        checkKeys (vel, "group.velocity", { "lo", "hi" });
         VelocityRange vr;
         vr.lo = intg (vel, "lo", 0);
         vr.hi = intg (vel, "hi", 127);
@@ -176,6 +229,7 @@ Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& wh
 
     if (auto rr = get (v, "roundRobin"); ! rr.isVoid())
     {
+        checkKeys (rr, "group.roundRobin", { "mode", "length" });
         RoundRobin r;
         r.mode   = str (rr, "mode");
         r.length = optI (rr, "length");
@@ -184,6 +238,7 @@ Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& wh
 
     if (auto sil = get (v, "silencing"); ! sil.isVoid())
     {
+        checkKeys (sil, "group.silencing", { "mode", "byTags" });
         Silencing s;
         s.mode   = str (sil, "mode");
         s.byTags = strArray (sil, "byTags");
@@ -219,6 +274,9 @@ Group parseGroup (const var& v, ManifestParseResult& res, const juce::String& wh
 Effect parseEffect (const var& v)
 {
     Effect e;
+    checkKeys (v, "effect", { "id", "type", "enabled", "frequency", "resonance", "gain",
+                              "drive", "mix", "wet", "outputLevel", "rate", "depth",
+                              "feedback", "ir", "normalizeIr" });
     e.raw     = v;
     e.id      = str (v, "id");
     e.type    = str (v, "type");
@@ -242,6 +300,7 @@ Effect parseEffect (const var& v)
 Lfo parseLfo (const var& v)
 {
     Lfo l;
+    checkKeys (v, "modulator", { "id", "shape", "frequency", "modAmount", "bindings" });
     l.id        = str (v, "id");
     l.shape     = str (v, "shape");
     l.frequency = dbl (v, "frequency", 0.0);
@@ -253,6 +312,7 @@ Lfo parseLfo (const var& v)
 NoteSequence parseSequence (const var& v)
 {
     NoteSequence seq;
+    checkKeys (v, "sequence", { "name", "length", "rate", "notes" });
     seq.name   = str (v, "name");
     seq.length = optI (v, "length");
     seq.rate   = optD (v, "rate");
@@ -262,6 +322,8 @@ NoteSequence parseSequence (const var& v)
         for (auto& n : *a)
         {
             SequenceNote note;
+            checkKeys (n, "sequence.note", { "position", "note", "velocity", "length",
+                                             "enabled", "swallowNotes" });
             note.position     = intg (n, "position", 0);
             note.note         = intg (n, "note", 60);
             note.velocity     = dbl (n, "velocity", 1.0);
@@ -281,6 +343,7 @@ std::optional<CustomSkin> parseSkin (const var& v)
         return std::nullopt;
 
     CustomSkin skin;
+    checkKeys (s, "control.skin", { "image", "numFrames", "orientation" });
     skin.image       = str (s, "image");
     skin.numFrames   = optI (s, "numFrames");
     skin.orientation = str (s, "orientation");
@@ -290,6 +353,9 @@ std::optional<CustomSkin> parseSkin (const var& v)
 Control parseControl (const var& v)
 {
     Control c;
+    checkKeys (v, "control", { "id", "rect", "label", "valueType", "min", "max", "value",
+                               "textColor", "style", "skin", "mouseDragSensitivity",
+                               "controlIndex", "visible", "bindings" });
     c.id        = str (v, "id");
     c.rect      = parseRect (get (v, "rect"));
     c.label     = str (v, "label");
@@ -310,6 +376,8 @@ Control parseControl (const var& v)
 Button parseButton (const var& v)
 {
     Button b;
+    checkKeys (v, "button", { "id", "rect", "style", "value", "controlIndex", "visible",
+                              "states" });
     b.id    = str (v, "id");
     b.rect  = parseRect (get (v, "rect"));
     b.style = str (v, "style");
@@ -322,6 +390,8 @@ Button parseButton (const var& v)
         for (auto& s : *a)
         {
             ButtonState st;
+            checkKeys (s, "button.state", { "name", "mainImage", "hoverImage", "clickImage",
+                                            "bindings" });
             st.name       = str (s, "name");
             st.mainImage  = str (s, "mainImage");
             st.hoverImage = str (s, "hoverImage");
@@ -336,6 +406,8 @@ Button parseButton (const var& v)
 UiImage parseImage (const var& v)
 {
     UiImage img;
+    checkKeys (v, "image", { "id", "rect", "image", "aspectRatioMode", "controlIndex",
+                             "visible" });
     img.id              = str (v, "id");
     img.rect            = parseRect (get (v, "rect"));
     img.image           = str (v, "image");
@@ -348,6 +420,8 @@ UiImage parseImage (const var& v)
 Ui parseUi (const var& v)
 {
     Ui ui;
+    checkKeys (v, "ui", { "background", "width", "height", "cropTop", "layoutMode", "bgMode",
+                          "whiteKeyTint", "blackKeyTint", "tabs", "keyboard", "buttonLinks" });
     ui.background = str (v, "background");
     ui.width      = intg (v, "width", 0);
     ui.height     = intg (v, "height", 0);
@@ -362,6 +436,7 @@ Ui parseUi (const var& v)
         for (auto& t : *tabs)
         {
             Tab tab;
+            checkKeys (t, "ui.tab", { "name", "controls", "buttons", "images", "menus" });
             tab.name = str (t, "name");
             if (auto* a = get (t, "controls").getArray()) for (auto& e : *a) tab.controls.add (parseControl (e));
             if (auto* a = get (t, "buttons").getArray())  for (auto& e : *a) tab.buttons.add  (parseButton (e));
@@ -370,6 +445,9 @@ Ui parseUi (const var& v)
                 for (auto& e : *a)
                 {
                     Menu menu;
+                    checkKeys (e, "menu", { "id", "rect", "value", "textColor",
+                                            "backgroundColor", "hAlign", "controlIndex",
+                                            "visible", "options" });
                     menu.id    = str (e, "id");
                     menu.rect  = parseRect (get (e, "rect"));
                     menu.value = intg (e, "value", 1);
@@ -382,6 +460,7 @@ Ui parseUi (const var& v)
                         for (auto& o : *opts)
                         {
                             MenuOption mo;
+                            checkKeys (o, "menu.option", { "name", "seqIndex", "bindings" });
                             mo.name     = str (o, "name");
                             mo.seqIndex = intg (o, "seqIndex", 0);
                             mo.bindings = parseBindings (o);
@@ -399,6 +478,7 @@ Ui parseUi (const var& v)
         for (auto& c : *colors)
         {
             KeyboardColor kc;
+            checkKeys (c, "keyboard.color", { "loNote", "hiNote", "color" });
             kc.loNote = intg (c, "loNote", 0);
             kc.hiNote = intg (c, "hiNote", 127);
             kc.color  = str (c, "color");
@@ -411,6 +491,8 @@ Ui parseUi (const var& v)
         for (auto& l : *links)
         {
             ButtonLink bl;
+            checkKeys (l, "buttonLink", { "fromButton", "fromState", "toButton", "toState",
+                                          "fromId", "toId" });
             bl.fromButton = intg (l, "fromButton", -1);
             bl.fromState  = intg (l, "fromState", -1);
             bl.toButton   = intg (l, "toButton", -1);
@@ -429,6 +511,9 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
 
     Mode m;
     m.name = str (v, "name");
+    checkKeys (v, "mode", { "name", "amp", "tags", "groups", "effects", "sequences",
+                            "modulators", "sequenceTriggers", "ccBindings",
+                            "menuKeySwitches", "ui" });
     if (m.name.isEmpty())
         res.errors.add (where + ": mode missing \"name\"");
 
@@ -438,6 +523,7 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
         for (auto& t : *a)
         {
             Tag tag;
+            checkKeys (t, "mode.tag", { "name", "polyphony" });
             tag.name      = str (t, "name");
             tag.polyphony = optI (t, "polyphony");
             m.tags.add (tag);
@@ -462,6 +548,8 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
         for (auto& t : *a)
         {
             SequenceTrigger st;
+            checkKeys (t, "sequenceTrigger", { "note", "sequence", "transpose", "rate",
+                                               "loop", "trackVelocity", "swallow" });
             st.note          = intg (t, "note", 60);
             st.sequence      = intg (t, "sequence", 0);
             st.transpose     = intg (t, "transpose", 0);
@@ -476,6 +564,8 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
         for (auto& e : *a)
         {
             CcBinding cb;
+            checkKeys (e, "ccBinding", { "cc", "parameter", "targetId", "groupIndex",
+                                         "controlIndex", "normMin", "normMax" });
             cb.cc           = intg (e, "cc", 1);
             cb.parameter    = str (e, "parameter");
             cb.targetId     = str (e, "targetId");
@@ -490,6 +580,7 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
         for (auto& e : *a)
         {
             MenuKeySwitch ks;
+            checkKeys (e, "menuKeySwitch", { "note", "option" });
             ks.note   = intg (e, "note", 0);
             ks.option = intg (e, "option", 0);
             m.menuKeySwitches.add (ks);
@@ -497,6 +588,99 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
 
     m.ui = parseUi (get (v, "ui"));
     return m;
+}
+
+
+// ---------------------------------------------------------------------------
+// Referential validation (warnings). A typo'd targetId / out-of-range index is
+// otherwise a SILENT no-op at runtime — the binding simply never fires.
+// ---------------------------------------------------------------------------
+void validateMode (const Mode& m, const juce::String& where, juce::StringArray& warnings)
+{
+    // Every id a binding may legally target.
+    juce::StringArray ids, buttonIds;
+    for (const auto& e : m.effects)      if (e.id.isNotEmpty())   ids.add (e.id);
+    for (const auto& g : m.groups)       if (g.uid.isNotEmpty())  ids.add (g.uid);
+    for (const auto& md : m.modulators)  if (md.id.isNotEmpty())  ids.add (md.id);
+    for (const auto& tab : m.ui.tabs)
+    {
+        for (const auto& c : tab.controls) if (c.id.isNotEmpty()) ids.add (c.id);
+        for (const auto& b : tab.buttons)  if (b.id.isNotEmpty()) { ids.add (b.id); buttonIds.add (b.id); }
+        for (const auto& im : tab.images)  if (im.id.isNotEmpty()) ids.add (im.id);
+        for (const auto& mn : tab.menus)   if (mn.id.isNotEmpty()) ids.add (mn.id);
+    }
+
+    auto checkBinding = [&] (const Binding& b, const juce::String& ctx)
+    {
+        if (b.targetId.isNotEmpty() && ! ids.contains (b.targetId))
+            warnings.addIfNotAlreadyThere (where + " " + ctx + ": binding targetId \"" + b.targetId
+                                           + "\" matches no effect/group/modulator/ui id");
+    };
+
+    for (const auto& tab : m.ui.tabs)
+    {
+        for (const auto& c : tab.controls)
+            for (const auto& b : c.bindings)
+                checkBinding (b, "control \"" + c.label + "\"");
+        for (const auto& btn : tab.buttons)
+            for (const auto& st : btn.states)
+                for (const auto& b : st.bindings)
+                    checkBinding (b, "button \"" + btn.id + "\"");
+        for (const auto& mn : tab.menus)
+        {
+            for (const auto& o : mn.options)
+                for (const auto& b : o.bindings)
+                    checkBinding (b, "menu option \"" + o.name + "\"");
+            if (! mn.options.isEmpty() && (mn.value < 1 || mn.value > mn.options.size()))
+                warnings.add (where + ": menu \"" + mn.id + "\" default value "
+                              + juce::String (mn.value) + " is outside 1.."
+                              + juce::String (mn.options.size()));
+        }
+    }
+    for (const auto& md : m.modulators)
+        for (const auto& b : md.bindings)
+            checkBinding (b, "modulator \"" + md.id + "\"");
+
+    for (const auto& st : m.sequenceTriggers)
+        if (st.sequence < 0 || st.sequence >= m.sequences.size())
+            warnings.add (where + ": sequenceTrigger (note " + juce::String (st.note)
+                          + ") references sequence " + juce::String (st.sequence)
+                          + " but the mode has " + juce::String (m.sequences.size()));
+
+    for (const auto& cb : m.ccBindings)
+        if (cb.targetId.isNotEmpty() && ! ids.contains (cb.targetId))
+            warnings.add (where + ": ccBinding (cc " + juce::String (cb.cc)
+                          + ") targetId \"" + cb.targetId + "\" matches no ui id");
+
+    const int nButtons = m.ui.tabs.isEmpty() ? 0 : m.ui.tabs.getReference (0).buttons.size();
+    for (const auto& bl : m.ui.buttonLinks)
+    {
+        if (bl.fromId.isNotEmpty() && ! buttonIds.contains (bl.fromId))
+            warnings.add (where + ": buttonLink fromId \"" + bl.fromId + "\" matches no button id");
+        if (bl.toId.isNotEmpty() && ! buttonIds.contains (bl.toId))
+            warnings.add (where + ": buttonLink toId \"" + bl.toId + "\" matches no button id");
+        if (bl.fromId.isEmpty() && (bl.fromButton < 0 || bl.fromButton >= nButtons))
+            warnings.add (where + ": buttonLink fromButton " + juce::String (bl.fromButton)
+                          + " is outside the tab's " + juce::String (nButtons) + " buttons");
+        if (bl.toId.isEmpty() && (bl.toButton < 0 || bl.toButton >= nButtons))
+            warnings.add (where + ": buttonLink toButton " + juce::String (bl.toButton)
+                          + " is outside the tab's " + juce::String (nButtons) + " buttons");
+    }
+
+    auto knownEffect = [] (const juce::String& t)
+    {
+        return t == "lowpass" || t == "highpass" || t == "convolution" || t == "gain"
+            || t == "wave_shaper" || t == "chorus" || t == "phaser";
+    };
+    for (const auto& e : m.effects)
+        if (! knownEffect (e.type))
+            warnings.addIfNotAlreadyThere (where + ": effect type \"" + e.type
+                                           + "\" is not supported by the engine (passthrough)");
+    for (const auto& g : m.groups)
+        for (const auto& e : g.effects)
+            if (! knownEffect (e.type))
+                warnings.addIfNotAlreadyThere (where + ": group effect type \"" + e.type
+                                               + "\" is not supported by the engine (passthrough)");
 }
 
 } // namespace
@@ -510,6 +694,10 @@ ManifestParseResult loadManifest (const var& root)
         res.errors.add ("manifest root is not a JSON object");
         return res;
     }
+
+    ScopedLintSink lint (res.warnings);   // unknown-key warnings land in res.warnings
+    checkKeys (root, "manifest", { "schema", "format", "library", "gainDb",
+                                   "polySaveDefault", "modes" });
 
     res.library.schema  = intg (root, "schema", 0);
     res.library.format  = str (root, "format");
@@ -537,6 +725,10 @@ ManifestParseResult loadManifest (const var& root)
     int i = 0;
     for (auto& m : *modes)
         res.library.modes.add (parseMode (m, res, i++));
+
+    for (int mi = 0; mi < res.library.modes.size(); ++mi)
+        validateMode (res.library.modes.getReference (mi),
+                      "modes[" + juce::String (mi) + "]", res.warnings);
 
     res.ok = res.errors.isEmpty();
     return res;

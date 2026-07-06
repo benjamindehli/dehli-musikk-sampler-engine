@@ -441,6 +441,12 @@ struct PresetLibrary
 
 /** Schema version this engine build understands. The loader rejects manifests
     whose top-level "schema" exceeds this. */
+// Schema version POLICY: ADDITIVE fields (new optional keys) do NOT bump this —
+// an older engine warns about the unknown keys (loader lint) and plays what it
+// understands; embedded manifests are always regenerated with their plugin anyway.
+// Bump ONLY for changes that alter the MEANING of existing fields (an old engine
+// would misinterpret, not just miss, the data). Newer-schema manifests are
+// rejected with a clear error; schema-0 (missing) loads with a warning.
 inline constexpr int kManifestSchemaVersion = 1;
 
 } // namespace dm

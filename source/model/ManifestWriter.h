@@ -30,6 +30,10 @@ juce::String writeManifestToJson (const PresetLibrary& library, bool oneLine = f
     Round-trips with `loadManifestFromFolder`. Returns false if a file couldn't be
     written. (Partials/ is a hand-authoring feature; the converter does not extract
     shared fragments automatically.) */
+/** NOTE: one-way for hand-authored structure — the loader resolves $use/$ref
+    partials into a flat model, and this writes index.json + modes/ WITHOUT
+    re-creating partials/. Never machine-rewrite a hand-authored split manifest
+    in place: the $use/$ref organisation would be permanently inlined. */
 bool writeSplitManifest (const PresetLibrary& library, const juce::File& manifestDir);
 
 } // namespace dm
