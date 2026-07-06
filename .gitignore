@@ -3,6 +3,7 @@ CLAUDE.md
 
 # Build output
 build/
+build-linux/
 cmake-build-*/
 out/
 
