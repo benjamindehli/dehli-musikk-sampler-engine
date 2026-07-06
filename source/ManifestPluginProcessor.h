@@ -148,7 +148,7 @@ private:
     std::atomic<int> uiModWheel   { -1 };
     // Per-button click sequence (radio groups resolve to most-recently-clicked). Read on
     // the audio thread by CompiledMode::apply; bumped on the message thread by noteButtonClicked.
-    static constexpr int kMaxUiButtons = 64;
+    static constexpr int kMaxUiButtons = params::kMaxUiButtons;   // single shared cap
     std::atomic<std::uint32_t> buttonClickSeq[kMaxUiButtons] {};
     std::atomic<std::uint32_t> clickCounter { 0 };
     std::atomic<float> outputPeakL { 0.0f };   // per-channel max |sample| since the editor last read

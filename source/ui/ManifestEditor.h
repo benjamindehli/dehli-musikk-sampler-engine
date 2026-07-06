@@ -95,6 +95,7 @@ private:
     void rebuildUi();
     void applyPreferredSize();   // resize host to the active mode (per-mode cropTop → varying height)
     void refreshWidgets();
+    bool isFirstMenu (const Menu& menu) const;   // structural (Ui tree is copied in the renderer)
     void setParam (const char* paramId, float nativeValue);
     void shiftKeyboardOctave (int deltaOctaves);
     void timerCallback() override;

@@ -415,6 +415,8 @@ Ui parseUi (const var& v)
             bl.fromState  = intg (l, "fromState", -1);
             bl.toButton   = intg (l, "toButton", -1);
             bl.toState    = intg (l, "toState", -1);
+            bl.fromId     = str (l, "fromId");   // id endpoints (hand-authored manifests)
+            bl.toId       = str (l, "toId");
             ui.buttonLinks.add (bl);
         }
     }
@@ -513,6 +515,7 @@ ManifestParseResult loadManifest (const var& root)
     res.library.format  = str (root, "format");
     res.library.library = str (root, "library");
     res.library.gainDb  = optD (root, "gainDb").value_or (0.0);
+    res.library.polySaveDefault = optB (root, "polySaveDefault").value_or (true);
 
     if (res.library.schema == 0)
         res.warnings.add ("manifest has no \"schema\" version; assuming "

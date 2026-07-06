@@ -256,10 +256,11 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
             z.pitchKeyTrack = s.pitchKeyTrack || groupPitchKeyTrack;
 
             // A per-sample drift marker (fractional pitchKeyTrack in the DS source, e.g.
-            // Strykebrett) means this library has a dedicated Drift on/off button wired to
-            // a GLOBAL_TUNING modulator. We no longer use the value for depth (that's random
-            // per voice now), only as the signal that the drift wheels should be GATED by
-            // that button. Libraries without it leave drift always-on (wheel = 0 disables).
+            // Strykebrett) means this library authored per-sample wow — our per-voice drift
+            // wheels replace it. It is only the FIRST signal for a Drift gate: the gate also
+            // needs a BUTTON driving a GLOBAL_TUNING modulator's MOD_AMOUNT (see the
+            // driftGateMod scan below); without one, drift stays always-on (wheel = 0
+            // disables) and any GLOBAL_TUNING modulator keeps working as real vibrato.
             if (s.pitchDrift)
                 hasDriftGateButton = true;
 
@@ -336,22 +337,54 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupTuningModMul.clearQuick();
     groupTuningModMul.insertMultiple (0, 1.0, numGroups);
 
+    // Which modulator (if any) is the Drift BUTTON's gate. Requires BOTH signals:
+    //  1. the library authored per-sample wow (pitchDrift markers → hasDriftGateButton),
+    //     meaning its GLOBAL_TUNING "wow" was replaced by the per-voice drift wheels; and
+    //  2. THAT modulator's MOD_AMOUNT is set from a BUTTON state (the Drift/lo-fi switch).
+    // A mod-wheel vibrato is also "GLOBAL_TUNING + MOD_AMOUNT-driven", but from a CONTROL
+    // — gating on any GLOBAL_TUNING modulator silently ate EDB-Orgel's vibrato (its
+    // samples carry drift markers but its wheel-driven mod_9 is not a gate). And a
+    // library WITHOUT markers (4-track hi-fi/lo-fi wow switches) must never gate.
+    int driftGateMod = -1;
+    if (hasDriftGateButton && ! mode.ui.tabs.isEmpty())
+        for (const auto& btn : mode.ui.tabs.getReference (0).buttons)
+            for (const auto& st : btn.states)
+                for (const auto& b : st.bindings)
+                    if (b.parameter == "MOD_AMOUNT")
+                    {
+                        int mi = -1;
+                        if (b.targetId.isNotEmpty())
+                            for (int k = 0; k < mode.modulators.size(); ++k)
+                                if (mode.modulators.getReference (k).id == b.targetId) { mi = k; break; }
+                        if (mi < 0)
+                            mi = b.position.value_or (-1);
+                        if (mi >= 0 && mi < mode.modulators.size())
+                            for (const auto& mb : mode.modulators.getReference (mi).bindings)
+                                if (mb.parameter == "GLOBAL_TUNING")
+                                    driftGateMod = mi;
+                    }
+    hasDriftGateButton = driftGateMod >= 0;   // markers without a gate button → wheels always-on
+
+    int modIdx = -1;
     for (const auto& lfo : mode.modulators)
     {
+        ++modIdx;
         Modulator m;
         m.freqHz   = lfo.frequency;
         m.depth    = (float) lfo.modAmount;
         m.shape    = lfoShapeFromString (lfo.shape);
-        m.bindings = lfo.bindings;
+
         // Resolve id-based group targets → indices ONCE here, so the audio thread
         // (applyLfoBlock) reads plain group indices. targetId is a group uid during the
         // migration; fall back to the binding's own groupIndex when absent.
-        for (auto& b : m.bindings)
+        juce::Array<Binding> bindings = lfo.bindings;
+        for (auto& b : bindings)
             if (b.targetId.isNotEmpty())
                 for (int gi = 0; gi < mode.groups.size(); ++gi)
                     if (mode.groups.getReference (gi).uid == b.targetId) { b.groupIndex = gi; break; }
 
-        for (const auto& b : m.bindings)
+        for (const auto& b : bindings)
+        {
             if (b.parameter == "AMP_VOLUME")
             {
                 if (b.groupIndex)
@@ -368,7 +401,40 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
                     m.ampInstrument = true;
                     hasInstMod = true;
                 }
+                continue;
             }
+
+            // Compile the non-amp targets (pitch / drift gate / per-group FX sweeps) to
+            // enum + indices so applyLfoBlock does no string compares per block. Only THE
+            // gate modulator (button-driven, see driftGateMod above) becomes a gate.
+            Modulator::Target t;
+            t.hasRange = b.translationOutputMin.has_value() || b.translationOutputMax.has_value();
+            t.outMin   = b.translationOutputMin.value_or (0.0);
+            t.outMax   = b.translationOutputMax.value_or (1.0);
+            if (b.parameter == "GLOBAL_TUNING" && modIdx == driftGateMod)
+                t.kind = Modulator::Target::Kind::driftGate;
+            else if (b.parameter == "GLOBAL_TUNING")
+                t.kind = Modulator::Target::Kind::globalTuning;
+            else if (b.parameter == "GROUP_TUNING" && b.groupIndex)
+            {
+                t.kind  = Modulator::Target::Kind::groupTuning;
+                t.group = *b.groupIndex;
+            }
+            else if (b.groupIndex && b.effectIndex
+                     && (b.parameter == "FX_FILTER_FREQUENCY" || b.parameter == "LEVEL" || b.parameter == "FX_MIX"))
+            {
+                t.kind      = Modulator::Target::Kind::groupFx;
+                t.group     = *b.groupIndex;
+                t.effect    = *b.effectIndex;
+                t.fxParam   = b.parameter == "FX_FILTER_FREQUENCY" ? FxChain::FxParam::filterFrequency
+                            : b.parameter == "LEVEL"               ? FxChain::FxParam::level
+                                                                   : FxChain::FxParam::mix;
+                t.deepSwing = b.parameter == "LEVEL";
+            }
+            else
+                continue;   // not an engine LFO target
+            m.targets.push_back (t);
+        }
         mods.push_back (std::move (m));
     }
     // Per-group tremolo scratch (each sized to a block; only trem groups are filled/read).
@@ -553,6 +619,7 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->fadingOut = false;
     v->declickGain = 1.0f;
     v->declickDelta = 0.0f;
+    v->smoothStaticGain = -1.0f;   // first chunk starts at its target gain (no ramp-in)
 }
 
 void VoiceEngine::handleNoteOff (int note)
@@ -698,6 +765,14 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                                              * groupTagVolume[v.groupIndex]
                                              * groupGain[v.groupIndex]
                                            : 1.0f);
+        // De-zipper: the static gain's inputs (group/tag volumes, drift) step once per
+        // block — a fast control sweep (e.g. a mod-wheel blend of tag volumes) jumping
+        // the whole chunk's gain at the block edge crackles. Ramp across the chunk.
+        if (v.smoothStaticGain < 0.0f)
+            v.smoothStaticGain = staticGain;
+        const float gainInc = (staticGain - v.smoothStaticGain) / (float) numSamples;
+        float sGain = v.smoothStaticGain;
+        v.smoothStaticGain = staticGain;   // next chunk ramps onward from this target
         const float* itRow = instTremActive  ? instTrem.data() + startSample : nullptr;
         const float* gtRow = groupTremActive ? groupTrem[(size_t) v.groupIndex].data() + startSample
                                              : nullptr;
@@ -721,7 +796,8 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             float trem = 1.0f;
             if (itRow != nullptr) trem *= itRow[i];
             if (gtRow != nullptr) trem *= gtRow[i];
-            const float g = env * v.declickGain * staticGain * trem;
+            sGain += gainInc;   // de-zippered static gain (see above)
+            const float g = env * v.declickGain * sGain * trem;
 
             if (monoSrc)
             {
@@ -844,44 +920,44 @@ void VoiceEngine::applyLfoBlock (int numSamples)
         // `u` is its unipolar 0..depth form mapped through each binding's output range.
         const double waveMid = (double) lfoWave (m.shape, m.phase + inc * (numSamples * 0.5));
         const double u = (waveMid + 1.0) * 0.5 * (double) m.depth;
-        for (const auto& b : m.bindings)
+        for (const auto& t : m.targets)   // compiled at setMode — no string work here
         {
-            const double outMin = b.translationOutputMin.value_or (0.0);
-            const double outMax = b.translationOutputMax.value_or (1.0);
-            const double val = outMin + u * (outMax - outMin);
+            const double val = t.outMin + u * (t.outMax - t.outMin);
+            switch (t.kind)
+            {
+                case Modulator::Target::Kind::driftGate:
+                    // This library's Drift button rides GLOBAL_TUNING: use its depth purely
+                    // as the on/off gate for the drift wheels (no global wow of its own).
+                    if (m.depth > 1.0e-4f)
+                        driftGateOpen = true;
+                    break;
 
-            if (b.parameter == "GLOBAL_TUNING" && hasDriftGateButton)
-            {
-                // This library's Drift button rides GLOBAL_TUNING: use its depth purely as
-                // the on/off gate for the drift wheels (no global wow of its own).
-                if (m.depth > 1.0e-4f)
-                    driftGateOpen = true;
-                continue;
-            }
+                case Modulator::Target::Kind::globalTuning:
+                case Modulator::Target::Kind::groupTuning:
+                {
+                    // Pitch modulation (vibrato / wow). A binding with an explicit output
+                    // range uses it as-is — a small unipolar vibrato, e.g. the tremulant.
+                    // Without a range, `modAmount` alone is near-zero, so treat it as a
+                    // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible gentle
+                    // wander that centres on the true pitch.
+                    const double semis = t.hasRange ? val * kTuneScale
+                                                    : waveMid * (double) m.depth * kWowSemis;
+                    const double mul = std::pow (2.0, semis / 12.0);
+                    if (t.kind == Modulator::Target::Kind::globalTuning)
+                        globalTuningMul *= mul;
+                    else if (t.group >= 0 && t.group < groupTuningModMul.size())
+                        groupTuningModMul.set (t.group, groupTuningModMul[t.group] * mul);
+                    break;
+                }
 
-            if (b.parameter == "GLOBAL_TUNING" || (b.parameter == "GROUP_TUNING" && b.groupIndex))
-            {
-                // Pitch modulation (vibrato / wow). A binding with an explicit output
-                // range uses it as-is — a small unipolar vibrato, e.g. the tremulant.
-                // Without a range, `modAmount` alone is near-zero, so treat it as a
-                // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible gentle
-                // wander that centres on the true pitch.
-                const bool hasRange = b.translationOutputMin.has_value() || b.translationOutputMax.has_value();
-                const double semis = hasRange ? val * kTuneScale
-                                              : waveMid * (double) m.depth * kWowSemis;
-                const double mul = std::pow (2.0, semis / 12.0);
-                if (b.parameter == "GLOBAL_TUNING")
-                    globalTuningMul *= mul;
-                else if (const int gi = *b.groupIndex; gi >= 0 && gi < groupTuningModMul.size())
-                    groupTuningModMul.set (gi, groupTuningModMul[gi] * mul);
-            }
-            else if (b.groupIndex && b.effectIndex
-                     && (b.parameter == "FX_FILTER_FREQUENCY" || b.parameter == "LEVEL" || b.parameter == "FX_MIX"))
-            {
-                const double v = (b.parameter == "LEVEL")
-                                   ? outMin + u * (outMax - outMin) * kGainSwing   // deeper amplitude swing
-                                   : val;
-                setGroupEffectParam (*b.groupIndex, *b.effectIndex, b.parameter, (float) v);
+                case Modulator::Target::Kind::groupFx:
+                {
+                    const double v = t.deepSwing
+                                       ? t.outMin + u * (t.outMax - t.outMin) * kGainSwing   // deeper amplitude swing
+                                       : val;
+                    setGroupEffectParam (t.group, t.effect, t.fxParam, (float) v);
+                    break;
+                }
             }
         }
 

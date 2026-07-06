@@ -168,6 +168,12 @@ private:
         // waveform at a non-zero value.
         float declickGain = 1.0f;
         float declickDelta = 0.0f;   // >0 fading in, <0 fading out
+
+        // De-zippered "static" gain (voice gain × group volumes × drift). Those inputs
+        // step once per block; ramping across the chunk removes the crackle a fast
+        // control sweep (e.g. a mod-wheel tag-volume blend) otherwise causes.
+        // -1 = fresh voice: initialise to the first chunk's target (no ramp-in).
+        float smoothStaticGain = -1.0f;
         bool  fadingOut = false;
         bool  isRelease = false;     // release-trigger voice: plays out, ignores note-off
         bool  pedalHeld = false;     // note-off arrived while the sustain pedal was down
@@ -226,9 +232,23 @@ private:
         double freqHz { 0.0 };
         float  depth { 0.0f };           // 0..1 (MOD_AMOUNT; starts at the manifest modAmount)
         int    shape { 0 };              // 0 sine · 1 triangle · 2 saw · 3 square
-        juce::Array<Binding> bindings;
         juce::Array<int> ampGroups;      // groups amplitude-modulated (AMP_VOLUME + groupIndex)
         bool   ampInstrument { false };  // AMP_VOLUME with no group → modulates every voice
+
+        // Non-amp bindings COMPILED at setMode (kind + slots + output range), so
+        // applyLfoBlock does no per-block string compares. Replaces keeping the raw
+        // Binding list around at runtime.
+        struct Target
+        {
+            enum class Kind { driftGate, globalTuning, groupTuning, groupFx };
+            Kind   kind { Kind::globalTuning };
+            int    group = -1, effect = 0;
+            FxChain::FxParam fxParam { FxChain::FxParam::mix };
+            bool   deepSwing = false;    // LEVEL: deeper amplitude swing (kGainSwing)
+            bool   hasRange = false;     // explicit translationOutputMin/Max present
+            double outMin = 0.0, outMax = 1.0;
+        };
+        std::vector<Target> targets;
     };
     std::vector<Modulator> mods;
     bool hasInstMod { false };           // any modulator amplitude-modulates the whole instrument

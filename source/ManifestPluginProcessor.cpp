@@ -24,7 +24,7 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
                     for (const auto& b : st.bindings)
                         if (b.parameter == "FX_IR_FILE")
                         {
-                            const auto pid = params::buttonParamId (i);
+                            const auto pid = params::buttonParamId (tab.buttons.getReference (i), i);
                             if (! irButtonParams.contains (pid))
                             {
                                 irButtonParams.add (pid);
@@ -295,7 +295,7 @@ void ManifestPluginProcessor::applyMenuIrFor (int modeIndex)
         const auto& btn = tab.buttons.getReference (i);
         if (btn.states.isEmpty())
             continue;
-        const auto* bs = apvts->getRawParameterValue (params::buttonParamId (i));
+        const auto* bs = apvts->getRawParameterValue (params::buttonParamId (btn, i));
         const int s = juce::jlimit (0, btn.states.size() - 1, bs != nullptr ? (int) bs->load() : 0);
         applyIrBindings (btn.states.getReference (s).bindings);
     }

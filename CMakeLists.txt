@@ -61,6 +61,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/FxChainTests.cpp
         tests/SamplerEngineTests.cpp
         tests/NoteSequencerTests.cpp
+        tests/CompiledModeTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE

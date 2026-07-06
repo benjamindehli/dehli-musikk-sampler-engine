@@ -351,8 +351,12 @@ struct KeyboardColor
 // `toButton` to state `toState`. Used e.g. so turning Stereo on auto-enables Double Track.
 struct ButtonLink
 {
+    // Positional endpoints (converter output; tab-0 button indices) …
     int fromButton = -1, fromState = -1;
     int toButton   = -1, toState   = -1;
+    // … or id-based endpoints (preferred for hand-authored manifests — they survive
+    // button reordering). Non-empty ids win; the editor resolves them to indices at use.
+    juce::String fromId, toId;
 };
 
 struct Ui
@@ -429,6 +433,9 @@ struct PresetLibrary
     juce::String format;         // "dmse-manifest"
     juce::String library;        // human name, e.g. "Omni-84"
     double gainDb = 0.0;         // pre-FX level trim applied to all modes (matches DS signal level)
+    bool polySaveDefault = true; // default for the Poly-save toggle (skip silent groups at note-on).
+                                 // false for libraries whose controls BLEND muted groups in mid-note
+                                 // (e.g. Elektrisk's mod-wheel Normal/Full sweep).
     juce::Array<Mode> modes;
 };
 

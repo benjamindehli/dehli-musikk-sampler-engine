@@ -277,22 +277,47 @@ void ManifestEditor::rebuildUi()
         for (const auto& pid : params::controlParamIds (c))
             setParam (pid.toRawUTF8(), norm);
     };
-    uiComponent->onButtonChanged = [this] (const Button&, int buttonIndex, int stateIndex)
+    uiComponent->onButtonChanged = [this] (const Button& btn, int buttonIndex, int stateIndex)
     {
-        setParam (params::buttonParamId (buttonIndex).toRawUTF8(), (float) stateIndex);
+        setParam (params::buttonParamId (btn, buttonIndex).toRawUTF8(), (float) stateIndex);
         host.noteButtonClicked (buttonIndex);   // radio groups: last clicked wins
 
         // Button links: e.g. turning Stereo on auto-enables Double Track. Fire the
         // dependent button's param (its widget refreshes + the host applies it).
+        // Endpoints resolve by id when the link carries one (hand-authored manifests),
+        // falling back to the legacy indices.
         if (const auto* m = host.getActiveMode())
+        {
+            if (m->ui.tabs.isEmpty())
+                return;
+            const auto& btns = m->ui.tabs.getReference (0).buttons;
+            auto resolve = [&btns] (const juce::String& linkId, int fallback) -> int
+            {
+                if (linkId.isNotEmpty())
+                    for (int i = 0; i < btns.size(); ++i)
+                        if (btns.getReference (i).id == linkId)
+                            return i;
+                return fallback;
+            };
             for (const auto& link : m->ui.buttonLinks)
-                if (link.fromButton == buttonIndex && link.fromState == stateIndex
-                    && link.toButton >= 0 && link.toState >= 0)
-                    setParam (params::buttonParamId (link.toButton).toRawUTF8(), (float) link.toState);
+            {
+                const int from = resolve (link.fromId, link.fromButton);
+                const int to   = resolve (link.toId,   link.toButton);
+                if (from == buttonIndex && link.fromState == stateIndex
+                    && to >= 0 && to < btns.size() && link.toState >= 0)
+                    setParam (params::buttonParamId (btns.getReference (to), to).toRawUTF8(),
+                              (float) link.toState);
+            }
+        }
     };
-    uiComponent->onMenuChanged = [this] (const Menu&, int idx)
+    uiComponent->onMenuChanged = [this] (const Menu& menu, int idx)
     {
-        setParam (params::id::chordOrder, (float) idx);
+        // Only the FIRST dropdown maps to the chordOrder param (that's the menu the
+        // param represents — see createLayout); a second menu must not clobber it.
+        // NOTE: compare structurally, not by address — ManifestUiComponent holds a
+        // COPY of the Ui tree, so `&menu` never equals the mode's own menu object.
+        if (isFirstMenu (menu))
+            setParam (params::id::chordOrder, (float) idx);
     };
     addAndMakeVisible (*uiComponent);
     // z-order (back → front): manifest face, then the translucent backdrop, then the
@@ -346,6 +371,25 @@ void ManifestEditor::setParam (const char* paramId, float nativeValue)
         p->setValueNotifyingHost (p->convertTo0to1 (nativeValue));
 }
 
+bool ManifestEditor::isFirstMenu (const Menu& menu) const
+{
+    // Structural match against the active mode's first menu — the ManifestUiComponent
+    // works on a COPY of the Ui tree, so pointer identity is meaningless here. With
+    // zero/one menu (every current library) the answer is trivially yes.
+    const auto* m = host.getActiveMode();
+    if (m == nullptr || m->ui.tabs.isEmpty())
+        return true;
+    const auto& menus = m->ui.tabs.getReference (0).menus;
+    if (menus.size() < 2)
+        return true;
+    const auto& first = menus.getReference (0);
+    if (menu.id.isNotEmpty() && first.id.isNotEmpty())
+        return menu.id == first.id;
+    if (menu.controlIndex && first.controlIndex)
+        return *menu.controlIndex == *first.controlIndex;
+    return true;   // indistinguishable — preserve the pre-guard behaviour
+}
+
 void ManifestEditor::refreshWidgets()
 {
     if (uiComponent == nullptr)
@@ -372,22 +416,25 @@ void ManifestEditor::refreshWidgets()
             const double mn = c.min.value_or (0.0), mx = c.max.value_or (1.0);
             return mn + (double) it->second->load() * (mx - mn);
         },
-        [&] (const Button&, int index) -> std::optional<int>
+        [&] (const Button& b, int index) -> std::optional<int>
         {
             if ((int) buttonParamCache.size() <= index)
                 buttonParamCache.resize ((size_t) index + 1);
             auto& slot = buttonParamCache[(size_t) index];
             if (! slot.has_value())
             {
-                const auto pid = params::buttonParamId (index);
+                const auto pid = params::buttonParamId (b, index);
                 slot = apvts.getParameter (pid) != nullptr ? apvts.getRawParameterValue (pid)
                                                            : nullptr;
             }
             if (*slot == nullptr) return std::nullopt;
             return (int) (*slot)->load();
         },
-        [&] (const Menu&) -> std::optional<int>
+        [&] (const Menu& m) -> std::optional<int>
         {
+            // Only the FIRST dropdown reflects chordOrder (see onMenuChanged).
+            if (! isFirstMenu (m))
+                return std::nullopt;
             if (! chordOrderResolved)
             {
                 chordOrderParam = apvts.getRawParameterValue (params::id::chordOrder);

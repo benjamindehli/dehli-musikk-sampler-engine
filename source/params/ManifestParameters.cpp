@@ -52,10 +52,27 @@ static const FloatSpec kFloatSpecs[] =
 // control now owns one param keyed by its label (see controlKey). The registry is
 // kept only as the set of float engine parameters applyBinding knows how to route.
 
-// Buttons get one param each, keyed by their index in the tab (btn_<i>), an Int
-// 0..numStates-1 so multi-state selectors (e.g. a 3-way stop selector) work, not
-// just on/off. Helpers below.
+// Buttons get one param each — keyed by the button's manifest id when present
+// (converter emits btn_<i>, so ids are unchanged for generated manifests; hand-
+// authored ids survive reordering), else by tab position. An Int 0..numStates-1 so
+// multi-state selectors (e.g. a 3-way stop selector) work, not just on/off.
 static juce::String buttonId (int index) { return "btn_" + juce::String (index); }
+
+// Param ids live in the APVTS ValueTree (XML attribute names) — sanitise a manifest
+// id to the safe [A-Za-z0-9_] set. btn_<i>-style ids pass through unchanged.
+static juce::String sanitizedParamId (const juce::String& id)
+{
+    auto s = id;
+    for (int i = 0; i < s.length(); ++i)
+    {
+        const auto ch = s[i];
+        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                     || (ch >= '0' && ch <= '9') || ch == '_';
+        if (! ok)
+            s = s.replaceCharacter (ch, '_');
+    }
+    return s;
+}
 
 static const FloatSpec* floatSpecFor (const juce::String& parameter)
 {
@@ -245,7 +262,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
         ParameterID { id::volumeDrift, 1 }, "Volume Drift",
         juce::NormalisableRange<float> (0.0f, 1.0f, 0.001f), 0.0f));
     p.push_back (std::make_unique<AudioParameterBool> (
-        ParameterID { id::skipMuted, 1 }, "Skip Silent Groups", true));
+        ParameterID { id::skipMuted, 1 }, "Skip Silent Groups", lib.polySaveDefault));
 
     // One float param per engine-driving control, keyed by label (deduped across
     // modes). Stored normalised 0..1; each mode maps it through its own control
@@ -263,26 +280,34 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
                             NormalisableRange<float> (0.0f, 1.0f), (float) normOf (c)));
                 }
 
-    // Button params: one Int per button index (0..numStates-1), deduped across
-    // modes (max state count + the authored default). Lane order = button order.
-    std::map<int, int> btnStates, btnDefault;
+    // Button params: one Int per distinct button param id (0..numStates-1), deduped
+    // across modes (max state count + the authored default of the first seen). Lane
+    // order = first-seen order (= button order for generated btn_<i> ids).
+    StringArray btnOrder;
+    std::map<juce::String, int> btnStates, btnDefault, btnNumber;
     for (const auto& m : lib.modes)
         if (! m.ui.tabs.isEmpty())
         {
             const auto& btns = m.ui.tabs.getReference (0).buttons;
             for (int i = 0; i < btns.size(); ++i)
             {
-                const int n = btns.getReference (i).states.size();
-                btnStates[i]  = juce::jmax (btnStates.count (i) ? btnStates[i] : 0, n);
-                if (! btnDefault.count (i))
-                    btnDefault[i] = btns.getReference (i).value.value_or (0);
+                const auto& btn = btns.getReference (i);
+                const auto pid  = buttonParamId (btn, i);
+                if (! btnStates.count (pid))
+                {
+                    btnOrder.add (pid);
+                    btnNumber[pid]  = i + 1;   // DAW display name stays "Button <n>"
+                    btnDefault[pid] = btn.value.value_or (0);
+                    btnStates[pid]  = 0;
+                }
+                btnStates[pid] = juce::jmax (btnStates[pid], btn.states.size());
             }
         }
-    for (const auto& [idx, n] : btnStates)
-        if (n >= 2)
+    for (const auto& pid : btnOrder)
+        if (const int n = btnStates[pid]; n >= 2)
             p.push_back (std::make_unique<AudioParameterInt> (
-                ParameterID { buttonId (idx), 1 }, "Button " + String (idx + 1),
-                0, n - 1, juce::jlimit (0, n - 1, btnDefault[idx])));
+                ParameterID { pid, 1 }, "Button " + String (btnNumber[pid]),
+                0, n - 1, juce::jlimit (0, n - 1, btnDefault[pid])));
 
     // Chord-order menu (first dropdown found).
     auto chordOpts = firstMenuOptions (lib);
@@ -459,9 +484,9 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
                 if (groups.empty()) continue;
                 Op op;
                 op.xform = makeXform (b, mn, mx, false);
-                op.route = [groups = std::move (groups)] (SamplerEngine& e, double v)
+                op.route = [gs = std::move (groups)] (SamplerEngine& e, double v)
                 {
-                    for (int g : groups) e.setGroupTagVolume (g, (float) v);
+                    for (int g : gs) e.setGroupTagVolume (g, (float) v);
                 };
                 item.ops.push_back (std::move (op));
             }
@@ -475,10 +500,10 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
                 Op op;
                 op.xform = makeXform (b, mn, mx, useTable);
                 const double thresh = useTable ? 0.5 : 1.0e-6;
-                op.route = [groups = std::move (groups), thresh] (SamplerEngine& e, double v)
+                op.route = [gs = std::move (groups), thresh] (SamplerEngine& e, double v)
                 {
                     const bool on = v > thresh;
-                    for (int g : groups) e.setGroupEnabled (g, on);
+                    for (int g : gs) e.setGroupEnabled (g, on);
                 };
                 item.ops.push_back (std::move (op));
             }
@@ -498,7 +523,7 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
         const auto& btn = tab.buttons.getReference (i);
         ButtonPlan bp;
         bp.numStates = btn.states.size();
-        bp.param = apvts.getRawParameterValue (buttonId (i));   // null for single-state buttons → state 0
+        bp.param = apvts.getRawParameterValue (buttonParamId (btn, i));   // null for single-state buttons → state 0
 
         for (const auto& st : btn.states)
         {
@@ -517,9 +542,9 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
                     auto groups = tagGroups (b.identifier);
                     if (groups.empty()) continue;
                     const bool on = bindingIsTrue (b);
-                    ops.push_back ([groups = std::move (groups), on] (SamplerEngine& e)
+                    ops.push_back ([gs = std::move (groups), on] (SamplerEngine& e)
                     {
-                        for (int g : groups) e.setGroupEnabled (g, on);
+                        for (int g : gs) e.setGroupEnabled (g, on);
                     });
                     continue;
                 }
@@ -528,7 +553,7 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
                 if (auto route = compileRoute (b))
                 {
                     const double v = buttonBindingValue (b);
-                    ops.push_back ([route = std::move (route), v] (SamplerEngine& e) { route (e, v); });
+                    ops.push_back ([r = std::move (route), v] (SamplerEngine& e) { r (e, v); });
                 }
             }
             bp.stateOps.push_back (std::move (ops));
@@ -627,7 +652,7 @@ void CompiledMode::apply (SamplerEngine& engine, const std::atomic<std::uint32_t
 
     // Buttons oldest-click-first (never-clicked keep index order): among buttons
     // targeting the SAME effect (a radio group) the most-recently-clicked wins.
-    constexpr int kMaxBtn = 64;
+    constexpr int kMaxBtn = kMaxUiButtons;   // shared cap (params::kMaxUiButtons)
     const int nB = juce::jmin ((int) buttons.size(), kMaxBtn);
     int order[kMaxBtn];
     std::uint32_t seq[kMaxBtn];
@@ -705,9 +730,11 @@ juce::StringArray controlParamIds (const Control& c)
     return ids;
 }
 
-juce::String buttonParamId (int buttonIndex)
+juce::String buttonParamId (const Button& button, int fallbackIndex)
 {
-    return buttonId (buttonIndex);
+    if (button.id.isNotEmpty())
+        return sanitizedParamId (button.id);
+    return buttonId (fallbackIndex);
 }
 
 } // namespace dm::params

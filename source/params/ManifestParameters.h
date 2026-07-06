@@ -44,11 +44,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
 // audio thread applies every block. (The old applyToEngine/applyCcToParams/
 // applyNoteSwitches re-did string lookups, table parsing and tag scans per block.)
 
+/** Shared cap for per-button bookkeeping (click-sequence arrays, radio ordering). */
+inline constexpr int kMaxUiButtons = 64;
+
 /** The float param ids a control's bindings drive (for the editor to write/reflect). */
 juce::StringArray controlParamIds (const Control& c);
 
-/** The param id a button drives — one per button index, an Int 0..numStates-1
-    (supports multi-state selectors, not just on/off). For the editor. */
-juce::String buttonParamId (int buttonIndex);
+/** The param id a button drives — an Int 0..numStates-1 (supports multi-state
+    selectors, not just on/off). Keyed by the button's stable manifest id when
+    present — a hand-authored manifest can reorder buttons without shifting saved
+    sessions/automation — falling back to the positional btn_<index>. Converter-
+    generated ids are btn_<i>, so existing saved sessions resolve identically. */
+juce::String buttonParamId (const Button& button, int fallbackIndex);
 
 } // namespace dm::params

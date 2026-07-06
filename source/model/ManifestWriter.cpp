@@ -397,6 +397,8 @@ var writeUi (const Ui& ui)
             lo.set ("fromState", bl.fromState);
             lo.set ("toButton", bl.toButton);
             lo.set ("toState", bl.toState);
+            if (bl.fromId.isNotEmpty()) lo.set ("fromId", bl.fromId);
+            if (bl.toId.isNotEmpty())   lo.set ("toId",   bl.toId);
             links.add (lo.toVar());
         }
         o.set ("buttonLinks", fromArray (links));
@@ -508,6 +510,8 @@ var manifestToVar (const PresetLibrary& library)
     o.setStr ("library", library.library);
     if (library.gainDb != 0.0)
         o.set ("gainDb", library.gainDb);
+    if (! library.polySaveDefault)
+        o.set ("polySaveDefault", false);
 
     juce::Array<var> modes;
     for (const auto& m : library.modes)
