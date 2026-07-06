@@ -111,16 +111,26 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
     // Samples ship as a memory-mapped pack (samples.pak + .json index) in a shared support
     // folder rather than compiled into the binary — register those first; anything the pack
     // doesn't cover (IRs, or a plugin built with --no-pack-samples) falls back to embedded
-    // BinaryData below. The pack path defaults to the shared folder keyed by product name;
-    // a plugin may override it via Assets::packFile. Missing pack → embedded fallback.
+    // BinaryData below. A plugin may override the path via Assets::packFile; otherwise try
+    // the USER folder first (dev builds install there via CMake), then the SYSTEM folder
+    // (what the shipped installers write, so every user account finds the samples):
+    //   macOS:   ~/Library/Application Support/DehliMusikk/<name>/  then  /Library/Application Support/DehliMusikk/<name>/
+    //   Windows: %APPDATA%\DehliMusikk\<name>\                      then  %PROGRAMDATA%\DehliMusikk\<name>\
+    // Missing pack → embedded fallback.
     juce::File packFile = assets.packFile;
     if (packFile == juce::File() && assets.name.isNotEmpty())
     {
-        auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory);
-       #if JUCE_MAC
-        dir = dir.getChildFile ("Application Support");   // userApplicationDataDirectory is ~/Library on macOS
-       #endif
-        packFile = dir.getChildFile ("DehliMusikk").getChildFile (assets.name).getChildFile ("samples.pak");
+        auto candidateIn = [this] (juce::File::SpecialLocationType root) -> juce::File
+        {
+            auto dir = juce::File::getSpecialLocation (root);
+           #if JUCE_MAC
+            dir = dir.getChildFile ("Application Support");   // JUCE gives ~/Library and /Library on macOS
+           #endif
+            return dir.getChildFile ("DehliMusikk").getChildFile (assets.name).getChildFile ("samples.pak");
+        };
+        packFile = candidateIn (juce::File::userApplicationDataDirectory);
+        if (! packFile.existsAsFile())
+            packFile = candidateIn (juce::File::commonApplicationDataDirectory);
     }
     if (packFile.existsAsFile())
     {
