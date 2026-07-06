@@ -115,7 +115,7 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
     // the USER folder first (dev builds install there via CMake), then the SYSTEM folder
     // (what the shipped installers write, so every user account finds the samples):
     //   macOS:   ~/Library/Application Support/DehliMusikk/<name>/  then  /Library/Application Support/DehliMusikk/<name>/
-    //   Windows: %APPDATA%\DehliMusikk\<name>\                      then  %PROGRAMDATA%\DehliMusikk\<name>\
+    //   Windows: %APPDATA%/DehliMusikk/<name>/                      then  %PROGRAMDATA%/DehliMusikk/<name>/
     // Missing pack → embedded fallback.
     juce::File packFile = assets.packFile;
     if (packFile == juce::File() && assets.name.isNotEmpty())
@@ -136,8 +136,10 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
     {
         const auto indexFile = juce::File (packFile.getFullPathName() + ".json");
         if (! sampleSource->openPack (packFile, indexFile))
+        {
             DBG ("ManifestPluginProcessor: sample pack present but failed to open: "
                  << packFile.getFullPathName());
+        }
     }
 
     // Every referenced sample/IR id resolves to "<stem>.flac" in the bundle.

@@ -22,6 +22,10 @@ target_include_directories(dehli_musikk_sampler_engine
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/source
 )
 
+# Linux VST3s are shared objects — every object linked into them must be position-
+# independent. (No effect on macOS, where all code is PIC anyway.)
+set_target_properties(dehli_musikk_sampler_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # JUCE modules the engine needs. PUBLIC so consumers inherit the compile defs.
 target_link_libraries(dehli_musikk_sampler_engine
     PUBLIC
@@ -36,11 +40,15 @@ target_link_libraries(dehli_musikk_sampler_engine
         juce::juce_recommended_warning_flags
 )
 
-# FLAC support in juce_audio_formats.
+# FLAC support in juce_audio_formats. Web/curl are off (same values the plugin
+# targets set) — REQUIRED on Linux, where juce_core/juce_gui_extra otherwise
+# demand libcurl and GTK/WebKit dev headers at compile time.
 target_compile_definitions(dehli_musikk_sampler_engine
     PUBLIC
         JUCE_USE_FLAC=1
         JUCE_MODAL_LOOPS_PERMITTED=0
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
 )
 
 # ---------------------------------------------------------------------------
