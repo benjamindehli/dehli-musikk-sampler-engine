@@ -18,10 +18,17 @@ public:
     /** Stereo peaks (max |sample| per channel over the block(s) since the last call). */
     void setLevels (float peakL, float peakR)
     {
+        const float prevL = displayDbL, prevR = displayDbR;
+        const bool  prevClip = clipped;
         updateChannel (displayDbL, peakL);
         updateChannel (displayDbR, peakR);
         if (peakL >= 1.0f || peakR >= 1.0f) clipped = true;   // latch clip (either channel)
-        repaint();
+        // Repaint only when something visible changed — otherwise the meter region
+        // repaints at the full timer rate forever, even in silence (the decay settles
+        // at -120 dB, after which every tick is a no-op).
+        if (! juce::exactlyEqual (displayDbL, prevL) || ! juce::exactlyEqual (displayDbR, prevR)
+            || clipped != prevClip)
+            repaint();
     }
 
     /** Mono convenience — drives both channels the same. */

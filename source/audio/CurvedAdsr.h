@@ -38,6 +38,7 @@ public:
     {
         stage = Stage::attack;
         stageSamp = 0;
+        segE = 1.0;
         value = 0.0f;
     }
 
@@ -48,13 +49,19 @@ public:
             releaseStart = value;
             stage = Stage::release;
             stageSamp = 0;
+            segE = 1.0;
         }
     }
 
-    void reset() noexcept { stage = Stage::idle; value = 0.0f; stageSamp = 0; }
+    void reset() noexcept { stage = Stage::idle; value = 0.0f; stageSamp = 0; segE = 1.0; }
 
     bool isActive() const noexcept { return stage != Stage::idle; }
 
+    // The curved segments follow shape(p) = (exp(a·p) − 1) / (exp(a) − 1) with
+    // p = stageSamp/len. Rather than paying two exp() calls PER SAMPLE PER VOICE,
+    // exp(a·p) is carried in `segE` and advanced by the stage-constant factor
+    // exp(a/len) — one multiply per sample, mathematically the same curve. segE is
+    // a double so the multiplicative accumulation doesn't drift over long stages.
     float getNextSample() noexcept
     {
         switch (stage)
@@ -64,15 +71,22 @@ public:
 
             case Stage::attack:
             {
-                const float p = attackLen > 0 ? (float) stageSamp / (float) attackLen : 1.0f;
-                value = shape (p, aA);
-                if (++stageSamp >= attackLen) { stage = Stage::decay; stageSamp = 0; }
+                value = attackLen > 0
+                          ? (linA ? (float) stageSamp * invLenA
+                                  : (float) ((segE - 1.0) * invDenA))
+                          : 1.0f;
+                segE *= mulA;
+                if (++stageSamp >= attackLen) { stage = Stage::decay; stageSamp = 0; segE = 1.0; }
                 return value;
             }
             case Stage::decay:
             {
-                const float p = decayLen > 0 ? (float) stageSamp / (float) decayLen : 1.0f;
-                value = 1.0f + (params.sustain - 1.0f) * shape (p, aD);
+                const float sh = decayLen > 0
+                                   ? (linD ? (float) stageSamp * invLenD
+                                           : (float) ((segE - 1.0) * invDenD))
+                                   : 1.0f;
+                value = 1.0f + (params.sustain - 1.0f) * sh;
+                segE *= mulD;
                 if (++stageSamp >= decayLen) { stage = Stage::sustain; value = params.sustain; }
                 return value;
             }
@@ -81,8 +95,12 @@ public:
 
             case Stage::release:
             {
-                const float p = releaseLen > 0 ? (float) stageSamp / (float) releaseLen : 1.0f;
-                value = releaseStart * (1.0f - shape (p, aR));
+                const float sh = releaseLen > 0
+                                   ? (linR ? (float) stageSamp * invLenR
+                                           : (float) ((segE - 1.0) * invDenR))
+                                   : 1.0f;
+                value = releaseStart * (1.0f - sh);
+                segE *= mulR;
                 if (++stageSamp >= releaseLen) { stage = Stage::idle; value = 0.0f; }
                 return value;
             }
@@ -104,13 +122,15 @@ private:
         return isAttack ? k : -k;
     }
 
-    // Normalised segment progress 0..1 with exponential bend. a≈0 → linear.
-    static float shape (float p, float a) noexcept
+    // Precompute one stage's per-sample constants: a≈0 → linear (progress is
+    // stageSamp·invLen); otherwise the exp recurrence (segE·mul per sample) with
+    // 1/(exp(a)−1) folded into invDen.
+    void segmentConsts (float a, int len, bool& lin, float& invLen, double& mul, double& invDen) noexcept
     {
-        p = p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
-        if (a > -1.0e-3f && a < 1.0e-3f)
-            return p;
-        return (std::exp (a * p) - 1.0f) / (std::exp (a) - 1.0f);
+        lin    = a > -1.0e-3f && a < 1.0e-3f;
+        invLen = len > 0 ? 1.0f / (float) len : 0.0f;
+        mul    = (! lin && len > 0) ? std::exp ((double) a / (double) len) : 1.0;
+        invDen = ! lin ? 1.0 / (std::exp ((double) a) - 1.0) : 0.0;
     }
 
     void recalc() noexcept
@@ -118,9 +138,12 @@ private:
         attackLen  = (int) (params.attack  * sampleRate + 0.5);
         decayLen   = (int) (params.decay   * sampleRate + 0.5);
         releaseLen = (int) (params.release * sampleRate + 0.5);
-        aA = curveToA (params.attackCurve,  true);
-        aD = curveToA (params.decayCurve,   false);
-        aR = curveToA (params.releaseCurve, false);
+        const float aA = curveToA (params.attackCurve,  true);
+        const float aD = curveToA (params.decayCurve,   false);
+        const float aR = curveToA (params.releaseCurve, false);
+        segmentConsts (aA, attackLen,  linA, invLenA, mulA, invDenA);
+        segmentConsts (aD, decayLen,   linD, invLenD, mulD, invDenD);
+        segmentConsts (aR, releaseLen, linR, invLenR, mulR, invDenR);
     }
 
     double sampleRate = 44100.0;
@@ -128,7 +151,12 @@ private:
     Stage stage = Stage::idle;
     int   stageSamp = 0;
     int   attackLen = 0, decayLen = 0, releaseLen = 0;
-    float aA = 0.0f, aD = 0.0f, aR = 0.0f;
+    // Per-stage curve constants (recalc) + the running exp accumulator (per segment).
+    bool   linA = true, linD = true, linR = true;
+    float  invLenA = 0.0f, invLenD = 0.0f, invLenR = 0.0f;
+    double mulA = 1.0, mulD = 1.0, mulR = 1.0;
+    double invDenA = 0.0, invDenD = 0.0, invDenR = 0.0;
+    double segE = 1.0;
     float value = 0.0f;
     float releaseStart = 0.0f;
 };

@@ -435,7 +435,11 @@ void ManifestUiComponent::refresh (
 {
     for (int i = 0; i < knobs.size(); ++i)
         if (auto v = controlValue (*knobModels[i]))
-            knobs[i]->setValue (*v);
+            if (! juce::exactlyEqual (*v, knobs[i]->getValue()))   // only on change — setValue repaints, and the
+            {                                 // visibility re-eval re-parses translation tables
+                knobs[i]->setValue (*v);
+                applyVisibilityBindings (*knobModels[i], *v);   // this knob may be an LED selector
+            }
 
     for (int i = 0; i < buttons.size(); ++i)
         if (auto s = buttonState (*buttonModels[i], i))
@@ -455,7 +459,10 @@ void ManifestUiComponent::refresh (
             if (menus[i]->getSelectedId() != *sel + 1)
                 menus[i]->setSelectedId (*sel + 1, juce::dontSendNotification);
 
-    applyAllVisibility();   // selector knobs may have moved → resync LED displays
+    // No blanket applyAllVisibility() here: the initial state is established when the UI
+    // is built (rebuild calls it once), and knobs (above) + buttons resync their targets
+    // exactly when a value changes — re-walking every binding (and re-parsing its
+    // translation table) at the full timer rate was pure waste.
 }
 
 int ManifestUiComponent::controlIndexForBinding (const Binding& b) const

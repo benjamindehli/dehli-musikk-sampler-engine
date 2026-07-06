@@ -15,8 +15,12 @@
 #include "WheelLookAndFeel.h"
 #include "StandaloneWindowLookAndFeel.h"
 #include "LevelMeter.h"
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace dm
 {
@@ -161,6 +165,15 @@ private:
     int usedLow { 36 }, usedHigh { 96 };
     bool showModeSelector { true };   // hidden for single-mode plugins (nothing to pick)
     std::unique_ptr<ManifestUiComponent> uiComponent;
+
+    // 30 Hz refresh caches — APVTS param POINTERS, resolved lazily on first poll and
+    // cleared in rebuildUi (a mode switch changes the control set). Building the string
+    // param ids (controlKey / buttonParamId) per widget per tick allocated thousands of
+    // strings a second just to read values.
+    std::unordered_map<const Control*, std::atomic<float>*> knobParamCache;
+    std::vector<std::optional<std::atomic<float>*>> buttonParamCache;
+    std::atomic<float>* chordOrderParam { nullptr };
+    bool chordOrderResolved { false };
 
     juce::TooltipWindow tooltipWindow { this };   // shows control tooltips (e.g. Poly-save)
 

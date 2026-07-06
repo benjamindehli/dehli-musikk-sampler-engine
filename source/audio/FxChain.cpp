@@ -178,9 +178,13 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
 
         if (s.kind == Kind::lowpass || s.kind == Kind::highpass)
         {
+            // Only touch the filter when a value actually moved — setCutoffFrequency
+            // recomputes tan() every call, and this runs every block forever.
             const auto nyquist = (float) (spec.sampleRate * 0.49);
-            s.filter.setCutoffFrequency (juce::jlimit (20.0f, nyquist, s.frequency.load()));
-            s.filter.setResonance (juce::jmax (0.01f, s.resonance.load()));
+            const float f = juce::jlimit (20.0f, nyquist, s.frequency.load());
+            const float q = juce::jmax (0.01f, s.resonance.load());
+            if (! juce::exactlyEqual (f, s.lastFreq)) { s.filter.setCutoffFrequency (f); s.lastFreq = f; }
+            if (! juce::exactlyEqual (q, s.lastReso)) { s.filter.setResonance (q);       s.lastReso = q; }
             juce::dsp::ProcessContextReplacing<float> ctx (block);
             s.filter.process (ctx);
         }
@@ -225,23 +229,31 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
             const double inc      = juce::MathConstants<double>::twoPi * (double) juce::jmax (0.01f, s.modRate.load()) / (double) sr;
             const int    lastCh   = juce::jmin (numCh, 2);   // widen the first two channels; extra channels pass dry
 
+            // Hoist write pointers (getWritePointer per sample per channel adds up),
+            // and compute the LFO once per sample — the right channel runs in exact
+            // anti-phase, so sin(phase + π) is just -sin(phase).
+            constexpr int kMaxCh = 16;
+            const int nCh = juce::jmin (numCh, kMaxCh);
+            float* wr[kMaxCh];
+            for (int ch = 0; ch < nCh; ++ch)
+                wr[ch] = buffer.getWritePointer (ch);
+
             for (int i = 0; i < numSamples; ++i)
             {
-                for (int ch = 0; ch < numCh; ++ch)
+                const float lfoL = (float) std::sin (s.chorusPhase);
+                for (int ch = 0; ch < lastCh; ++ch)
                 {
-                    auto* w = buffer.getWritePointer (ch);
-                    const float dry = w[i];
-                    if (ch >= lastCh)   // >2 channels: still run the line to stay coherent, no width offset
-                        { s.chorusDelay->pushSample (ch, dry); w[i] = dry; continue; }
-
                     // Left LFO at phase, right in anti-phase → their delays diverge → stereo width.
-                    const float lfo   = (float) std::sin (s.chorusPhase + (ch == 1 ? juce::MathConstants<double>::pi : 0.0));
+                    const float dry   = wr[ch][i];
+                    const float lfo   = ch == 1 ? -lfoL : lfoL;
                     const float delay = juce::jlimit (1.0f, centre + modRange, centre + modRange * lfo);
                     s.chorusDelay->pushSample (ch, dry + fb * s.chorusLastWet[ch]);
                     const float wet = s.chorusDelay->popSample (ch, delay, true);
                     s.chorusLastWet[ch] = wet;
-                    w[i] = dry * (1.0f - mix) + wet * mix;
+                    wr[ch][i] = dry * (1.0f - mix) + wet * mix;
                 }
+                for (int ch = lastCh; ch < nCh; ++ch)   // >2 channels: keep the line coherent, pass dry
+                    s.chorusDelay->pushSample (ch, wr[ch][i]);
                 s.chorusPhase += inc;
                 if (s.chorusPhase >= juce::MathConstants<double>::twoPi)
                     s.chorusPhase -= juce::MathConstants<double>::twoPi;
@@ -252,10 +264,13 @@ void FxChain::process (juce::AudioBuffer<float>& buffer)
             const float mix = juce::jlimit (0.0f, 1.0f, s.mix.load());
             if (mix <= 0.0f)
                 continue;   // off (mix 0 / disabled) — skip
-            s.phaser->setRate     (juce::jmax (0.01f, s.modRate.load()));
-            s.phaser->setDepth    (juce::jlimit (0.0f, 1.0f, s.modDepth.load()));
-            s.phaser->setFeedback (juce::jlimit (-0.95f, 0.95f, s.modFeedback.load()));
-            s.phaser->setMix      (mix);
+            const float rate  = juce::jmax (0.01f, s.modRate.load());
+            const float depth = juce::jlimit (0.0f, 1.0f, s.modDepth.load());
+            const float fb    = juce::jlimit (-0.95f, 0.95f, s.modFeedback.load());
+            if (! juce::exactlyEqual (rate,  s.lastRate))  { s.phaser->setRate (rate);   s.lastRate  = rate; }
+            if (! juce::exactlyEqual (depth, s.lastDepth)) { s.phaser->setDepth (depth); s.lastDepth = depth; }
+            if (! juce::exactlyEqual (fb,    s.lastFb))    { s.phaser->setFeedback (fb); s.lastFb    = fb; }
+            if (! juce::exactlyEqual (mix,   s.lastMix))   { s.phaser->setMix (mix);     s.lastMix   = mix; }
             juce::dsp::ProcessContextReplacing<float> ctx (block);
             s.phaser->process (ctx);
         }

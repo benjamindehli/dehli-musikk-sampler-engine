@@ -90,9 +90,11 @@ struct SincTable
 };
 
 const SincTable& sincTable() { static const SincTable t; return t; }
-}
 
-float interpolate (const juce::AudioBuffer<float>& buf, int ch, double pos)
+// `st` is passed in (fetched ONCE per chunk) rather than calling sincTable() here —
+// a function-local static costs a thread-safe-init guard check on every call, which
+// adds up at samples × voices × channels rate.
+float interpolate (const SincTable& st, const juce::AudioBuffer<float>& buf, int ch, double pos)
 {
     const int n  = buf.getNumSamples();
     const int i0 = (int) pos;
@@ -105,14 +107,24 @@ float interpolate (const juce::AudioBuffer<float>& buf, int ch, double pos)
     if (p == 0)
         return data[i0];   // integer position → exact sample (no interpolation)
 
-    const auto* kr = sincTable().k[p];
+    const auto* kr = st.k[p];
     const int base = i0 - (kSincHalf - 1);
     float sum = 0.0f;
-    for (int t = 0; t < kSincTaps; ++t)
+    if (base >= 0 && base + kSincTaps <= n)
     {
-        const int idx = base + t;
-        if (idx >= 0 && idx < n)
-            sum += data[idx] * kr[t];
+        // Interior (virtually every sample): branch-free, vectorisable.
+        for (int t = 0; t < kSincTaps; ++t)
+            sum += data[base + t] * kr[t];
+    }
+    else
+    {
+        // Buffer edges only: per-tap bounds check.
+        for (int t = 0; t < kSincTaps; ++t)
+        {
+            const int idx = base + t;
+            if (idx >= 0 && idx < n)
+                sum += data[idx] * kr[t];
+        }
     }
     return sum;
 }
@@ -120,18 +132,19 @@ float interpolate (const juce::AudioBuffer<float>& buf, int ch, double pos)
 // Loop read with an equal-gain crossfade across the last `xf` frames before
 // loopEnd: blends the approach-to-loopEnd with the matching material before
 // loopStart (pos - loopLen), so the wrap is seamless.
-float readLooped (const juce::AudioBuffer<float>& buf, int ch, double pos,
+float readLooped (const SincTable& st, const juce::AudioBuffer<float>& buf, int ch, double pos,
                   double loopEnd, double loopLen, double xf)
 {
-    const float base = interpolate (buf, ch, pos);
+    const float base = interpolate (st, buf, ch, pos);
     if (xf > 0.0 && pos > loopEnd - xf)
     {
         const double t = (pos - (loopEnd - xf)) / xf;        // 0 → 1 across the fade
-        const float prev = interpolate (buf, ch, pos - loopLen);
+        const float prev = interpolate (st, buf, ch, pos - loopLen);
         return (float) ((1.0 - t) * base + t * prev);
     }
     return base;
 }
+} // namespace (sinc interpolation)
 } // namespace
 
 VoiceEngine::VoiceEngine()
@@ -611,7 +624,9 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
     if (numSamples <= 0)
         return;
 
-    const int outChannels = buffer.getNumChannels();
+    constexpr int kMaxOutChannels = 16;   // stack-array bound for hoisted write pointers
+    const int outChannels = juce::jmin (buffer.getNumChannels(), kMaxOutChannels);
+    const auto& st = sincTable();   // fetch once per chunk (static-init guard is per call)
 
     // Amplitude tremolo + pitch modulation are computed once per block in
     // applyLfoBlock and indexed here by absolute block position (startSample + i):
@@ -673,6 +688,26 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
             else if (pan > 0.0f) panL = 1.0f - pan;   // toward right → attenuate L
         }
 
+        // ── Hoist everything block-invariant out of the per-sample loop ────────────
+        // Group volumes / gain / rate multipliers / row pointers / write pointers only
+        // change between blocks, and were previously re-read (juce::Array indexing +
+        // asserting addSample) per SAMPLE per voice.
+        const bool hasGroup = v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
+        const float staticGain = v.gain * volDriftMul
+                               * (hasGroup ? groupVolume[v.groupIndex]
+                                             * groupTagVolume[v.groupIndex]
+                                             * groupGain[v.groupIndex]
+                                           : 1.0f);
+        const float* itRow = instTremActive  ? instTrem.data() + startSample : nullptr;
+        const float* gtRow = groupTremActive ? groupTrem[(size_t) v.groupIndex].data() + startSample
+                                             : nullptr;
+        const double step = v.rate * pitchBendMul * tuneMul;
+        const bool monoSrc = srcChannels == 1;
+        const auto& srcBuf = v.buffer->audio;
+        float* out[kMaxOutChannels];
+        for (int ch = 0; ch < outChannels; ++ch)
+            out[ch] = target->getWritePointer (ch) + startSample;
+
         for (int i = 0; i < numSamples; ++i)
         {
             if (! v.loopEnabled && v.position >= (double) frames)   // one-shot end
@@ -683,27 +718,44 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
 
             // One-shot voices (ampEnv=false) play at full gain — the envelope is bypassed.
             const float env = v.ampEnv ? v.adsr.getNextSample() : 1.0f;
-            const bool hasGroup = v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
-            const float gv  = hasGroup ? groupVolume[v.groupIndex]    : 1.0f;
-            const float gtv = hasGroup ? groupTagVolume[v.groupIndex] : 1.0f;
-            const float gg  = hasGroup ? groupGain[v.groupIndex]      : 1.0f;
             float trem = 1.0f;
-            if (instTremActive)    trem *= instTrem[(size_t) (startSample + i)];
-            if (groupTremActive)   trem *= groupTrem[(size_t) v.groupIndex][(size_t) (startSample + i)];
-            const float g = env * v.gain * v.declickGain * gv * gtv * gg * trem * volDriftMul;
+            if (itRow != nullptr) trem *= itRow[i];
+            if (gtRow != nullptr) trem *= gtRow[i];
+            const float g = env * v.declickGain * staticGain * trem;
 
-            for (int ch = 0; ch < outChannels; ++ch)
+            if (monoSrc)
             {
-                const int srcCh = juce::jmin (ch, srcChannels - 1);
-                const float s = v.loopEnabled
-                                  ? readLooped (v.buffer->audio, srcCh, v.position,
-                                                v.loopEnd, v.loopLen, v.loopXf)
-                                  : interpolate (v.buffer->audio, srcCh, v.position);
-                const float panMul = (outChannels >= 2) ? (ch == 0 ? panL : (ch == 1 ? panR : 1.0f)) : 1.0f;
-                target->addSample (ch, startSample + i, s * g * panMul);
+                // Mono source (most libraries): interpolate ONCE and fan out — the
+                // per-channel form below would run the identical 8-tap sinc twice.
+                const float s = (v.loopEnabled
+                                   ? readLooped (st, srcBuf, 0, v.position,
+                                                 v.loopEnd, v.loopLen, v.loopXf)
+                                   : interpolate (st, srcBuf, 0, v.position)) * g;
+                if (outChannels >= 2)
+                {
+                    out[0][i] += s * panL;
+                    out[1][i] += s * panR;
+                    for (int ch = 2; ch < outChannels; ++ch)
+                        out[ch][i] += s;
+                }
+                else
+                    out[0][i] += s;
+            }
+            else
+            {
+                for (int ch = 0; ch < outChannels; ++ch)
+                {
+                    const int srcCh = juce::jmin (ch, srcChannels - 1);
+                    const float s = v.loopEnabled
+                                      ? readLooped (st, srcBuf, srcCh, v.position,
+                                                    v.loopEnd, v.loopLen, v.loopXf)
+                                      : interpolate (st, srcBuf, srcCh, v.position);
+                    const float panMul = (outChannels >= 2) ? (ch == 0 ? panL : (ch == 1 ? panR : 1.0f)) : 1.0f;
+                    out[ch][i] += s * g * panMul;
+                }
             }
 
-            v.position += v.rate * pitchBendMul * tuneMul;
+            v.position += step;
             if (v.loopEnabled && v.position >= v.loopEnd)
                 v.position -= v.loopLen;
 

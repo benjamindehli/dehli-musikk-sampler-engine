@@ -255,6 +255,13 @@ void ManifestEditor::rebuildUi()
 {
     uiComponent.reset();
 
+    // New mode = new control set → the refresh caches' Control* keys / button indices
+    // no longer correspond. They repopulate lazily on the next timer tick.
+    knobParamCache.clear();
+    buttonParamCache.clear();
+    chordOrderParam = nullptr;
+    chordOrderResolved = false;
+
     const auto* mode = host.getActiveMode();
     if (mode == nullptr)
         return;
@@ -344,30 +351,49 @@ void ManifestEditor::refreshWidgets()
     if (uiComponent == nullptr)
         return;
 
+    // Runs 30×/s for every widget — so the param LOOKUP (string id build + map search)
+    // happens once per widget per rebuilt UI, cached as a raw atomic pointer; the tick
+    // itself is just atomic loads. Caches are cleared in rebuildUi.
     auto& apvts = host.getApvts();
-    auto raw = [&apvts] (const juce::String& pid) -> float
-    {
-        if (auto* a = apvts.getRawParameterValue (pid)) return a->load();
-        return 0.0f;
-    };
 
     uiComponent->refresh (
         [&] (const Control& c) -> std::optional<double>
         {
-            const auto ids = params::controlParamIds (c);
-            if (ids.isEmpty()) return std::nullopt;
+            auto it = knobParamCache.find (&c);
+            if (it == knobParamCache.end())
+            {
+                std::atomic<float>* a = nullptr;
+                const auto ids = params::controlParamIds (c);
+                if (! ids.isEmpty())
+                    a = apvts.getRawParameterValue (ids[0]);
+                it = knobParamCache.emplace (&c, a).first;
+            }
+            if (it->second == nullptr) return std::nullopt;
             const double mn = c.min.value_or (0.0), mx = c.max.value_or (1.0);
-            return mn + (double) raw (ids[0]) * (mx - mn);
+            return mn + (double) it->second->load() * (mx - mn);
         },
         [&] (const Button&, int index) -> std::optional<int>
         {
-            const auto pid = params::buttonParamId (index);
-            if (host.getApvts().getParameter (pid) == nullptr) return std::nullopt;
-            return (int) raw (pid);
+            if ((int) buttonParamCache.size() <= index)
+                buttonParamCache.resize ((size_t) index + 1);
+            auto& slot = buttonParamCache[(size_t) index];
+            if (! slot.has_value())
+            {
+                const auto pid = params::buttonParamId (index);
+                slot = apvts.getParameter (pid) != nullptr ? apvts.getRawParameterValue (pid)
+                                                           : nullptr;
+            }
+            if (*slot == nullptr) return std::nullopt;
+            return (int) (*slot)->load();
         },
         [&] (const Menu&) -> std::optional<int>
         {
-            return (int) raw (params::id::chordOrder);
+            if (! chordOrderResolved)
+            {
+                chordOrderParam = apvts.getRawParameterValue (params::id::chordOrder);
+                chordOrderResolved = true;
+            }
+            return (int) (chordOrderParam != nullptr ? chordOrderParam->load() : 0.0f);
         });
 }
 

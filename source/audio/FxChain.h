@@ -88,6 +88,12 @@ private:
         double chorusPhase { 0.0 };
         float  chorusLastWet[2] { 0.0f, 0.0f };
 
+        // Last APPLIED values (audio thread only) so process() skips the DSP objects'
+        // coefficient updates when nothing moved — the TPT filter recomputes tan() on
+        // every setCutoffFrequency, the phaser rebuilds its LFO on every setter.
+        float lastFreq { -1.0f }, lastReso { -1.0f };
+        float lastRate { -1.0f }, lastDepth { -1.0f }, lastFb { -2.0f }, lastMix { -1.0f };
+
         juce::dsp::StateVariableTPTFilter<float> filter;
         std::unique_ptr<juce::dsp::Convolution> convolution;
         std::unique_ptr<juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::Linear>> chorusDelay;
