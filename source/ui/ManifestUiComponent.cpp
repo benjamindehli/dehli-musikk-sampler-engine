@@ -40,7 +40,7 @@ public:
     void setValue (double v)
     {
         const double nv = juce::jlimit (minVal, maxVal, v);
-        if (nv != value) { value = nv; repaint(); }
+        if (! juce::exactlyEqual (nv, value)) { value = nv; repaint(); }
     }
 
     void paint (juce::Graphics& g) override
@@ -65,7 +65,7 @@ public:
        #else
         const bool resetClick = e.mods.isCommandDown();   // Ctrl on Windows/Linux
        #endif
-        if (resetClick && value != defaultVal)
+        if (resetClick && ! juce::exactlyEqual (value, defaultVal))
         {
             value = defaultVal;
             repaint();
@@ -163,7 +163,7 @@ public:
     void setImageAlpha (float a)
     {
         const float na = juce::jlimit (0.0f, 1.0f, a);
-        if (na != alpha) { alpha = na; repaint(); }
+        if (! juce::exactlyEqual (na, alpha)) { alpha = na; repaint(); }
     }
 
     void paint (juce::Graphics& g) override

@@ -82,6 +82,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     keyboard.setLowestVisibleKey (lowestVisibleKey);
     keyboard.setKeyPressBaseOctave (keyOctave);
     addAndMakeVisible (keyboard);
+    addChildComponent (keyLabelStrip);   // shown only when the mode has keyboard labels
 
     pitchWheel.setSliderStyle (juce::Slider::LinearVertical);
     pitchWheel.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -246,10 +247,15 @@ int ManifestEditor::preferredWidth() const
 
 int ManifestEditor::preferredHeight() const
 {
+    int face = 375, strip = 0;
     if (const auto* m = host.getActiveMode())
+    {
         if (m->ui.height > 0)
-            return juce::jmax (1, m->ui.height - m->ui.cropTop) + kTopStrip + kBottomStrip;   // cropTop trims the top
-    return 375 + kTopStrip + kBottomStrip;
+            face = juce::jmax (1, m->ui.height - m->ui.cropTop);   // cropTop trims the top
+        if (! m->ui.keyboardLabels.isEmpty())
+            strip = kKeyLabelStrip;                                // captions band above the keyboard
+    }
+    return face + strip + kTopStrip + kBottomStrip;
 }
 
 void ManifestEditor::rebuildUi()
@@ -348,6 +354,9 @@ void ManifestEditor::rebuildUi()
     keyboard.setLowestVisibleKey (lowestVisibleKey);
     keyOctave = juce::jlimit (0, 9, usedLow / 12);
     keyboard.setKeyPressBaseOctave (keyOctave);
+
+    keyLabelStrip.setLabels (ui.keyboardLabels);
+    keyLabelStrip.setVisible (! ui.keyboardLabels.isEmpty());
 
     refreshWidgets();
     resized();
@@ -454,6 +463,18 @@ void ManifestEditor::timerCallback()
 
     host.pollEngine();   // message-thread housekeeping (free retired modes)
 
+    // The keyboard's own scroll buttons give no callback — poll the first visible
+    // key so the captions band tracks scrolling.
+    if (keyLabelStrip.isVisible())
+    {
+        const int firstKey = keyboard.getLowestVisibleKey();
+        if (firstKey != lastStripScrollKey)
+        {
+            lastStripScrollKey = firstKey;
+            keyLabelStrip.repaint();
+        }
+    }
+
     // Show the loading overlay while the active mode decodes on the background thread.
     const bool loading = host.isLoading();
     if (loading)
@@ -546,8 +567,11 @@ void ManifestEditor::resized()
     creditLabel.setBounds  (footer.removeFromLeft  (footer.getWidth() / 2));
     versionLabel.setBounds (footer);
 
+    // The labels band adds window height (see preferredHeight); the manifest face keeps
+    // its natural size above it, so the strip never covers the background's controls.
+    const int stripH = keyLabelStrip.isVisible() ? kKeyLabelStrip : 0;
     if (uiComponent != nullptr)
-        uiComponent->setBounds (area);
+        uiComponent->setBounds (area.withTrimmedBottom (stripH));
 
     const int kbHeight = 90, vMargin = 10;
     const int edgeMargin = 6;   // translucent panel ↔ window left/right edges
@@ -586,9 +610,10 @@ void ManifestEditor::resized()
     const int availW  = juce::jmax (0, kbRight - kbLeft);
     keyboard.setBounds (kbLeft, wheelTop, availW, kbHeight);   // provisional; may shrink to fit below
 
-    // One translucent panel behind the whole row (wheels + labels + keyboard).
+    // One translucent panel behind the whole row (wheels + labels + keyboard),
+    // grown upward to back the key-labels band when present.
     bottomPanel.setBounds (juce::Rectangle<int>::leftTopRightBottom (
-        panelLeft, wheelTop - 4, panelRight, wheelTop + kbHeight + 4));
+        panelLeft, wheelTop - 4 - stripH, panelRight, wheelTop + kbHeight + 4));
 
     // Probe the component's OWN white-key count at keyWidth 1 — counting them ourselves is
     // off-by-one vs what MidiKeyboardComponent renders at the range ends. Then pick an INTEGER
@@ -607,6 +632,9 @@ void ManifestEditor::resized()
     const int contentW = whiteKeys * keyW;
     if (contentW < availW)
         keyboard.setBounds (kbLeft + (availW - contentW) / 2, wheelTop, contentW, kbHeight);
+
+    // Captions band shares the keyboard's final x-space so key rects map 1:1.
+    keyLabelStrip.setBounds (keyboard.getX(), wheelTop - stripH, keyboard.getWidth(), stripH);
 
     loadingOverlay.setBounds (getLocalBounds());   // covers everything while decoding
 }

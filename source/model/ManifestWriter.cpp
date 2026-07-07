@@ -388,6 +388,19 @@ var writeUi (const Ui& ui)
         colors.add (co.toVar());
     }
     kb.set ("colors", fromArray (colors));
+    if (! ui.keyboardLabels.isEmpty())
+    {
+        juce::Array<var> labels;
+        for (const auto& kl : ui.keyboardLabels)
+        {
+            Obj lo;
+            lo.set ("loNote", kl.loNote);
+            lo.set ("hiNote", kl.hiNote);
+            lo.setStr ("text", kl.text);
+            labels.add (lo.toVar());
+        }
+        kb.set ("labels", fromArray (labels));
+    }
     o.set ("keyboard", kb.toVar());
 
     if (! ui.buttonLinks.isEmpty())

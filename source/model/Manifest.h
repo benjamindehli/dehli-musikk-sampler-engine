@@ -347,6 +347,14 @@ struct KeyboardColor
     juce::String color;          // ARGB hex
 };
 
+/** A caption over a range of keyboard keys, shown in a thin strip above the
+    on-screen keyboard (e.g. Omnichord chord-type sections and strum-key roles). */
+struct KeyboardLabel
+{
+    int loNote = 0, hiNote = 127;
+    juce::String text;
+};
+
 // When button `fromButton` is set to state `fromState`, the editor also forces button
 // `toButton` to state `toState`. Used e.g. so turning Stereo on auto-enables Double Track.
 struct ButtonLink
@@ -370,6 +378,7 @@ struct Ui
     juce::String bgMode;         // top_left | ...
     juce::Array<Tab> tabs;
     juce::Array<KeyboardColor> keyboardColors;
+    juce::Array<KeyboardLabel> keyboardLabels;   // captions strip above the keyboard
     // Optional global per-key-type tint (ARGB hex; alpha = strength). Overlaid on ALL
     // white / black keys respectively — independent of keyboardColors' note-range zones.
     // e.g. whiteKeyTint "30ffcc00" = subtle yellow on white keys only. Empty = none.

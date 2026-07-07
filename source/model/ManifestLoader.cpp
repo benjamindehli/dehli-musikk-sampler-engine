@@ -485,6 +485,18 @@ Ui parseUi (const var& v)
             ui.keyboardColors.add (kc);
         }
     }
+    if (auto* labels = get (kb, "labels").getArray())
+    {
+        for (auto& l : *labels)
+        {
+            KeyboardLabel kl;
+            checkKeys (l, "keyboard.label", { "loNote", "hiNote", "text" });
+            kl.loNote = intg (l, "loNote", 0);
+            kl.hiNote = intg (l, "hiNote", 127);
+            kl.text   = str (l, "text");
+            ui.keyboardLabels.add (kl);
+        }
+    }
 
     if (auto* links = get (v, "buttonLinks").getArray())
     {

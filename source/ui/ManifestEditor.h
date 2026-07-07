@@ -124,6 +124,46 @@ private:
     };
     BackdropPanel bottomPanel;
 
+    /** Thin captions band directly above the keyboard: manifest `keyboard.labels`
+        drawn centred over their note ranges (e.g. Omnichord chord-type sections +
+        strum-key roles). Positioned to share the keyboard's x-space, so key
+        rectangles map 1:1; ranges scrolled out of view are clipped. */
+    struct KeyLabelStrip : juce::Component
+    {
+        explicit KeyLabelStrip (juce::MidiKeyboardComponent& kb) : keys (kb)
+        {
+            setInterceptsMouseClicks (false, false);
+        }
+        void setLabels (const juce::Array<KeyboardLabel>& l) { labels = l; repaint(); }
+        void paint (juce::Graphics& g) override
+        {
+            g.setFont (juce::Font (juce::FontOptions (11.0f)));
+            for (const auto& kl : labels)
+            {
+                const auto lo = keys.getRectangleForKey (kl.loNote);
+                const auto hi = keys.getRectangleForKey (kl.hiNote);
+                float x1 = juce::jmin (lo.getX(), hi.getX());
+                float x2 = juce::jmax (lo.getRight(), hi.getRight());
+                if (x2 <= 0.0f || x1 >= (float) getWidth())
+                    continue;   // range scrolled out of view
+                x1 = juce::jmax (x1, 0.0f);
+                x2 = juce::jmin (x2, (float) getWidth());
+
+                const juce::Rectangle<float> r (x1, 0.0f, x2 - x1, (float) getHeight());
+                g.setColour (juce::Colour (0xfffdfeff).withAlpha (0.28f));
+                g.drawVerticalLine ((int) r.getX(), 2.0f, (float) getHeight() - 2.0f);
+                g.drawVerticalLine ((int) r.getRight() - 1, 2.0f, (float) getHeight() - 2.0f);
+                g.setColour (juce::Colour (0xffe8e9ea));
+                g.drawText (kl.text, r.reduced (2.0f, 0.0f), juce::Justification::centred, false);
+            }
+        }
+        juce::MidiKeyboardComponent& keys;
+        juce::Array<KeyboardLabel> labels;
+    };
+    KeyLabelStrip keyLabelStrip { keyboard };
+    static constexpr int kKeyLabelStrip = 16;   // strip height when the mode has labels
+    int lastStripScrollKey = -1;                // repaint the strip when the keyboard scrolls
+
     /** Full-cover overlay shown while the active mode decodes on the background thread.
         The window is already at its manifest size, so this bar is actually visible. */
     struct LoadingOverlay : juce::Component

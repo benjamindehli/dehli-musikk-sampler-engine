@@ -200,6 +200,10 @@
           "colors": [
             { "loNote": 36, "hiNote": 60, "color": "FF80CBC4" },
             { "loNote": 24, "hiNote": 25, "color": "none" }
+          ],
+          "labels": [
+            { "loNote": 24, "hiNote": 24, "text": "↑" },
+            { "loNote": 36, "hiNote": 47, "text": "Major" }
           ]
         },
         "buttonLinks": [
