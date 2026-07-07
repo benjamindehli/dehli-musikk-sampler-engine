@@ -87,6 +87,10 @@
         { "note": 24, "sequence": 0, "transpose": 12, "rate": 10.0,
           "loop": true, "trackVelocity": false, "swallow": true }
       ],
+      "strumKeys": [
+        { "note": 25, "seqOffset": 0 },
+        { "note": 27, "seqOffset": 1, "rate": 8.0 }
+      ],
       "ccBindings": [
         { "cc": 1, "parameter": "FREQUENCY", "targetId": "ctl_lfo", "groupIndex": 0,
           "controlIndex": 2, "normMin": 0.0, "normMax": 1.0 }

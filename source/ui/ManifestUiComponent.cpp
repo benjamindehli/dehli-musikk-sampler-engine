@@ -1,42 +1,11 @@
 #include "ManifestUiComponent.h"
+#include <model/TableEval.h>   // shared evalTableLinear (VISIBLE step tables / OPACITY ramps)
 #include <cmath>
 #include <vector>
 #include <algorithm>
 
 namespace dm
 {
-
-namespace
-{
-// "in,out;in,out;..." piecewise-linear lookup (clamped to the end outputs).
-// Used for VISIBLE (0/1 step tables) and OPACITY (continuous ramps); at integer
-// selector values a step table returns its exact 0/1, matching the knob frame.
-double evalTableLinear (const juce::String& table, double x)
-{
-    double prevIn = 0.0, prevOut = 0.0; bool havePrev = false;
-    int start = 0;
-    while (start < table.length())
-    {
-        int semi = table.indexOfChar (start, ';');
-        if (semi < 0) semi = table.length();
-        const int comma = table.indexOfChar (start, ',');
-        if (comma > start && comma < semi)
-        {
-            const double in  = table.substring (start, comma).getDoubleValue();
-            const double out = table.substring (comma + 1, semi).getDoubleValue();
-            if (x <= in)
-            {
-                if (! havePrev || ! (in > prevIn)) return out;
-                const double t = (x - prevIn) / (in - prevIn);
-                return prevOut + t * (out - prevOut);
-            }
-            prevIn = in; prevOut = out; havePrev = true;
-        }
-        start = semi + 1;
-    }
-    return havePrev ? prevOut : 0.0;
-}
-} // namespace
 
 // ---------------------------------------------------------------------------
 // Filmstrip rotary knob: a vertical strip of `frames` images; the frame shown is
@@ -242,23 +211,36 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
 
     auto& tab = uiData.tabs.getReference (0);   // Omni-84 has a single "main" tab
 
-    // id → controlIndex, so id-based binding targets resolve to the controlIndex-keyed
-    // maps built below (lights/knobs/buttons/menus).
-    for (const auto& c  : tab.controls) if (c.id.isNotEmpty()  && c.controlIndex)  idToCI[c.id]  = *c.controlIndex;
-    for (const auto& b  : tab.buttons)  if (b.id.isNotEmpty()  && b.controlIndex)  idToCI[b.id]  = *b.controlIndex;
-    for (const auto& m  : tab.menus)    if (m.id.isNotEmpty()  && m.controlIndex)  idToCI[m.id]  = *m.controlIndex;
-    for (const auto& im : tab.images)   if (im.id.isNotEmpty() && im.controlIndex)  idToCI[im.id] = *im.controlIndex;
+    // Every widget lands in `widgets` (build order = paint order); byIndex/byId let
+    // bindings target any widget by document index or element id.
+    auto registerWidget = [this] (Widget&& w)
+    {
+        const int idx = (int) widgets.size();
+        if (w.controlIndex >= 0)
+            byIndex[w.controlIndex] = idx;
+        widgets.push_back (std::move (w));
+        return idx;
+    };
+    auto registerId = [this] (const juce::String& id, int idx)
+    {
+        if (id.isNotEmpty())
+            byId[id] = idx;
+    };
 
     // Lights first so the knobs/buttons paint over them if they overlap.
     for (auto& im : tab.images)
     {
-        auto* light = new SwappableImage();
+        auto light = std::make_unique<SwappableImage>();
         if (provider) light->setImage (provider (im.image));
-        addAndMakeVisible (light);
+        addAndMakeVisible (*light);
         light->setVisible (im.visible);   // authored default (e.g. a patch dialog starts hidden)
-        lights.add (light);
-        lightRects.add (im.rect);
-        lightControlIndex.add (im.controlIndex.value_or (-1));
+
+        Widget w;
+        w.kind = Widget::Kind::light;
+        w.comp = std::move (light);
+        w.rect = im.rect;
+        w.controlIndex = im.controlIndex.value_or (-1);
+        registerId (im.id, registerWidget (std::move (w)));
     }
 
     for (int i = 0; i < tab.controls.size(); ++i)
@@ -282,10 +264,14 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         knob->onHideValue = [this] { if (valueBubble) valueBubble->setVisible (false); };
         addAndMakeVisible (knob);
         knob->setVisible (c.visible);
-        if (c.controlIndex) { widgetByIndex[*c.controlIndex] = knob; knobIdxByCI[*c.controlIndex] = knobs.size(); }
-        knobs.add (knob);
-        knobRects.add (c.rect);
-        knobModels.add (cp);
+
+        Widget w;
+        w.kind = Widget::Kind::knob;
+        w.comp.reset (knob);
+        w.rect = c.rect;
+        w.controlIndex = c.controlIndex.value_or (-1);
+        w.control = cp;
+        registerId (c.id, registerWidget (std::move (w)));
     }
 
     for (int i = 0; i < tab.buttons.size(); ++i)
@@ -301,10 +287,15 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         btn->onChange = [this, bp, bi] (int s) { handleButton (*bp, bi, s); };
         addAndMakeVisible (btn);
         btn->setVisible (b.visible);
-        if (b.controlIndex) { widgetByIndex[*b.controlIndex] = btn; buttonIdxByCI[*b.controlIndex] = buttons.size(); }
-        buttons.add (btn);
-        buttonRects.add (b.rect);
-        buttonModels.add (bp);
+
+        Widget w;
+        w.kind = Widget::Kind::button;
+        w.comp.reset (btn);
+        w.rect = b.rect;
+        w.controlIndex = b.controlIndex.value_or (-1);
+        w.button = bp;
+        w.buttonIndex = bi;
+        registerId (b.id, registerWidget (std::move (w)));
     }
 
     // Initialise each indicator light from its button's default state (not the
@@ -353,10 +344,14 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         };
         addAndMakeVisible (combo);
         combo->setVisible (m.visible);
-        if (m.controlIndex) { widgetByIndex[*m.controlIndex] = combo; menuIdxByCI[*m.controlIndex] = menus.size(); }
-        menus.add (combo);
-        menuRects.add (m.rect);
-        menuModels.add (mp);
+
+        Widget w;
+        w.kind = Widget::Kind::menu;
+        w.comp.reset (combo);
+        w.rect = m.rect;
+        w.controlIndex = m.controlIndex.value_or (-1);
+        w.menu = mp;
+        registerId (m.id, registerWidget (std::move (w)));
     }
 
     // Apply each button's initial-state VISIBLE/OPACITY bindings now that every
@@ -387,10 +382,9 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
     if (docOrdered)
     {
         std::vector<std::pair<int, juce::Component*>> z;
-        for (int i = 0; i < lights.size();  ++i) if (lightControlIndex[i] >= 0)      z.push_back ({ lightControlIndex[i],        lights[i]  });
-        for (int i = 0; i < knobs.size();   ++i) if (knobModels[i]->controlIndex)    z.push_back ({ *knobModels[i]->controlIndex,   knobs[i]   });
-        for (int i = 0; i < buttons.size(); ++i) if (buttonModels[i]->controlIndex)  z.push_back ({ *buttonModels[i]->controlIndex, buttons[i] });
-        for (int i = 0; i < menus.size();   ++i) if (menuModels[i]->controlIndex)    z.push_back ({ *menuModels[i]->controlIndex,   menus[i]   });
+        for (const auto& w : widgets)
+            if (w.controlIndex >= 0)
+                z.push_back ({ w.controlIndex, w.comp.get() });
         std::sort (z.begin(), z.end(), [] (const auto& a, const auto& b) { return a.first < b.first; });
         for (auto& [ci, comp] : z) comp->toFront (false);   // ascending → highest index ends up frontmost
     }
@@ -433,31 +427,40 @@ void ManifestUiComponent::refresh (
     const std::function<std::optional<int> (const Button&, int idx)>& buttonState,
     const std::function<std::optional<int> (const Menu&)>&            menuSelection)
 {
-    for (int i = 0; i < knobs.size(); ++i)
-        if (auto v = controlValue (*knobModels[i]))
-            if (! juce::exactlyEqual (*v, knobs[i]->getValue()))   // only on change — setValue repaints, and the
-            {                                 // visibility re-eval re-parses translation tables
-                knobs[i]->setValue (*v);
-                applyVisibilityBindings (*knobModels[i], *v);   // this knob may be an LED selector
-            }
-
-    for (int i = 0; i < buttons.size(); ++i)
-        if (auto s = buttonState (*buttonModels[i], i))
-            if (*s != buttons[i]->getState())   // only on change (re-decoding light PNGs is costly)
-            {
-                buttons[i]->setState (*s);
-                const auto& b = *buttonModels[i];
-                if (*s >= 0 && *s < b.states.size())
-                {
-                    applyLightBindings   (b.states.getReference (*s));   // keep the paired light in sync
-                    applyStateVisibility (b.states.getReference (*s));   // keep target widgets in sync
+    for (auto& w : widgets)
+    {
+        if (w.kind == Widget::Kind::knob)
+        {
+            auto* knob = static_cast<FilmstripKnob*> (w.comp.get());
+            if (auto v = controlValue (*w.control))
+                if (! juce::exactlyEqual (*v, knob->getValue()))   // only on change — setValue repaints, and the
+                {                                                  // visibility re-eval re-parses translation tables
+                    knob->setValue (*v);
+                    applyVisibilityBindings (*w.control, *v);      // this knob may be an LED selector
                 }
-            }
-
-    for (int i = 0; i < menus.size(); ++i)
-        if (auto sel = menuSelection (*menuModels[i]))
-            if (menus[i]->getSelectedId() != *sel + 1)
-                menus[i]->setSelectedId (*sel + 1, juce::dontSendNotification);
+        }
+        else if (w.kind == Widget::Kind::button)
+        {
+            auto* btn = static_cast<ImageStateButton*> (w.comp.get());
+            if (auto s = buttonState (*w.button, w.buttonIndex))
+                if (*s != btn->getState())   // only on change (re-decoding light PNGs is costly)
+                {
+                    btn->setState (*s);
+                    if (*s >= 0 && *s < w.button->states.size())
+                    {
+                        applyLightBindings   (w.button->states.getReference (*s));   // keep the paired light in sync
+                        applyStateVisibility (w.button->states.getReference (*s));   // keep target widgets in sync
+                    }
+                }
+        }
+        else if (w.kind == Widget::Kind::menu)
+        {
+            auto* combo = static_cast<juce::ComboBox*> (w.comp.get());
+            if (auto sel = menuSelection (*w.menu))
+                if (combo->getSelectedId() != *sel + 1)
+                    combo->setSelectedId (*sel + 1, juce::dontSendNotification);
+        }
+    }
 
     // No blanket applyAllVisibility() here: the initial state is established when the UI
     // is built (rebuild calls it once), and knobs (above) + buttons resync their targets
@@ -465,12 +468,15 @@ void ManifestUiComponent::refresh (
     // translation table) at the full timer rate was pure waste.
 }
 
-int ManifestUiComponent::controlIndexForBinding (const Binding& b) const
+int ManifestUiComponent::widgetForBinding (const Binding& b) const
 {
     if (b.targetId.isNotEmpty())
-        if (auto it = idToCI.find (b.targetId); it != idToCI.end())
+        if (auto it = byId.find (b.targetId); it != byId.end())
             return it->second;
-    return b.controlIndex.value_or (-1);
+    if (b.controlIndex)
+        if (auto it = byIndex.find (*b.controlIndex); it != byIndex.end())
+            return it->second;
+    return -1;
 }
 
 void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourceValue)
@@ -480,8 +486,8 @@ void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourc
     const bool isOpacity = b.parameter == "OPACITY";
     if (! isOpacity && b.parameter != "VISIBLE")
         return;
-    const int ci = controlIndexForBinding (b);
-    if (ci < 0)
+    const int wi = widgetForBinding (b);
+    if (wi < 0)
         return;
 
     // Output value: a translation table maps the source (knob) value; otherwise a
@@ -494,20 +500,18 @@ void ManifestUiComponent::applyVisibilityBinding (const Binding& b, double sourc
     else if (b.translationValue.isDouble() || b.translationValue.isInt())
         out = (double) b.translationValue;
 
-    // Lights keep their dedicated path (image-alpha crossfade for OPACITY).
-    const int lidx = lightControlIndex.indexOf (ci);
-    if (lidx >= 0)
+    auto& w = widgets[(size_t) wi];
+    if (w.kind == Widget::Kind::light)
     {
-        if (isOpacity) lights[lidx]->setImageAlpha ((float) out);
-        else           lights[lidx]->setVisible (out > 0.5);
-        return;
+        // Lights keep their dedicated path (image-alpha crossfade for OPACITY).
+        auto* light = static_cast<SwappableImage*> (w.comp.get());
+        if (isOpacity) light->setImageAlpha ((float) out);
+        else           light->setVisible (out > 0.5);
     }
-
-    // Any other widget (knob/button/menu) addressed by its document index.
-    if (auto it = widgetByIndex.find (ci); it != widgetByIndex.end())
+    else
     {
-        if (isOpacity) it->second->setAlpha ((float) out);
-        else           it->second->setVisible (out > 0.5);
+        if (isOpacity) w.comp->setAlpha ((float) out);
+        else           w.comp->setVisible (out > 0.5);
     }
 }
 
@@ -528,51 +532,59 @@ void ManifestUiComponent::applyValueBindings (const juce::Array<Binding>& bindin
     for (const auto& b : bindings)
         if (b.type == "control" && b.parameter == "VALUE")
         {
-            const int ci = controlIndexForBinding (b);
-            if (ci < 0)
+            const int wi = widgetForBinding (b);
+            if (wi < 0)
                 continue;
             const double v = b.translationValue.isBool()
                                ? (((bool) b.translationValue) ? 1.0 : 0.0)
                                : b.translationValue.toString().getDoubleValue();
-            setWidgetValue (ci, v);
+            setWidgetValue (wi, v);
         }
 }
 
-void ManifestUiComponent::setWidgetValue (int controlIndex, double value)
+void ManifestUiComponent::setWidgetValue (int widgetIdx, double value)
 {
+    if (widgetIdx < 0 || widgetIdx >= (int) widgets.size())
+        return;
+    auto& w = widgets[(size_t) widgetIdx];
+
     // Only act on an actual change — this both avoids redundant work and terminates
     // the button↔button cascade (e.g. the patch dialog's load/close pair).
-    if (auto it = buttonIdxByCI.find (controlIndex); it != buttonIdxByCI.end())
+    if (w.kind == Widget::Kind::button)
     {
-        const int i = it->second, s = (int) value;
-        if (s != buttons[i]->getState())
+        auto* btn = static_cast<ImageStateButton*> (w.comp.get());
+        const int s = (int) value;
+        if (s != btn->getState())
         {
-            buttons[i]->setState (s);
-            handleButton (*buttonModels[i], i, s);   // fires onButtonChanged (APVTS sync) + cascades
+            btn->setState (s);
+            handleButton (*w.button, w.buttonIndex, s);   // fires onButtonChanged (APVTS sync) + cascades
         }
     }
-    else if (auto it2 = knobIdxByCI.find (controlIndex); it2 != knobIdxByCI.end())
+    else if (w.kind == Widget::Kind::knob)
     {
-        const int i = it2->second;
-        if (value != knobs[i]->getValue())
+        auto* knob = static_cast<FilmstripKnob*> (w.comp.get());
+        if (! juce::exactlyEqual (value, knob->getValue()))
         {
-            knobs[i]->setValue (value);
-            if (onControlChanged) onControlChanged (*knobModels[i], value);
-            applyVisibilityBindings (*knobModels[i], value);
+            knob->setValue (value);
+            if (onControlChanged) onControlChanged (*w.control, value);
+            applyVisibilityBindings (*w.control, value);
         }
     }
-    else if (auto it3 = menuIdxByCI.find (controlIndex); it3 != menuIdxByCI.end())
+    else if (w.kind == Widget::Kind::menu)
     {
-        const int i = it3->second, sel = (int) value;
-        if (menus[i]->getSelectedId() != sel + 1)
-            menus[i]->setSelectedId (sel + 1, juce::sendNotification);   // fires onMenuChanged
+        auto* combo = static_cast<juce::ComboBox*> (w.comp.get());
+        const int sel = (int) value;
+        if (combo->getSelectedId() != sel + 1)
+            combo->setSelectedId (sel + 1, juce::sendNotification);   // fires onMenuChanged
     }
 }
 
 void ManifestUiComponent::applyAllVisibility()
 {
-    for (int i = 0; i < knobs.size(); ++i)
-        applyVisibilityBindings (*knobModels[i], knobs[i]->getValue());
+    for (auto& w : widgets)
+        if (w.kind == Widget::Kind::knob)
+            applyVisibilityBindings (*w.control,
+                                     static_cast<FilmstripKnob*> (w.comp.get())->getValue());
 }
 
 ManifestUiComponent::~ManifestUiComponent() = default;
@@ -603,9 +615,10 @@ void ManifestUiComponent::applyLightBindings (const ButtonState& state)
         if (bind.parameter != "PATH" || ! bind.translationValue.isString())
             continue;
 
-        const int idx = lightControlIndex.indexOf (controlIndexForBinding (bind));
-        if (idx >= 0)
-            lights[idx]->setImage (provider (bind.translationValue.toString()));
+        const int wi = widgetForBinding (bind);
+        if (wi >= 0 && widgets[(size_t) wi].kind == Widget::Kind::light)
+            static_cast<SwappableImage*> (widgets[(size_t) wi].comp.get())
+                ->setImage (provider (bind.translationValue.toString()));
     }
 }
 
@@ -638,10 +651,8 @@ void ManifestUiComponent::resized()
                      juce::roundToInt (r.width * sx), juce::roundToInt (r.height * sy));
     };
 
-    for (int i = 0; i < lights.size();  ++i) place (*lights[i],  lightRects[i]);
-    for (int i = 0; i < knobs.size();   ++i) place (*knobs[i],   knobRects[i]);
-    for (int i = 0; i < buttons.size(); ++i) place (*buttons[i], buttonRects[i]);
-    for (int i = 0; i < menus.size();   ++i) place (*menus[i],   menuRects[i]);
+    for (auto& w : widgets)
+        place (*w.comp, w.rect);
 }
 
 } // namespace dm

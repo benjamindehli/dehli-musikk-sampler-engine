@@ -411,6 +411,19 @@ struct MenuKeySwitch
 };
 
 /** A "preset" in DecentSampler terms = one selectable mode of the plugin. */
+// Omnichord-style strum key ("select+strum" sequencing). When a mode carries any of
+// these, its sequenceTriggers become chord SELECTORS (pressing one only chooses the
+// sequence) and each strum key FIRES the selected sequence, offset by seqOffset into
+// the sequence list (e.g. +84 per note-order block on Omni-84). The chord-order menu
+// offset is ignored in this mode. Changing the selection while strummed notes still
+// ring morphs them to the new chord (same position in time, small crossfade).
+struct StrumKey
+{
+    int note = -1;                 // MIDI key that strums
+    int seqOffset = 0;             // added to the selected trigger's sequence index
+    std::optional<double> rate;    // steps/sec override for this key (else the trigger's)
+};
+
 struct Mode
 {
     juce::String name;
@@ -420,6 +433,7 @@ struct Mode
     juce::Array<Effect> effects;
     juce::Array<NoteSequence> sequences;
     juce::Array<SequenceTrigger> sequenceTriggers;
+    juce::Array<StrumKey> strumKeys;   // non-empty → select+strum mode (see StrumKey)
     juce::Array<Lfo> modulators;
     juce::Array<CcBinding> ccBindings;
     juce::Array<MenuKeySwitch> menuKeySwitches;

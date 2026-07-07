@@ -165,6 +165,7 @@ void SamplerEngine::prepare (double newSampleRate, int newMaxBlock, int newNumCh
     sampleRate   = newSampleRate > 0.0 ? newSampleRate : 44100.0;
     maxBlockSize = juce::jmax (1, newMaxBlock);
     numChannels  = juce::jmax (1, newNumChannels);
+    morphScratch.ensureStorageAllocated (128);   // chord-change morphs (audio thread; no realloc)
 
     // Rebuild the active mode for the new audio settings. Audio is stopped here, so we
     // can drop the stale unit outright; the new one decodes on the background thread
@@ -375,8 +376,13 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     cur->voices.setSkipMutedGroups (skipMutedGroups.load());
 
     // Sequencer turns trigger keys into the strummed/played notes; non-trigger
-    // keys pass straight through.
-    cur->sequencer.process (midi, sequencedMidi, buffer.getNumSamples());
+    // keys pass straight through. In select+strum (Omnichord) mode a chord change
+    // while strums ring emits morphs — apply them so the ringing voices glide to
+    // the new chord's samples before this block renders.
+    morphScratch.clearQuick();
+    cur->sequencer.process (midi, sequencedMidi, buffer.getNumSamples(), &morphScratch);
+    for (const auto& m : morphScratch)
+        cur->voices.morphNote (m.from, m.to);
     cur->voices.processBlock (buffer, sequencedMidi);
 
     // Per-library trim (--gain) applied BEFORE the FX: DecentSampler reduces level

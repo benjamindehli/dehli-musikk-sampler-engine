@@ -462,6 +462,19 @@ var writeMode (const Mode& m)
         }
         o.set ("sequenceTriggers", fromArray (triggers));
     }
+    if (! m.strumKeys.isEmpty())
+    {
+        juce::Array<var> keys;
+        for (const auto& sk : m.strumKeys)
+        {
+            Obj ko;
+            ko.set ("note", sk.note);
+            ko.set ("seqOffset", sk.seqOffset);
+            ko.setOpt ("rate", sk.rate);
+            keys.add (ko.toVar());
+        }
+        o.set ("strumKeys", fromArray (keys));
+    }
     if (! m.modulators.isEmpty())
     {
         juce::Array<var> mods;

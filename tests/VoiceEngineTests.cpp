@@ -75,6 +75,124 @@ public:
         testGroupVolume();
         testAmpSustainOverride();
         testVelocityLayers();
+        testMorphNote();
+        testMorphNoteInRelease();
+    }
+
+    void testMorphNoteInRelease()
+    {
+        beginTest ("morphNote — a note already in amp release morphs and keeps its tail");
+
+        // Same zones as testMorphNote but with a long (2 s) release so the tail is
+        // clearly audible when the morph happens after note-off.
+        auto a = encodeFlac (makeDc (0.30f, 48000), kSR);
+        auto b = encodeFlac (makeTwoRegions (0.10f, 500, 0.90f, 47500), kSR);
+        dm::EmbeddedFlacSource src;
+        expect (src.addFlac ("flac:a", a.getData(), a.getSize()));
+        expect (src.addFlac ("flac:b", b.getData(), b.getSize()));
+
+        auto m = dm::loadManifestFromJson (R"({
+            "schema":1,
+            "modes":[{ "name":"MorphRel",
+              "amp":{"attack":0,"decay":0,"sustain":1,"release":2.0,"volume":1,"velTrack":0},
+              "groups":[{ "samples":[
+                { "source":"flac:a","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000,"pitchKeyTrack":false },
+                { "source":"flac:b","loNote":62,"hiNote":62,"rootNote":62,"sampleRate":48000,"pitchKeyTrack":false } ]}] }]
+        })");
+        expect (m.ok, "manifest should load");
+
+        dm::VoiceEngine ve;
+        ve.prepare (kSR, 512, 1);
+        ve.setMode (m.library.modes.getReference (0), src);
+
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            ve.processBlock (out, midi);
+        }
+
+        // Release the note; the tail keeps sounding (2 s release).
+        float before = 0.0f;
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+            ve.processBlock (out, midi);
+            before = out.getSample (0, 400);
+            expect (before > 0.1f, "release tail still audible");
+        }
+
+        ve.morphNote (60, 62);
+
+        // Position carried (≈ 3 blocks in → 0.90 region of the target): underlying
+        // level triples (0.30 → 0.90) minus a little envelope decay. A restart from
+        // the target's head would sit at 0.10 and come out BELOW `before`.
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            ve.processBlock (out, midi);
+            const float after = out.getSample (0, 400);
+            expect (after > before * 1.8f, "tail continues from the new sample at the carried position");
+        }
+    }
+
+    void testMorphNote()
+    {
+        beginTest ("morphNote — crossfades to the new note's sample at the same elapsed time");
+
+        // Note 60 → constant 0.30. Note 62 → 0.10 for the first 500 frames then 0.90:
+        // if the morph carries the elapsed time (~512 frames) we land in the 0.90
+        // region; a restart-from-zero would sit at 0.10 and fail.
+        auto a = encodeFlac (makeDc (0.30f, 48000), kSR);
+        auto b = encodeFlac (makeTwoRegions (0.10f, 500, 0.90f, 47500), kSR);
+        dm::EmbeddedFlacSource src;
+        expect (src.addFlac ("flac:a", a.getData(), a.getSize()));
+        expect (src.addFlac ("flac:b", b.getData(), b.getSize()));
+
+        auto m = dm::loadManifestFromJson (R"({
+            "schema":1,
+            "modes":[{ "name":"Morph",
+              "amp":{"attack":0,"decay":0,"sustain":1,"release":0,"volume":1,"velTrack":0},
+              "groups":[{ "samples":[
+                { "source":"flac:a","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000,"pitchKeyTrack":false },
+                { "source":"flac:b","loNote":62,"hiNote":62,"rootNote":62,"sampleRate":48000,"pitchKeyTrack":false } ]}] }]
+        })");
+        expect (m.ok, "manifest should load");
+
+        dm::VoiceEngine ve;
+        ve.prepare (kSR, 512, 1);
+        ve.setMode (m.library.modes.getReference (0), src);
+
+        // Sound note 60 for one block.
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 400), 0.30f, 0.03f);
+        }
+
+        ve.morphNote (60, 62);
+
+        // Next block: fade start still ≈ old level; past the ~4 ms crossfade the new
+        // sample sounds — at the CARRIED position (0.90 region, not the 0.10 head).
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 2), 0.30f, 0.05f);
+            expectWithinAbsoluteError (out.getSample (0, 400), 0.90f, 0.03f);
+        }
+
+        // The morphed voice now IS note 62: releasing 62 silences it (release = 0).
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOff (1, 62), 0);
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 400), 0.0f, 0.02f);
+        }
     }
 
     void testVelocityLayers()

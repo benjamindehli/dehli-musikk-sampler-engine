@@ -622,6 +622,73 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->smoothStaticGain = -1.0f;   // first chunk starts at its target gain (no ramp-in)
 }
 
+void VoiceEngine::morphNote (int fromNote, int toNote)
+{
+    if (fromNote == toNote)
+        return;
+
+    const int fadeSamples = juce::jmax (1, (int) (sampleRate * 0.004));   // same ~4 ms as choke
+
+    // Scan only the main slots (tail slots are steal/choke fade-outs already dying).
+    for (int i = 0; i < kMaxVoices; ++i)
+    {
+        Voice& v = voices[(size_t) i];
+        if (! v.active || v.fadingOut || v.isRelease || v.note != fromNote)
+            continue;
+
+        const Zone* z = pickZoneInGroup (v.groupIndex, toNote, 100);
+        auto fadeOutOld = [&]
+        {
+            v.fadingOut = true;
+            v.declickDelta = -1.0f / (float) fadeSamples;
+        };
+        if (z == nullptr || z->buffer == nullptr)
+        {
+            fadeOutOld();   // new chord has no sample here → just let the old note go
+            continue;
+        }
+
+        Voice* nv = allocateVoice();
+        if (nv == &v)   // pathological full-pool case: the steal picked our own slot
+            continue;
+
+        *nv = v;   // carries envelope STATE, gain, drift phases, age, note-off status
+        nv->buffer = z->buffer;
+        nv->note = toNote;
+        nv->groupIndex = z->groupIndex;
+        nv->silencedByTags = &z->silencedByTags;
+
+        // Same elapsed TIME into the new sample: position/rate is elapsed output time,
+        // so scale the source position by the rate ratio (handles differing sample
+        // rates / pitchKeyTrack roots).
+        double rate = z->buffer->sampleRate / sampleRate;
+        if (z->pitchKeyTrack)
+            rate *= std::pow (2.0, (toNote - z->rootNote) / 12.0);
+        if (z->groupIndex >= 0 && z->groupIndex < groupTuningMul.size())
+            rate *= groupTuningMul[z->groupIndex];
+        nv->position = v.rate > 0.0 ? v.position * (rate / v.rate) : 0.0;
+        nv->rate = rate;
+
+        nv->loopEnabled = z->loopEnabled;
+        nv->loopEnd = (double) z->loopEnd;
+        nv->loopLen = (double) z->loopLen;
+        nv->loopXf  = (double) z->loopXf;
+
+        if (! nv->loopEnabled && nv->position >= (double) z->buffer->getNumFrames())
+        {
+            nv->active = false;   // new sample is shorter than the elapsed time — nothing to play
+            fadeOutOld();
+            continue;
+        }
+
+        // Equal-length crossfade: new voice ramps in from silence, old ramps out.
+        nv->fadingOut = false;
+        nv->declickGain = 0.0f;
+        nv->declickDelta = 1.0f / (float) fadeSamples;
+        fadeOutOld();
+    }
+}
+
 void VoiceEngine::handleNoteOff (int note)
 {
     // Release held (attack) voices — unless the sustain pedal is down, in which case

@@ -254,6 +254,8 @@ private:
     float uiMasterGain { 1.0f };   // user master output fader (post-everything)
 
     juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
+    juce::Array<NoteSequencer::NoteMorph> morphScratch;   // select+strum chord-change morphs
+                                                          // (preallocated in prepare — audio thread)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SamplerEngine)
 };

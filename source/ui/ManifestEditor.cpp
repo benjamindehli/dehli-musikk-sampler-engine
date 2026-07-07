@@ -21,6 +21,7 @@ juce::Range<int> usedNoteRange (const Mode& m)
         }
     for (const auto& t : m.sequenceTriggers) { lo = juce::jmin (lo, t.note); hi = juce::jmax (hi, t.note); }
     for (const auto& k : m.menuKeySwitches)  { lo = juce::jmin (lo, k.note); hi = juce::jmax (hi, k.note); }
+    for (const auto& k : m.strumKeys)        { lo = juce::jmin (lo, k.note); hi = juce::jmax (hi, k.note); }
     if (hi < lo) return { 36, 84 };
     return { lo, hi };
 }

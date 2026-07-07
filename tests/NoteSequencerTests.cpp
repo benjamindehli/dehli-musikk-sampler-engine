@@ -69,6 +69,197 @@ public:
         testVelocityTracking();
         testKeyReleaseStops();
         testIndexOffset();
+        testSelectStrumFires();
+        testSelectStrumOrderAndRate();
+        testChordChangeMorphs();
+        testStrumKeyReleaseStops();
+        testReleasedTailMorphs();
+    }
+
+    void testReleasedTailMorphs()
+    {
+        beginTest ("select+strum: chord change morphs notes already released (amp-release tail)");
+        auto mode = selectStrumMode();
+        dm::NoteSequencer s;
+        s.prepare (kSR);
+        s.configure (mode);
+
+        // Strum chord A fully, then release the strum key: note-offs are emitted,
+        // but the notes may still ring in the voices' amp release.
+        juce::MidiBuffer in1, out1;
+        in1.addEvent (juce::MidiMessage::noteOn (1, 24, 1.0f), 0);
+        s.process (in1, out1, 512);
+
+        juce::MidiBuffer in2, out2;
+        in2.addEvent (juce::MidiMessage::noteOff (1, 24), 0);
+        s.process (in2, out2, 512);
+        auto e2 = collect (out2);
+        expectEquals (findOff (e2, 60), 0);   // all released
+
+        // Chord change AFTER release: the tails must still morph to chord B.
+        juce::MidiBuffer in3, out3;
+        juce::Array<dm::NoteSequencer::NoteMorph> morphs;
+        in3.addEvent (juce::MidiMessage::noteOn (1, 38, 1.0f), 0);
+        s.process (in3, out3, 512, &morphs);
+
+        expectEquals (morphs.size(), 3);
+        bool m60 = false, m64 = false, m67 = false;
+        for (const auto& m : morphs)
+        {
+            if (m.from == 60 && m.to == 62) m60 = true;
+            if (m.from == 64 && m.to == 65) m64 = true;
+            if (m.from == 67 && m.to == 69) m67 = true;
+        }
+        expect (m60 && m64 && m67, "all three released notes morph to the new chord");
+        expect (collect (out3).empty(), "no retriggers, no passthrough");
+    }
+
+    // Omnichord select+strum fixture: two chords (A = trigger 36 → seq 0, B = trigger 38
+    // → seq 2), each with an "up" and a "down" ordering at consecutive seq indices, and
+    // two strum keys (24 = offset 0/up, 26 = offset 1/down, with its own rate).
+    // Long note lengths keep everything ringing so chord changes have notes to morph.
+    dm::Mode selectStrumMode()
+    {
+        return loadMode (R"({
+            "schema":1,
+            "modes":[{ "name":"Omni","groups":[{}],
+              "sequences":[
+                {"name":"A up","length":1000,"rate":1,"notes":[
+                  {"position":0,"note":60,"velocity":1,"length":1000},
+                  {"position":1,"note":64,"velocity":1,"length":1000},
+                  {"position":2,"note":67,"velocity":1,"length":1000}]},
+                {"name":"A down","length":1000,"rate":1,"notes":[
+                  {"position":0,"note":67,"velocity":1,"length":1000},
+                  {"position":1,"note":64,"velocity":1,"length":1000},
+                  {"position":2,"note":60,"velocity":1,"length":1000}]},
+                {"name":"B up","length":1000,"rate":1,"notes":[
+                  {"position":0,"note":62,"velocity":1,"length":1000},
+                  {"position":1,"note":65,"velocity":1,"length":1000},
+                  {"position":2,"note":69,"velocity":1,"length":1000}]},
+                {"name":"B down","length":1000,"rate":1,"notes":[
+                  {"position":0,"note":69,"velocity":1,"length":1000},
+                  {"position":1,"note":65,"velocity":1,"length":1000},
+                  {"position":2,"note":62,"velocity":1,"length":1000}]}],
+              "sequenceTriggers":[
+                {"note":36,"sequence":0,"transpose":0,"rate":480,"loop":false,"trackVelocity":true,"swallow":true},
+                {"note":38,"sequence":2,"transpose":0,"rate":480,"loop":false,"trackVelocity":true,"swallow":true}],
+              "strumKeys":[
+                {"note":24,"seqOffset":0},
+                {"note":26,"seqOffset":1,"rate":960}]
+            }]
+        })");
+    }
+
+    void testSelectStrumFires()
+    {
+        beginTest ("select+strum: chord keys only select, strum keys fire");
+        auto mode = selectStrumMode();
+        dm::NoteSequencer s;
+        s.prepare (kSR);
+        s.configure (mode);
+
+        // Chord key alone fires nothing (and is swallowed).
+        {
+            juce::MidiBuffer in, out;
+            in.addEvent (juce::MidiMessage::noteOn (1, 38, 1.0f), 0);
+            s.process (in, out, 512);
+            expect (collect (out).empty(), "chord key must not trigger or pass through");
+        }
+        // Strum key fires the SELECTED chord (B, from the key above).
+        {
+            juce::MidiBuffer in, out;
+            in.addEvent (juce::MidiMessage::noteOn (1, 24, 1.0f), 0);
+            s.process (in, out, 512);
+            auto ev = collect (out);
+            expect (! hasNote (ev, 24), "strum key is always swallowed");
+            expectEquals (findOn (ev, 62), 0);
+            expectEquals (findOn (ev, 65), 100);
+            expectEquals (findOn (ev, 69), 200);
+        }
+    }
+
+    void testSelectStrumOrderAndRate()
+    {
+        beginTest ("select+strum: strum key's seqOffset picks the ordering, rate its speed");
+        auto mode = selectStrumMode();
+        dm::NoteSequencer s;
+        s.prepare (kSR);
+        s.configure (mode);
+
+        // No chord key pressed yet → trigger 0 (chord A) is pre-selected.
+        // Key 26 = offset 1 (A down) at its own rate 960 → step = 50 samples.
+        juce::MidiBuffer in, out;
+        in.addEvent (juce::MidiMessage::noteOn (1, 26, 1.0f), 0);
+        s.process (in, out, 512);
+        auto ev = collect (out);
+        expectEquals (findOn (ev, 67), 0);
+        expectEquals (findOn (ev, 64), 50);
+        expectEquals (findOn (ev, 60), 100);
+    }
+
+    void testChordChangeMorphs()
+    {
+        beginTest ("select+strum: chord change morphs ringing notes, retargets unfired ones");
+        auto mode = selectStrumMode();
+        dm::NoteSequencer s;
+        s.prepare (kSR);
+        s.configure (mode);
+
+        // Strum chord A (default selection). 150-sample block → 60 and 64 have fired,
+        // 67 (position 2 = sample 200) has not.
+        juce::MidiBuffer in1, out1;
+        in1.addEvent (juce::MidiMessage::noteOn (1, 24, 1.0f), 0);
+        s.process (in1, out1, 150);
+        auto e1 = collect (out1);
+        expect (hasNote (e1, 60) && hasNote (e1, 64) && ! hasNote (e1, 67));
+
+        // Change to chord B while A rings: ringing notes morph 60→62, 64→65 (no
+        // retrigger events), and the pending third note fires from B (69, not 67).
+        juce::MidiBuffer in2, out2;
+        juce::Array<dm::NoteSequencer::NoteMorph> morphs;
+        in2.addEvent (juce::MidiMessage::noteOn (1, 38, 1.0f), 0);
+        s.process (in2, out2, 512, &morphs);
+
+        expectEquals (morphs.size(), 2);
+        bool m60 = false, m64 = false;
+        for (const auto& m : morphs)
+        {
+            if (m.from == 60 && m.to == 62) m60 = true;
+            if (m.from == 64 && m.to == 65) m64 = true;
+        }
+        expect (m60 && m64, "both ringing notes morph to the new chord");
+
+        auto e2 = collect (out2);
+        expect (! hasNote (e2, 62) && ! hasNote (e2, 65), "morphed notes are not retriggered");
+        expectEquals (findOn (e2, 69), 50);   // third step (stream 200) lands 50 into this block
+        expect (! hasNote (e2, 67), "unfired note comes from the new chord");
+    }
+
+    void testStrumKeyReleaseStops()
+    {
+        beginTest ("select+strum: strum key release stops its notes (after a morph too)");
+        auto mode = selectStrumMode();
+        dm::NoteSequencer s;
+        s.prepare (kSR);
+        s.configure (mode);
+
+        juce::MidiBuffer in1, out1;
+        in1.addEvent (juce::MidiMessage::noteOn (1, 24, 1.0f), 0);
+        s.process (in1, out1, 150);
+
+        // Chord change morphs 60→62, 64→65; then releasing the strum key must
+        // release the MORPHED pitches.
+        juce::MidiBuffer in2, out2;
+        in2.addEvent (juce::MidiMessage::noteOn (1, 38, 1.0f), 0);
+        s.process (in2, out2, 100, nullptr);
+
+        juce::MidiBuffer in3, out3;
+        in3.addEvent (juce::MidiMessage::noteOff (1, 24), 0);
+        s.process (in3, out3, 512);
+        auto e3 = collect (out3);
+        expectEquals (findOff (e3, 62), 0);
+        expectEquals (findOff (e3, 65), 0);
+        expect (! hasNote (e3, 24), "strum key note-off is swallowed");
     }
 
     void testPassthrough()

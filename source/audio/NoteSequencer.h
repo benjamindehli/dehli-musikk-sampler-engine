@@ -27,6 +27,11 @@ class NoteSequencer
 public:
     NoteSequencer() = default;
 
+    /** A ringing sequence note must change pitch (Omnichord-style chord change while
+        the strum still sounds): the voice engine morphs voices on `from` to `to` —
+        new sample, same elapsed position, small crossfade. */
+    struct NoteMorph { int from = -1, to = -1; };
+
     void prepare (double sampleRate);
     void configure (const Mode& mode);   // copies sequences + triggers
     void reset();
@@ -43,8 +48,13 @@ public:
     bool hasTriggers() const noexcept { return ! triggers.isEmpty(); }
 
     /** Produce the played MIDI for this block from the input MIDI. `out` is
-        cleared first; events are emitted at sample-accurate offsets. */
-    void process (const juce::MidiBuffer& in, juce::MidiBuffer& out, int numSamples);
+        cleared first; events are emitted at sample-accurate offsets.
+
+        `morphsOut` (optional): in select+strum mode, a chord change while strummed
+        notes still ring appends the required voice morphs here (the caller forwards
+        them to the voice engine before rendering). */
+    void process (const juce::MidiBuffer& in, juce::MidiBuffer& out, int numSamples,
+                  juce::Array<NoteMorph>* morphsOut = nullptr);
 
 private:
     struct Trigger
@@ -57,7 +67,7 @@ private:
         bool   swallow = true;
     };
 
-    struct Fired { int note; double offStream; bool off; };
+    struct Fired { int note; double offStream; bool off; int seqNote; };   // seqNote = index into the sequence
 
     struct Active
     {
@@ -72,11 +82,14 @@ private:
         bool   stopping = false;
         juce::int64 stopStream = 0;
         bool   done = false;
+        int    orderOffset = 0;   // the sequence-list offset this strum was started with
         std::vector<Fired> fired;
     };
 
-    void startActive (const Trigger& t, int triggerNote, float velocity, juce::int64 startStream);
+    void startActive (const Trigger& t, int triggerNote, float velocity, juce::int64 startStream,
+                      int orderOffset, double keyRate);
     void advanceActive (Active& a, juce::MidiBuffer& out, int numSamples);
+    void retargetActives (juce::Array<NoteMorph>* morphsOut);   // chord changed mid-ring
 
     double sampleRate = 44100.0;
     juce::Array<NoteSequence> sequences;
@@ -87,6 +100,20 @@ private:
     std::atomic<int>    indexOffset { 0 };       // added to trigger.sequence (clamped)
     std::vector<Active> active;
     juce::int64 streamPos = 0;
+
+    // ── Omnichord-style select+strum (Mode.strumKeys non-empty) ────────────────
+    // sequenceTriggers become chord SELECTORS; each strum key fires the SELECTED
+    // trigger's sequence + its own seqOffset (the menu indexOffset is ignored).
+    // Selection changes morph ringing strums to the new chord (see NoteMorph).
+    juce::Array<StrumKey> strumKeys;
+    std::array<int, 128> strumForNote { };       // index into strumKeys, or -1
+    bool selectMode = false;
+    int  selectedTrigger = -1;                   // defaults to the first trigger
+
+    // Released strum notes stay morphable this long (their amp-release tail may
+    // still ring); older entries are certainly silent and skipping them avoids
+    // morphing an unrelated newer voice on the same note number.
+    static constexpr double kReleaseMorphWindowSec = 30.0;
 };
 
 } // namespace dm

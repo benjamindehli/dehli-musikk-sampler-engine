@@ -106,6 +106,13 @@ public:
         each group's own velTrack. How much note velocity scales voice volume. */
     void setAmpVelTrack (float amount) { ovVelTrack = amount; }
 
+    /** Omnichord-style chord morph: every active voice sounding `fromNote` switches to
+        `toNote`'s sample IN PLACE — same group, same elapsed time into the sample, the
+        envelope state carried over — via a short equal-length crossfade (a new voice
+        fades in at the matched position while the old fades out). Called between
+        sequencer and render when a select+strum chord changes mid-ring. */
+    void morphNote (int fromNote, int toNote);
+
     /** When true (default), a note skips spawning voices for groups muted to silence
         (e.g. a drawbar pulled fully down) — a big polyphony/CPU saving. When false,
         every group triggers, so raising a drawbar while a note is held brings it in. */

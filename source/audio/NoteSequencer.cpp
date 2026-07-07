@@ -23,6 +23,15 @@ void NoteSequencer::configure (const Mode& mode)
     triggers.clearQuick();
     triggerForNote.fill (-1);
 
+    // Omnichord-style select+strum: with strum keys present, triggers only SELECT.
+    strumKeys = mode.strumKeys;
+    strumForNote.fill (-1);
+    selectMode = ! strumKeys.isEmpty();
+    for (int i = 0; i < strumKeys.size(); ++i)
+        if (const int n = strumKeys.getReference (i).note; n >= 0 && n < 128)
+            strumForNote[(size_t) n] = i;
+    selectedTrigger = mode.sequenceTriggers.isEmpty() ? -1 : 0;
+
     for (const auto& st : mode.sequenceTriggers)
     {
         Trigger t;
@@ -52,7 +61,8 @@ void NoteSequencer::setIndexOffset (int offset)
     indexOffset.store (offset);
 }
 
-void NoteSequencer::startActive (const Trigger& t, int triggerNote, float velocity, juce::int64 startStream)
+void NoteSequencer::startActive (const Trigger& t, int triggerNote, float velocity, juce::int64 startStream,
+                                 int orderOffset, double keyRate)
 {
     if (sequences.isEmpty())
         return;
@@ -63,7 +73,9 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     // the high-water mark of CONCURRENT sequences.
     Active* slot = nullptr;
     for (auto& existing : active)
-        if (existing.done) { slot = &existing; break; }
+        if (existing.done && (slot == nullptr || existing.stopStream < slot->stopStream))
+            slot = &existing;   // oldest-stopped first: its release tail is the least
+                                // likely to still ring (select mode morphs kept entries)
     if (slot == nullptr)
     {
         active.emplace_back();
@@ -71,7 +83,8 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     }
 
     Active& a = *slot;
-    a.seqIndex   = juce::jlimit (0, sequences.size() - 1, t.sequence + indexOffset.load());
+    a.seqIndex   = juce::jlimit (0, sequences.size() - 1, t.sequence + orderOffset);
+    a.orderOffset = orderOffset;
     a.transpose  = t.transpose;
     a.velocity   = t.trackVelocity ? velocity : 1.0f;
     a.loop       = t.loop;
@@ -84,9 +97,49 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     a.fired.clear();   // keeps capacity
 
     double rate = rateOverride.load();
+    if (rate <= 0.0) rate = keyRate;   // per-strum-key rate (select+strum mode)
     if (rate <= 0.0) rate = t.rate;
     if (rate <= 0.0) rate = 10.0;
     a.samplesPerStep = sampleRate / rate;
+}
+
+// Chord changed while strummed notes still ring (select+strum): retarget every strum
+// to the newly selected trigger's sequence AT ITS OWN order offset — ringing notes
+// are remapped by their position within the sequence (→ voice morphs), and notes not
+// yet fired will come from the new chord. RELEASED notes are included too (their
+// amp-release tail can still be sounding — select mode keeps their entries, see
+// advanceActive), up to a staleness window; the voice engine simply finds no voice
+// for tails that have already faded out.
+void NoteSequencer::retargetActives (juce::Array<NoteMorph>* morphsOut)
+{
+    if (selectedTrigger < 0 || selectedTrigger >= triggers.size() || sequences.isEmpty())
+        return;
+    const auto& t = triggers.getReference (selectedTrigger);
+    const double staleAfter = sampleRate * kReleaseMorphWindowSec;
+
+    for (auto& a : active)
+    {
+        const int newSeqIndex = juce::jlimit (0, sequences.size() - 1, t.sequence + a.orderOffset);
+        if (newSeqIndex == a.seqIndex)
+            continue;
+        const auto& seq = sequences.getReference (newSeqIndex);
+
+        for (auto& f : a.fired)
+        {
+            if (f.seqNote < 0 || f.seqNote >= seq.notes.size())
+                continue;
+            if (f.off && (double) streamPos - f.offStream > staleAfter)
+                continue;   // released long ago — certainly silent; don't morph a
+                            // NEWER voice that happens to reuse the same note number
+            const int newNote = juce::jlimit (0, 127, seq.notes.getReference (f.seqNote).note + a.transpose);
+            if (newNote == f.note)
+                continue;
+            if (morphsOut != nullptr)
+                morphsOut->add ({ f.note, newNote });
+            f.note = newNote;   // a pending note-off / later morph now tracks the new pitch
+        }
+        a.seqIndex = newSeqIndex;
+    }
 }
 
 void NoteSequencer::advanceActive (Active& a, juce::MidiBuffer& out, int numSamples)
@@ -127,7 +180,8 @@ void NoteSequencer::advanceActive (Active& a, juce::MidiBuffer& out, int numSamp
         const float vel = juce::jlimit (0.0f, 1.0f, (float) n.velocity * a.velocity);
         out.addEvent (juce::MidiMessage::noteOn (1, note, vel), juce::jmin (offset, numSamples - 1));
 
-        a.fired.push_back ({ note, fireStream + juce::jmax (0.0, (double) n.length) * a.samplesPerStep, false });
+        a.fired.push_back ({ note, fireStream + juce::jmax (0.0, (double) n.length) * a.samplesPerStep,
+                             false, a.nextNote });
         ++a.nextNote;
     }
 
@@ -161,13 +215,18 @@ void NoteSequencer::advanceActive (Active& a, juce::MidiBuffer& out, int numSamp
         }
     }
 
-    // Drop fired notes whose off has been emitted (bounds memory).
-    a.fired.erase (std::remove_if (a.fired.begin(), a.fired.end(),
-                                   [] (const Fired& f) { return f.off; }),
-                   a.fired.end());
+    // Drop fired notes whose off has been emitted (bounds memory) — EXCEPT in
+    // select+strum one-shots, where released entries are kept for chord-change
+    // morphing of amp-release tails (bounded by the sequence length; the slot
+    // recycle in startActive frees them). Looping strums still purge as before.
+    if (! (selectMode && ! a.loop))
+        a.fired.erase (std::remove_if (a.fired.begin(), a.fired.end(),
+                                       [] (const Fired& f) { return f.off; }),
+                       a.fired.end());
 }
 
-void NoteSequencer::process (const juce::MidiBuffer& in, juce::MidiBuffer& out, int numSamples)
+void NoteSequencer::process (const juce::MidiBuffer& in, juce::MidiBuffer& out, int numSamples,
+                             juce::Array<NoteMorph>* morphsOut)
 {
     out.clear();
 
@@ -180,10 +239,34 @@ void NoteSequencer::process (const juce::MidiBuffer& in, juce::MidiBuffer& out, 
         {
             const int n = msg.getNoteNumber();
             const int ti = (n >= 0 && n < 128) ? triggerForNote[(size_t) n] : -1;
-            if (ti >= 0)
+            const int si = (selectMode && n >= 0 && n < 128) ? strumForNote[(size_t) n] : -1;
+            if (selectMode && ti >= 0)
+            {
+                // Chord key: SELECT only (Omnichord chord button). Changing chord
+                // while strums ring morphs them to the new chord.
+                if (ti != selectedTrigger)
+                {
+                    selectedTrigger = ti;
+                    retargetActives (morphsOut);
+                }
+                if (! triggers.getReference (ti).swallow)
+                    out.addEvent (msg, sp);
+            }
+            else if (si >= 0)
+            {
+                // Strum key (Omnichord strumplate): fire the SELECTED chord with this
+                // key's own order offset. The menu indexOffset is ignored in this mode.
+                if (selectedTrigger >= 0 && selectedTrigger < triggers.size())
+                {
+                    const auto& sk = strumKeys.getReference (si);
+                    startActive (triggers.getReference (selectedTrigger), n, msg.getFloatVelocity(),
+                                 streamPos + sp, sk.seqOffset, sk.rate.value_or (0.0));
+                }
+            }
+            else if (ti >= 0)
             {
                 startActive (triggers.getReference (ti), n, msg.getFloatVelocity(),
-                             streamPos + sp);
+                             streamPos + sp, indexOffset.load(), 0.0);
                 if (! triggers.getReference (ti).swallow)
                     out.addEvent (msg, sp);
             }
@@ -196,7 +279,14 @@ void NoteSequencer::process (const juce::MidiBuffer& in, juce::MidiBuffer& out, 
         {
             const int n = msg.getNoteNumber();
             const int ti = (n >= 0 && n < 128) ? triggerForNote[(size_t) n] : -1;
-            if (ti >= 0)
+            const int si = (selectMode && n >= 0 && n < 128) ? strumForNote[(size_t) n] : -1;
+            if (selectMode && ti >= 0)
+            {
+                // Chord key release: selection persists (like a real Omnichord).
+                if (! triggers.getReference (ti).swallow)
+                    out.addEvent (msg, sp);
+            }
+            else if (si >= 0 || ti >= 0)
             {
                 for (auto& a : active)
                     if (! a.done && ! a.stopping && a.triggerNote == n)
@@ -204,7 +294,7 @@ void NoteSequencer::process (const juce::MidiBuffer& in, juce::MidiBuffer& out, 
                         a.stopping = true;
                         a.stopStream = streamPos + sp;
                     }
-                if (! triggers.getReference (ti).swallow)
+                if (si < 0 && ! triggers.getReference (ti).swallow)
                     out.addEvent (msg, sp);
             }
             else

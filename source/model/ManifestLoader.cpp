@@ -512,7 +512,7 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
     Mode m;
     m.name = str (v, "name");
     checkKeys (v, "mode", { "name", "amp", "tags", "groups", "effects", "sequences",
-                            "modulators", "sequenceTriggers", "ccBindings",
+                            "modulators", "sequenceTriggers", "strumKeys", "ccBindings",
                             "menuKeySwitches", "ui" });
     if (m.name.isEmpty())
         res.errors.add (where + ": mode missing \"name\"");
@@ -558,6 +558,17 @@ Mode parseMode (const var& v, ManifestParseResult& res, int index)
             st.trackVelocity = boolean (t, "trackVelocity", true);
             st.swallow       = boolean (t, "swallow", true);
             m.sequenceTriggers.add (st);
+        }
+
+    if (auto* a = get (v, "strumKeys").getArray())
+        for (auto& e : *a)
+        {
+            checkKeys (e, "strumKey", { "note", "seqOffset", "rate" });
+            StrumKey sk;
+            sk.note      = intg (e, "note", -1);
+            sk.seqOffset = intg (e, "seqOffset", 0);
+            sk.rate      = optD (e, "rate");
+            m.strumKeys.add (sk);
         }
 
     if (auto* a = get (v, "ccBindings").getArray())
