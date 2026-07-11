@@ -15,9 +15,9 @@ class ManifestUiComponent::FilmstripKnob : public juce::Component
 {
 public:
     FilmstripKnob (juce::Image strip, int numFrames, double minV, double maxV, double initial,
-                   bool horizontalDrag = false)
+                   bool horizontalDrag = false, bool invertDrag = false)
         : film (strip), frames (juce::jmax (1, numFrames)), minVal (minV), maxVal (maxV),
-          horizontal (horizontalDrag)
+          horizontal (horizontalDrag), inverted (invertDrag)
     {
         defaultVal = juce::jlimit (minVal, maxVal, initial);   // manifest value = reset target
         value = defaultVal;
@@ -85,8 +85,12 @@ public:
 
         // Horizontal faders drag left/right (right = more); everything else up/down (up = more).
         // Horizontal faders are short, so use a tighter px-per-sweep (more sensitive).
-        const double delta = horizontal ? (double) (e.position.x - dragStartX)
-                                        : (double) (dragStartY - e.position.y);
+        // `inverted` flips the direction (DecentSampler's negative mouseDragSensitivity —
+        // e.g. VCCO drawbars, where pulling DOWN increases like a real organ drawbar).
+        double delta = horizontal ? (double) (e.position.x - dragStartX)
+                                  : (double) (dragStartY - e.position.y);
+        if (inverted)
+            delta = -delta;
         const double pxPerSweep = horizontal ? 120.0 : 200.0;
         double norm = (dragStartVal - minVal) / range + delta / pxPerSweep;
         value = minVal + juce::jlimit (0.0, 1.0, norm) * range;
@@ -107,6 +111,7 @@ private:
     double minVal, maxVal, value { 0.0 };
     double defaultVal { 0.0 };
     bool horizontal { false };
+    bool inverted { false };
     float dragStartX { 0.0f }, dragStartY { 0.0f };
     double dragStartVal { 0.0 };
 };
@@ -253,7 +258,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
                                         c.skin->numFrames.value_or (1),
                                         c.min.value_or (0.0), c.max.value_or (1.0),
                                         c.value.value_or (c.min.value_or (0.0)),
-                                        c.style.contains ("horizontal"));   // custom_skin_horizontal_drag → drag L/R
+                                        c.style.contains ("horizontal"),    // custom_skin_horizontal_drag → drag L/R
+                                        c.mouseDragSensitivity.value_or (100.0) < 0.0);   // DS: negative = inverted drag
         const Control* cp = &c;
         knob->onChange = [this, cp] (double v)
         {
