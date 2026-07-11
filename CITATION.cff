@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it using the metadata below.
+type: software
+title: dehli-musikk-sampler-engine
+abstract: A JUCE based sampler engine that loads a JSON manifest and FLAC sample bundle and renders it as audio and a data driven user interface. The shared base for the Dehli Musikk sample plugins.
+authors:
+  - family-names: Dehli
+    given-names: Benjamin
+repository-code: https://github.com/benjamindehli/dehli-musikk-sampler-engine
+license: GPL-3.0
+version: 0.5.0
+date-released: "2026-07-11"
+keywords:
+  - sampler
+  - audio plugin
+  - juce
+  - vst3
+  - audio unit
