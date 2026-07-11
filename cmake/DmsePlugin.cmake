@@ -20,6 +20,11 @@
 #     (product / bundle id / version / plugin dir / a DETERMINISTIC per-product Windows
 #     installer GUID derived from the bundle id) — consumed by packaging/macos/
 #     package_all.sh and the Windows installer script.
+#   * app icon by convention: if the plugin repo has packaging/icon.png (square,
+#     1024×1024 recommended), JUCE bakes it into the bundles at build time — macOS
+#     .icns (Standalone .app + plugin bundles), Windows .ico (Standalone .exe).
+#     Linux desktop icons come from the tarball installer instead (packaging/linux
+#     ships the same PNG and points the .desktop entry at it).
 #
 # BUNDLE_ID defaults to com.dehlimusikk.<lowercased target>, which matches every
 # existing product; pass it explicitly only to deviate.
@@ -43,7 +48,16 @@ function(dmse_add_plugin target)
         set(ARG_BUNDLE_ID "com.dehlimusikk.${_slug}")
     endif()
 
+    # App icon by convention (see header). Deliberately NOT under assets/ — the
+    # converter cleans and regenerates that folder, which would delete hand-made art.
+    set(_dmse_icon_args)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png")
+        set(_dmse_icon_args ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/packaging/icon.png")
+        message(STATUS "${target}: app icon from packaging/icon.png")
+    endif()
+
     juce_add_plugin(${target}
+        ${_dmse_icon_args}
         COMPANY_NAME            "DehliMusikk"
         BUNDLE_ID               ${ARG_BUNDLE_ID}
         VERSION                 ${ARG_VERSION}
