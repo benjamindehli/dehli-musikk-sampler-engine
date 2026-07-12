@@ -97,6 +97,10 @@ SamplerEngine::ModeRender* SamplerEngine::buildMode (int index, std::atomic<floa
             return mr;                  // caller deletes the partial unit
 
         mr->sequencer.configure (mode);
+        // AirSupply config BEFORE setMode — setMode resolves which groups are the
+        // air-driven reeds from the config's tags.
+        if (library->airSupply)
+            mr->voices.setAirSupply (*library->airSupply);
         mr->voices.setMode (mode, *source);   // samples now decoded → fast wiring
         mr->fx.setEffects (mode.effects, *source);
 
@@ -391,6 +395,7 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     cur->voices.setPitchDriftAmount (pitchDriftAmount.load());
     cur->voices.setVolumeDriftAmount (volumeDriftAmount.load());
     cur->voices.setSkipMutedGroups (skipMutedGroups.load());
+    cur->voices.setAirSupplyEnabled (airSupplyEnabled.load());
     cur->voices.setMasterTune (masterTuneCents.load());
     cur->voices.setVelocityCurve (velocityCurve.load());
     if (const int cap = maxPolyphony.load(); cap > 0)

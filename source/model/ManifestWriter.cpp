@@ -541,6 +541,21 @@ var manifestToVar (const PresetLibrary& library)
         o.set ("gainDb", library.gainDb);
     if (! library.polySaveDefault)
         o.set ("polySaveDefault", false);
+    if (library.airSupply)
+    {
+        Obj air;
+        air.set ("volume",     library.airSupply->volume);
+        air.set ("brightness", library.airSupply->brightness);
+        air.set ("attack",     library.airSupply->attack);
+        if (! library.airSupply->tags.isEmpty())
+        {
+            juce::Array<var> tags;
+            for (const auto& t : library.airSupply->tags)
+                tags.add (t);
+            air.set ("tags", fromArray (tags));
+        }
+        o.set ("airSupply", air.toVar());
+    }
 
     juce::Array<var> modes;
     for (const auto& m : library.modes)

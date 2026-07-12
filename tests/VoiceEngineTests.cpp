@@ -78,6 +78,84 @@ public:
         testMorphNote();
         testMorphNoteInRelease();
         testGroupVelTrackOverride();
+        testAirSupply();
+    }
+
+    void testAirSupply()
+    {
+        beginTest ("air supply: a second sounding note halves the first (volume exponent 1)");
+
+        // Note 60 = audible DC 0.5; note 62 = SILENT sample. Holding 62 adds a
+        // sounding reed (draws air) without adding signal, so the output level
+        // isolates the air dip on note 60.
+        auto a = encodeFlac (makeDc (0.5f, 480000), kSR);       // 10 s: outlasts all three settles
+        auto silent = encodeFlac (makeDc (0.0f, 480000), kSR);
+        dm::EmbeddedFlacSource src;
+        expect (src.addFlac ("flac:a", a.getData(), a.getSize()));
+        expect (src.addFlac ("flac:s", silent.getData(), silent.getSize()));
+
+        // A third, NON-reed "noise" group on note 64 (audible): it must neither
+        // count as a reed nor receive the sag.
+        auto m = dm::loadManifestFromJson (R"({
+            "schema":1,
+            "modes":[{ "name":"Air",
+              "amp":{"attack":0,"decay":0,"sustain":1,"release":0,"volume":1,"velTrack":0},
+              "groups":[
+                { "tags":["reed"], "samples":[
+                  { "source":"flac:a","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000,"pitchKeyTrack":false },
+                  { "source":"flac:s","loNote":62,"hiNote":62,"rootNote":62,"sampleRate":48000,"pitchKeyTrack":false } ]},
+                { "tags":["noise"], "samples":[
+                  { "source":"flac:a","loNote":64,"hiNote":64,"rootNote":64,"sampleRate":48000,"pitchKeyTrack":false } ]}
+              ] }]
+        })");
+        expect (m.ok, "manifest should load");
+
+        dm::VoiceEngine ve;
+        ve.prepare (kSR, 512, 1);
+        dm::AirSupply air;
+        air.volume = 1.0;      // gain = n^-1 → two notes = half level (unmistakable)
+        air.brightness = 0.0;  // keep the lowpass out of a DC test
+        air.attack = 0.0;
+        air.tags = { "reed" };
+        ve.setAirSupply (air);   // BEFORE setMode — that's where the reed groups resolve
+        ve.setMode (m.library.modes.getReference (0), src);
+        ve.setAirSupplyEnabled (true);
+
+        auto settle = [&] (juce::MidiBuffer first)
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            ve.processBlock (out, first);
+            juce::MidiBuffer empty;
+            for (int i = 0; i < 60; ++i)   // ~0.6 s: well past the ~80 ms fan lag
+            {
+                out.clear();
+                ve.processBlock (out, empty);
+            }
+            return out.getSample (0, 400);
+        };
+
+        juce::MidiBuffer on60;
+        on60.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        const float alone = settle (on60);
+        expectWithinAbsoluteError (alone, 0.5f, 0.03f);   // one note: no dip
+
+        juce::MidiBuffer on62;
+        on62.addEvent (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 100), 0);
+        const float shared = settle (on62);
+        expectWithinAbsoluteError (shared, 0.25f, 0.03f); // two reeds share the air
+
+        // A noise-group note neither draws air (reed stays at 0.25) nor sags
+        // itself (adds its full 0.5) → combined 0.75.
+        juce::MidiBuffer on64;
+        on64.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100), 0);
+        const float withNoise = settle (on64);
+        expectWithinAbsoluteError (withNoise, 0.75f, 0.04f);
+
+        // Releasing the silent reed gives the air back; the noise still passes whole.
+        juce::MidiBuffer off62;
+        off62.addEvent (juce::MidiMessage::noteOff (1, 62), 0);
+        const float recovered = settle (off62);
+        expectWithinAbsoluteError (recovered, 1.0f, 0.04f);   // reed 0.5 + noise 0.5
     }
 
     void testGroupVelTrackOverride()

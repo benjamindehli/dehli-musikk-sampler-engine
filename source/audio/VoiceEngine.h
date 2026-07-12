@@ -130,6 +130,11 @@ public:
         1 = linear, 2 = hard. Shapes incoming velocity before layer selection. */
     void setVelocityCurve (int curve) { velocityCurve = curve; }
 
+    /** Shared-air ("fan") simulation config — see dm::AirSupply. Configure once at
+        mode build; enable/disable per block from the user's settings toggle. */
+    void setAirSupply (const AirSupply& config) { airCfg = config; }
+    void setAirSupplyEnabled (bool enabled) { airEnabled = enabled; }
+
     /** Runtime polyphony cap (settings menu). New voices allocate/steal within the
         first `maxPolyphony` slots; voices already ringing above a lowered cap simply
         play out. Clamped to the compile-time voice pool size. */
@@ -253,6 +258,25 @@ private:
     juce::Array<float> groupVelTrackOv;   // per-group AMP_VEL_TRACK override (-1 = unset)
     bool  skipMutedGroups { true };   // note-on: skip groups at ~zero volume (drawbar fully down)
     int   voiceCap { 0 };             // runtime polyphony cap (set to kMaxVoices in prepare)
+
+    // ── Shared-air ("fan") simulation (AirSupply; Elektrisk Salmesykkel) ────────
+    // Per block: count sounding (non-releasing) notes → target per-note gain,
+    // output-lowpass cutoff and attack stretch, smoothed with a fan-like lag.
+    void updateAirSupply (int numSamples);
+    bool groupIsAir (int groupIndex) const noexcept
+    {
+        return groupIndex >= 0 && groupIndex < airGroups.size() && airGroups[groupIndex];
+    }
+    AirSupply airCfg;
+    bool  airEnabled { false };
+    juce::Array<bool> airGroups;         // per group: is it an air-driven reed? (airCfg.tags)
+    bool  anyAirGroup { false };
+    float airGainSm { 1.0f };            // smoothed per-note gain (multiplies reed staticGain)
+    float airCutoffSm { 20000.0f };      // smoothed reed-lowpass cutoff (Hz)
+    float airAttackMul { 1.0f };         // attack stretch for NEW reed voices (unsmoothed)
+    bool  airLpActive { false };         // this block: reed submix + lowpass engaged
+    float airLpState[16] {};             // one-pole state per output channel
+    juce::AudioBuffer<float> airBuffer;  // reed submix: lowpassed, then summed into the output
 
     // ── Modulators (LFOs) ──────────────────────────────────────────────────
     // A mode can define several: tremolo on different group sets at different rates,

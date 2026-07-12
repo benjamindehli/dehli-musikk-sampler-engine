@@ -720,13 +720,23 @@ ManifestParseResult loadManifest (const var& root)
 
     ScopedLintSink lint (res.warnings);   // unknown-key warnings land in res.warnings
     checkKeys (root, "manifest", { "schema", "format", "library", "gainDb",
-                                   "polySaveDefault", "modes" });
+                                   "polySaveDefault", "airSupply", "modes" });
 
     res.library.schema  = intg (root, "schema", 0);
     res.library.format  = str (root, "format");
     res.library.library = str (root, "library");
     res.library.gainDb  = optD (root, "gainDb").value_or (0.0);
     res.library.polySaveDefault = optB (root, "polySaveDefault").value_or (true);
+    if (const auto air = get (root, "airSupply"); air.isObject())
+    {
+        checkKeys (air, "airSupply", { "volume", "brightness", "attack", "tags" });
+        AirSupply a;
+        a.volume     = optD (air, "volume").value_or (a.volume);
+        a.brightness = optD (air, "brightness").value_or (a.brightness);
+        a.attack     = optD (air, "attack").value_or (a.attack);
+        a.tags       = strArray (air, "tags");
+        res.library.airSupply = a;
+    }
 
     if (res.library.schema == 0)
         res.warnings.add ("manifest has no \"schema\" version; assuming "

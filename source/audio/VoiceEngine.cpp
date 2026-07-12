@@ -170,6 +170,7 @@ void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int numChanne
         if (gc) gc->prepare (sampleRate, maxBlock, numChans);
     for (auto& gb : groupBuffers)
         gb.setSize (numChans, maxBlock, false, false, true);
+    airBuffer.setSize (numChans, maxBlock, false, false, true);   // reed submix (no audio-thread alloc)
 }
 
 void VoiceEngine::releaseResources()
@@ -201,6 +202,19 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupRelease.clearQuick(); groupRelease.insertMultiple (0, -1.0f, numGroups);
     groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
     groupVelTrackOv.clearQuick(); groupVelTrackOv.insertMultiple (0, -1.0f, numGroups);
+
+    // AirSupply scope: which groups are the air-driven reeds (by tag). Key on/off
+    // noises etc. stay outside — they neither draw air nor sag.
+    airGroups.clearQuick();
+    anyAirGroup = false;
+    for (const auto& g : mode.groups)
+    {
+        bool isAir = airCfg.tags.isEmpty();
+        for (const auto& t : g.tags)
+            if (airCfg.tags.contains (t)) { isAir = true; break; }
+        airGroups.add (isAir);
+        anyAirGroup = anyAirGroup || isAir;
+    }
     sustainValue = 0; sustainActive = false;
     for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
 
@@ -624,7 +638,10 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->ampEnv = zone.ampEnv;
     v->baseAdsr = zone.adsr;
     v->adsr.setSampleRate (sampleRate);
-    v->adsr.setParameters (effectiveAdsr (v->baseAdsr, zone.groupIndex));
+    auto adsrParams = effectiveAdsr (v->baseAdsr, zone.groupIndex);
+    if (groupIsAir (zone.groupIndex))
+        adsrParams.attack *= airAttackMul;   // AirSupply: busy fan → new reeds speak slower (1.0 when off)
+    v->adsr.setParameters (adsrParams);
     v->adsr.noteOn();
     v->startOrder = ++orderCounter;
 
@@ -822,11 +839,15 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
         }
 
         // Voices in a group with its own FX chain render into that group's scratch
-        // buffer (filtered + gained as a group post-loop); others go straight out.
+        // buffer (filtered + gained as a group post-loop); air-driven reeds render
+        // into the reed submix (lowpassed as one bank — they share the blower);
+        // everything else goes straight out.
         juce::AudioBuffer<float>* target = &buffer;
         if (anyGroupFx && v.groupIndex >= 0 && (size_t) v.groupIndex < groupChains.size()
             && groupChains[(size_t) v.groupIndex] != nullptr)
             target = &groupBuffers[(size_t) v.groupIndex];
+        else if (airLpActive && groupIsAir (v.groupIndex))
+            target = &airBuffer;
 
         // Per-group stereo balance (double-track "Stereo"): centre = unity both sides,
         // so a mono source panned hard-left keeps full level on L and silences R.
@@ -844,6 +865,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
         // asserting addSample) per SAMPLE per voice.
         const bool hasGroup = v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
         const float staticGain = v.gain * volDriftMul
+                               * (groupIsAir (v.groupIndex) ? airGainSm : 1.0f)
                                * (hasGroup ? groupVolume[v.groupIndex]
                                              * groupTagVolume[v.groupIndex]
                                              * groupGain[v.groupIndex]
@@ -1057,6 +1079,14 @@ void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
     // filter/gain sweep, pitch vibrato).
     applyLfoBlock (buffer.getNumSamples());
 
+    updateAirSupply (buffer.getNumSamples());
+    airLpActive = airCutoffSm < 19000.0f && anyAirGroup;
+    if (airLpActive)
+    {
+        airBuffer.setSize (numChans, buffer.getNumSamples(), false, false, true);
+        airBuffer.clear();
+    }
+
     // Per-group FX: voices render into per-group scratch buffers this block; clear
     // them to the block length first (no realloc — sized to maxBlock in prepare).
     const int numSamples = buffer.getNumSamples();
@@ -1096,10 +1126,75 @@ void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuff
             if (groupChains[g] != nullptr)
             {
                 groupChains[g]->process (groupBuffers[g]);
-                for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-                    buffer.addFrom (ch, 0, groupBuffers[g],
-                                    juce::jmin (ch, groupBuffers[g].getNumChannels() - 1), 0, numSamples);
+                auto& dest = (airLpActive && groupIsAir ((int) g)) ? airBuffer : buffer;
+                for (int ch = 0; ch < dest.getNumChannels(); ++ch)
+                    dest.addFrom (ch, 0, groupBuffers[g],
+                                  juce::jmin (ch, groupBuffers[g].getNumChannels() - 1), 0, numSamples);
             }
+
+    // AirSupply top-end darkening: one gentle one-pole lowpass over the REED submix
+    // only (the reeds share the blower; key noises etc. pass by untouched), then
+    // sum it into the output.
+    if (airLpActive)
+    {
+        const float a = 1.0f - std::exp (-juce::MathConstants<float>::twoPi
+                                         * airCutoffSm / (float) sampleRate);
+        const int chans = juce::jmin (airBuffer.getNumChannels(), 16);
+        for (int ch = 0; ch < chans; ++ch)
+        {
+            float* d = airBuffer.getWritePointer (ch);
+            float z = airLpState[ch];
+            for (int i = 0; i < numSamples; ++i)
+            {
+                z += a * (d[i] - z);
+                d[i] = z;
+            }
+            airLpState[ch] = z;
+        }
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            buffer.addFrom (ch, 0, airBuffer,
+                            juce::jmin (ch, airBuffer.getNumChannels() - 1), 0, numSamples);
+    }
+}
+
+void VoiceEngine::updateAirSupply (int numSamples)
+{
+    // Sounding notes = distinct notes with a held (non-releasing) voice: a released
+    // reed's valve is closed and draws no air. Release-trigger voices are noises,
+    // not reeds.
+    int n = 0;
+    if (airEnabled)
+    {
+        bool seen[128] {};
+        for (const auto& v : voices)
+            if (v.active && ! v.fadingOut && ! v.isRelease && ! v.adsr.isReleasing()
+                && groupIsAir (v.groupIndex)
+                && v.note >= 0 && v.note < 128 && ! seen[(size_t) v.note])
+            {
+                seen[(size_t) v.note] = true;
+                ++n;
+            }
+    }
+    const double notes = (double) juce::jmax (1, n);
+
+    // Targets (disabled → neutral): per-note gain n^-volume, cutoff darkening,
+    // attack stretch n^attack. The fan can't change pressure instantly — smooth
+    // gain and cutoff with an ~80 ms lag (this also gives the audible "sag" when
+    // a big chord lands). New notes speak at the CURRENT pressure: attack stretch
+    // applies unsmoothed at trigger time.
+    const float gainT   = airEnabled ? (float) std::pow (notes, -airCfg.volume) : 1.0f;
+    const float cutoffT = airEnabled ? juce::jlimit (2500.0f, 20000.0f,
+                                                     18000.0f * (float) std::pow (notes, -airCfg.brightness))
+                                     : 20000.0f;
+    airAttackMul = airEnabled ? (float) std::pow (notes, airCfg.attack) : 1.0f;
+
+    // Asymmetric lag: pressure recovers fast once reeds close (the fan is still
+    // blowing) but sags with more inertia when load lands. Fast enough recovery to
+    // follow quick ornaments around a held note, slow enough not to pop.
+    const float tauG = gainT   > airGainSm   ? 0.02f : 0.08f;
+    const float tauC = cutoffT > airCutoffSm ? 0.02f : 0.08f;
+    airGainSm   += (gainT   - airGainSm)   * (1.0f - std::exp ((float) -numSamples / ((float) sampleRate * tauG)));
+    airCutoffSm += (cutoffT - airCutoffSm) * (1.0f - std::exp ((float) -numSamples / ((float) sampleRate * tauC)));
 }
 
 void VoiceEngine::allNotesOff()

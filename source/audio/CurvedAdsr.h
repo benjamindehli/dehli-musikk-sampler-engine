@@ -55,6 +55,10 @@ public:
 
     void reset() noexcept { stage = Stage::idle; value = 0.0f; stageSamp = 0; segE = 1.0; }
 
+    /** True once note-off started the release (or the envelope finished) — a
+        releasing reed's valve is closed, so it no longer draws air (AirSupply). */
+    bool isReleasing() const noexcept { return stage == Stage::release || stage == Stage::idle; }
+
     bool isActive() const noexcept { return stage != Stage::idle; }
 
     // The curved segments follow shape(p) = (exp(a·p) − 1) / (exp(a) − 1) with

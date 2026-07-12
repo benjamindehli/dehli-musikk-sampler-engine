@@ -58,6 +58,7 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
         engine.setDeferInitialBuild (true);
     }
     prmVelocityCurve  = apvts->getRawParameterValue (params::id::velocityCurve);
+    prmAirSupply      = apvts->getRawParameterValue (params::id::airSupply);   // null unless declared
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor()
@@ -398,6 +399,7 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         }
 
         if (prmMasterTune)    engine.setMasterTune (prmMasterTune->load());
+        if (prmAirSupply)     engine.setAirSupplyEnabled (prmAirSupply->load() > 0.5f);
         if (prmVelocityCurve) engine.setVelocityCurve (juce::jlimit (0, 2, (int) prmVelocityCurve->load()));
 
         // Sequencer tempo sync: manual BPM, or the host's when following the DAW

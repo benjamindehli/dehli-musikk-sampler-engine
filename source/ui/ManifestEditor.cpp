@@ -400,7 +400,8 @@ void ManifestEditor::openSettings()
     if (settingsPanel == nullptr)
     {
         settingsPanel = std::make_unique<SettingsPanel> (host.getApvts(), host.hasSequencer(),
-                                                         host.isStandaloneBuild());
+                                                         host.isStandaloneBuild(),
+                                                         host.hasAirSupply());
         settingsPanel->setLookAndFeel (&stripLnf);
         settingsPanel->onClose = [this] { settingsPanel->setVisible (false); };
         addChildComponent (*settingsPanel);

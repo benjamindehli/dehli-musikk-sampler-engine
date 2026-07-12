@@ -4,6 +4,7 @@
   "library": "Kitchen Sink",
   "gainDb": -6.5,
   "polySaveDefault": false,
+  "airSupply": { "volume": 0.35, "brightness": 0.5, "attack": 0.2, "tags": ["reed"] },
   "modes": [
     {
       "name": "Everything",

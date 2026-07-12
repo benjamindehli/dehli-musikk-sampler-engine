@@ -42,6 +42,7 @@ namespace id
     inline constexpr const char* seqNoteValue   = "seqNoteValue"; // synced step length (see kNoteValue*)
     inline constexpr const char* masterTune     = "masterTune";   // master tuning in cents
     inline constexpr const char* velocityCurve  = "velocityCurve"; // 0 soft · 1 linear · 2 hard
+    inline constexpr const char* airSupply      = "airSupply";     // shared-air simulation toggle
 }
 
 // Voice-cap choices for the maxPolyphony parameter (choice index → voice count).

@@ -275,6 +275,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
         ParameterID { id::velocityCurve, 1 }, "Velocity Curve",
         StringArray { "Soft", "Linear", "Hard" }, 1));
 
+    // Shared-air simulation toggle — only for libraries that declare it (Elektrisk).
+    if (lib.airSupply)
+        p.push_back (std::make_unique<AudioParameterBool> (ParameterID { id::airSupply, 1 }, "Air Supply", true));
+
     // Separate up/down wheel ranges (settings menu). 0 disables that direction.
     p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendUp,   1 }, "Pitch Bend Up",   0, 24, 2));
     p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendDown, 1 }, "Pitch Bend Down", 0, 24, 2));

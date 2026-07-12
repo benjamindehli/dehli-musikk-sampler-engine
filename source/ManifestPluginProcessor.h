@@ -116,6 +116,7 @@ public:
             p->setValueNotifyingHost (p->convertTo0to1 ((float) index));
         triggerAsyncUpdate();   // build even when the param value didn't change (mode 0)
     }
+    bool hasAirSupply() const override { return engine.hasAirSupply(); }
     bool hasSequencer() const override
     {
         for (const auto& m : library.modes)
@@ -217,6 +218,7 @@ private:
     std::atomic<float>* prmSeqNoteValue   { nullptr };
     std::atomic<float>* prmMasterTune     { nullptr };
     std::atomic<float>* prmVelocityCurve  { nullptr };
+    std::atomic<float>* prmAirSupply      { nullptr };   // null when the library has no AirSupply
 
     // ── MIDI learn state ────────────────────────────────────────────────────
     // ccTargets is the audio thread's mapping table (atomics; message thread

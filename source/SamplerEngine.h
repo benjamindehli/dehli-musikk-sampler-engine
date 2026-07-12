@@ -161,6 +161,10 @@ public:
     void setPitchDriftAmount  (float a) { pitchDriftAmount.store (a); }   // pitch-drift wheel (0..1)
     void setVolumeDriftAmount (float a) { volumeDriftAmount.store (a); }  // volume-drift wheel (0..1)
 
+    /** AirSupply toggle (settings; only offered when the library declares it). */
+    void setAirSupplyEnabled (bool enabled) { airSupplyEnabled.store (enabled); }
+    bool hasAirSupply() const noexcept { return library != nullptr && library->airSupply.has_value(); }
+
     /** Runtime polyphony cap (settings menu); 0 = engine maximum. Applied per block. */
     void setMaxPolyphony (int numVoices) { maxPolyphony.store (numVoices); }
 
@@ -283,6 +287,7 @@ private:
     bool deferInitialBuild = false;   // message thread (see setDeferInitialBuild)
     bool deferredPending   = false;   // an initial build was skipped, awaiting a pick
     std::atomic<int>    velocityCurve { 1 };      // 0 soft · 1 linear · 2 hard
+    std::atomic<bool>   airSupplyEnabled { false };
     std::atomic<float> pitchDriftAmount  { 0.0f };  // pitch-drift wheel (0..1); applied to voices per block
     std::atomic<float> volumeDriftAmount { 0.0f };  // volume-drift wheel (0..1)
     std::atomic<bool>  skipMutedGroups   { true };  // note-on: skip silent groups (drawbar fully down)

@@ -59,6 +59,10 @@ public:
         shows the sequencer block for libraries that actually sequence. */
     virtual bool hasSequencer() const { return false; }
 
+    /** True when the library declares the shared-air simulation (AirSupply) — the
+        settings overlay offers its toggle. */
+    virtual bool hasAirSupply() const { return false; }
+
     /** True in the Standalone build (no host transport to follow). The processor
         answers from its wrapperType — the only reliable source. */
     virtual bool isStandaloneBuild() const { return false; }

@@ -450,6 +450,24 @@ struct Mode
 };
 
 /** The whole manifest: a library of modes for one plugin. */
+/** Shared-air ("fan") simulation for reed instruments driven by one blower (the
+    Yamaha L-20D behind Elektrisk Salmesykkel): the more notes sounding, the less
+    air each reed gets — per-note volume drops (gain = n^-volume), the top end
+    darkens (a gentle global lowpass), and new notes speak slower (attack × n^attack).
+    All responses lag like a real fan (~80 ms). The user toggles it in the settings
+    panel; these exponents set how strongly each aspect reacts. */
+struct AirSupply
+{
+    double volume = 0.3;       // per-note gain exponent (n^-volume)
+    double brightness = 0.4;   // top-end darkening exponent
+    double attack = 0.25;      // attack-stretch exponent (n^attack)
+
+    // Groups carrying any of these tags are the air-driven reeds — they count
+    // toward the load and receive the sag. Empty = every group (key on/off noises
+    // usually should NOT breathe, so name the reed tags: ["diapason","viola",...]).
+    juce::StringArray tags;
+};
+
 struct PresetLibrary
 {
     int schema = 0;              // manifest schema version
@@ -459,6 +477,7 @@ struct PresetLibrary
     bool polySaveDefault = true; // default for the Poly-save toggle (skip silent groups at note-on).
                                  // false for libraries whose controls BLEND muted groups in mid-note
                                  // (e.g. Elektrisk's mod-wheel Normal/Full sweep).
+    std::optional<AirSupply> airSupply;   // present → the settings panel offers the toggle
     juce::Array<Mode> modes;
 };
 
