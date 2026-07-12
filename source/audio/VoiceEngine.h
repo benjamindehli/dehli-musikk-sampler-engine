@@ -106,6 +106,11 @@ public:
         each group's own velTrack. How much note velocity scales voice volume. */
     void setAmpVelTrack (float amount) { ovVelTrack = amount; }
 
+    /** Per-group AMP_VEL_TRACK override (group-level binding, e.g. SubC's Saturation
+        knob fading one group's velocity response). Wins over the global override;
+        unset (-1) falls back to global, then the group's own velTrack. */
+    void setGroupVelTrack (int groupIndex, float amount);
+
     /** Omnichord-style chord morph: every active voice sounding `fromNote` switches to
         `toNote`'s sample IN PLACE — same group, same elapsed time into the sample, the
         envelope state carried over — via a short equal-length crossfade (a new voice
@@ -226,6 +231,7 @@ private:
     juce::Array<float> groupAttack, groupDecay, groupSustain, groupRelease;   // per-group (-1 = none)
     juce::Array<float> groupPan;   // per-group balance (-1 left … 0 centre … +1 right)
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
+    juce::Array<float> groupVelTrackOv;   // per-group AMP_VEL_TRACK override (-1 = unset)
     bool  skipMutedGroups { true };   // note-on: skip groups at ~zero volume (drawbar fully down)
 
     // ── Modulators (LFOs) ──────────────────────────────────────────────────

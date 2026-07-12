@@ -132,6 +132,10 @@ public:
     void setGroupAmpSustain (int groupIndex, float level);
     void setGroupAmpRelease (int groupIndex, float seconds);
 
+    /** Per-group AMP_VEL_TRACK (group-level binding). Wins over the global
+        setAmpVelTrack for that group; survives mode rebuilds like other overrides. */
+    void setGroupAmpVelTrack (int groupIndex, float amount);
+
     /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
     void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }
     void setPitchDriftAmount  (float a) { pitchDriftAmount.store (a); }   // pitch-drift wheel (0..1)
@@ -218,6 +222,7 @@ private:
     FxOverride ovGroupEnabled[kMaxGroupVol];
     FxOverride ovGroupTuning[kMaxGroupVol];
     FxOverride ovGroupPan[kMaxGroupVol];      // per-group stereo pan (double-track "Stereo")
+    FxOverride ovGroupVelTrack[kMaxGroupVol]; // per-group AMP_VEL_TRACK (group-level binding)
     static constexpr int kMaxEffects = 8;
     FxOverride ovEffectEnabled[kMaxEffects];
     // Per-effect-index params, so several same-type instrument effects are independent

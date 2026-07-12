@@ -448,7 +448,14 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
             return [] (E& e, double v) { e.setMasterVolume ((float) v); };
         }
         if (p == "GROUP_TUNING")      { const int g = grp >= 0 ? grp : 0; return [g] (E& e, double v) { e.setGroupTuning (g, (float) v); }; }
-        if (p == "AMP_VEL_TRACK")     return [] (E& e, double v) { e.setAmpVelTrack ((float) v); };
+        if (p == "AMP_VEL_TRACK")
+        {
+            // Group-level binding drives only that group's velocity response (e.g.
+            // SubC's Saturation fading the clean-dyn group's tracking); instrument
+            // level keeps the global override (the 4-track velocity switches).
+            if (grp >= 0) return [grp] (E& e, double v) { e.setGroupAmpVelTrack (grp, (float) v); };
+            return [] (E& e, double v) { e.setAmpVelTrack ((float) v); };
+        }
         if (p == "MOD_AMOUNT")        { const int m = modSlotFor (mode, b); return [m] (E& e, double v) { e.setLfoDepth (m, (float) v); }; }
         if (p == "FREQUENCY")         { const int m = modSlotFor (mode, b); return [m] (E& e, double v) { e.setLfoRate  (m, (float) v); }; }
         if (p == "ENABLED")

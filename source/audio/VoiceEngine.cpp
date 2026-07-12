@@ -198,6 +198,7 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
     groupSustain.clearQuick(); groupSustain.insertMultiple (0, -1.0f, numGroups);
     groupRelease.clearQuick(); groupRelease.insertMultiple (0, -1.0f, numGroups);
     groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
+    groupVelTrackOv.clearQuick(); groupVelTrackOv.insertMultiple (0, -1.0f, numGroups);
     sustainValue = 0; sustainActive = false;
     for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
 
@@ -603,7 +604,11 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
     v->loopLen = (double) zone.loopLen;
     v->loopXf  = (double) zone.loopXf;
 
-    const float vt = (ovVelTrack >= 0.0f) ? ovVelTrack : zone.velTrack;   // global sensitivity override
+    // Velocity sensitivity: per-group override → global override → the group's own.
+    const float gvt = (zone.groupIndex >= 0 && zone.groupIndex < groupVelTrackOv.size())
+                          ? groupVelTrackOv[zone.groupIndex] : -1.0f;
+    const float vt = gvt >= 0.0f ? gvt
+                                 : (ovVelTrack >= 0.0f) ? ovVelTrack : zone.velTrack;
     const float velGain = 1.0f - vt + vt * velocity;
     v->gain = zone.gain * velGain;
 
@@ -1166,6 +1171,12 @@ void VoiceEngine::setGroupTuning (int groupIndex, float semitones)
 {
     if (groupIndex >= 0 && groupIndex < groupTuningMul.size())
         groupTuningMul.set (groupIndex, std::pow (2.0, semitones / 12.0));
+}
+
+void VoiceEngine::setGroupVelTrack (int groupIndex, float amount)
+{
+    if (groupIndex >= 0 && groupIndex < groupVelTrackOv.size())
+        groupVelTrackOv.set (groupIndex, amount);
 }
 
 void VoiceEngine::setGroupGain (int groupIndex, float db)
