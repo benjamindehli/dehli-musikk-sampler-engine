@@ -48,6 +48,15 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
     prmSeqBpm         = apvts->getRawParameterValue (params::id::seqBpm);
     prmSeqNoteValue   = apvts->getRawParameterValue (params::id::seqNoteValue);
     prmMasterTune     = apvts->getRawParameterValue (params::id::masterTune);
+
+    // Multi-mode plugins: don't decode anything until the user picks a mode in the
+    // editor's chooser (or a DAW session restore names one). Mode 0 of a big library
+    // is often NOT what the user wants, and its decode wastes time + RAM.
+    if (library.modes.size() > 1)
+    {
+        modeChoicePending = true;
+        engine.setDeferInitialBuild (true);
+    }
     prmVelocityCurve  = apvts->getRawParameterValue (params::id::velocityCurve);
 }
 
@@ -291,8 +300,12 @@ void ManifestPluginProcessor::handleAsyncUpdate()
     if (apvts == nullptr)
         return;
 
+    if (modeChoicePending)
+        return;   // fresh multi-mode instance: the editor's mode chooser decides
+
     const int requested = (int) apvts->getRawParameterValue (params::id::mode)->load();
-    const bool modeChanged = requested != engine.getActiveModeIndex();
+    const bool modeChanged = requested != engine.getActiveModeIndex()
+                          || engine.awaitingModeChoice();   // first build after a pick
 
     // Set the cabinet IR selection BEFORE (re)building the mode, so a freshly built
     // mode picks it up in buildMode (and a pure menu change applies to the live mode).
@@ -476,6 +489,11 @@ void ManifestPluginProcessor::setStateInformation (const void* data, int sizeInB
         {
             apvts->replaceState (juce::ValueTree::fromXml (*xml));
             rebuildCcTargets();     // user MIDI mappings ride along in the state tree
+            // A DAW session restore names the mode — load it without the chooser.
+            // The Standalone restores state on every launch, but launching the app
+            // is a fresh session in spirit: keep the chooser (last mode preselected).
+            if (! isStandaloneBuild())
+                modeChoicePending = false;
             triggerAsyncUpdate();   // restore active mode to match the Mode param
         }
 }

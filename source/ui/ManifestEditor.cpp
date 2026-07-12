@@ -145,6 +145,22 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     learnBanner.onClick = [this] { host.cancelMidiLearn(); learnBanner.setVisible (false); };
     addChildComponent (learnBanner);
 
+    // Fresh multi-mode instance: ask which mode to load before decoding anything.
+    modeChooser.setLookAndFeel (&stripLnf);
+    modeChooser.onPick = [this] (int i)
+    {
+        modeChooser.setVisible (false);
+        modeSelector.setSelectedId (i + 1, juce::dontSendNotification);   // keep the strip in sync
+        host.confirmModeChoice (i);
+    };
+    addChildComponent (modeChooser);
+    if (host.needsModeChoice())
+    {
+        const int last = (int) host.getApvts().getRawParameterValue (params::id::mode)->load();
+        modeChooser.setModes (host.getModeNames(), last);
+        modeChooser.setVisible (true);
+    }
+
     masterSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     masterSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);   // no inline number
     masterSlider.setTextValueSuffix (" dB");
@@ -201,6 +217,7 @@ ManifestEditor::~ManifestEditor()
     settingsButton.setLookAndFeel (nullptr);
     if (settingsPanel != nullptr)
         settingsPanel->setLookAndFeel (nullptr);
+    modeChooser.setLookAndFeel (nullptr);
     masterSlider.setLookAndFeel (nullptr);
     if (themedWindow != nullptr)   // detach before our LnF member dies (standalone only)
         themedWindow->setLookAndFeel (nullptr);
@@ -517,6 +534,9 @@ void ManifestEditor::timerCallback()
     if (learnBanner.isVisible() && ! host.isMidiLearnActive())
         learnBanner.setVisible (false);   // learn completed (CC captured) or cancelled
 
+    if (modeChooser.isVisible() && ! host.needsModeChoice())
+        modeChooser.setVisible (false);   // resolved elsewhere (e.g. late state restore)
+
     // The keyboard's own scroll buttons give no callback — poll the first visible
     // key so the captions band tracks scrolling.
     if (keyLabelStrip.isVisible())
@@ -705,6 +725,7 @@ void ManifestEditor::resized()
     if (settingsPanel != nullptr)
         settingsPanel->setBounds (getLocalBounds());
 
+    modeChooser.setBounds (getLocalBounds());
     loadingOverlay.setBounds (getLocalBounds());   // covers everything while decoding
 }
 

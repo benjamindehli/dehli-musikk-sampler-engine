@@ -63,6 +63,11 @@ public:
         answers from its wrapperType — the only reliable source. */
     virtual bool isStandaloneBuild() const { return false; }
 
+    /** Fresh multi-mode instance: the editor should show the mode chooser and call
+        confirmModeChoice with the pick before anything decodes. */
+    virtual bool needsModeChoice() const { return false; }
+    virtual void confirmModeChoice (int /*index*/) {}
+
     // ── MIDI learn (right-click a controller) ───────────────────────────────
     // startMidiLearn arms capture: the next incoming CC (on the audio thread) maps
     // to `paramId` and learn ends. isMidiLearnActive turns false on completion or
@@ -217,6 +222,58 @@ private:
     juce::TextButton settingsButton { "Settings" };   // opens the settings overlay
     std::unique_ptr<SettingsPanel> settingsPanel;      // created lazily on first open
     juce::TextButton learnBanner;                      // "MIDI Learn armed" banner; click = cancel
+
+    /** Mode chooser overlay: shown on a fresh multi-mode instance so the user picks
+        which mode to load instead of eagerly decoding mode 0. The last-used mode
+        (the restored Mode param) is highlighted. */
+    struct ModeChooser : juce::Component
+    {
+        std::function<void (int)> onPick;
+
+        void setModes (const juce::StringArray& names, int highlight)
+        {
+            buttons.clear();
+            title.setText ("Select mode", juce::dontSendNotification);
+            title.setJustificationType (juce::Justification::centred);
+            title.setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
+            title.setFont (juce::Font (juce::FontOptions (16.0f).withStyle ("Bold")));
+            addAndMakeVisible (title);
+            for (int i = 0; i < names.size(); ++i)
+            {
+                auto* b = buttons.add (new juce::TextButton (names[i]));
+                if (i == highlight)
+                    b->setColour (juce::TextButton::buttonColourId, juce::Colour (0xff3a5a7a));
+                b->onClick = [this, i] { if (onPick) onPick (i); };
+                addAndMakeVisible (*b);
+            }
+            resized();
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (juce::Colour (0xff000102).withAlpha (0.7f));
+            g.setColour (juce::Colour (0xff202122));
+            g.fillRoundedRectangle (panelRect.toFloat(), 8.0f);
+            g.setColour (juce::Colour (0xff555657));
+            g.drawRoundedRectangle (panelRect.toFloat(), 8.0f, 1.0f);
+        }
+
+        void resized() override
+        {
+            const int rowH = 34, pad = 14, w = 260;
+            const int h = pad * 2 + rowH + buttons.size() * rowH;
+            panelRect = getLocalBounds().withSizeKeepingCentre (w, h);
+            auto r = panelRect.reduced (pad);
+            title.setBounds (r.removeFromTop (rowH));
+            for (auto* b : buttons)
+                b->setBounds (r.removeFromTop (rowH).reduced (0, 4));
+        }
+
+        juce::Label title;
+        juce::OwnedArray<juce::TextButton> buttons;
+        juce::Rectangle<int> panelRect;
+    };
+    ModeChooser modeChooser;
     juce::Slider masterSlider;   // master output fader (top strip, between "Out" and the meter)
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
     LevelMeter outputMeter;

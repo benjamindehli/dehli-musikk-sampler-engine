@@ -108,6 +108,14 @@ public:
         return wrapperType == wrapperType_Standalone
             || juce::JUCEApplicationBase::isStandaloneApp();
     }
+    bool needsModeChoice() const override { return modeChoicePending; }
+    void confirmModeChoice (int index) override
+    {
+        modeChoicePending = false;
+        if (auto* p = apvts != nullptr ? apvts->getParameter (params::id::mode) : nullptr)
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) index));
+        triggerAsyncUpdate();   // build even when the param value didn't change (mode 0)
+    }
     bool hasSequencer() const override
     {
         for (const auto& m : library.modes)
@@ -218,6 +226,10 @@ private:
     std::atomic<bool> learnArmed { false };
     std::atomic<int>  learnedCcPending { -1 };
     juce::String learnParamId;   // message thread only
+
+    // Multi-mode fresh instances wait for the editor's mode chooser before decoding
+    // anything; a DAW session restore confirms the saved mode instead (no popup).
+    bool modeChoicePending = false;   // message thread
 
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };

@@ -175,7 +175,10 @@ void SamplerEngine::prepare (double newSampleRate, int newMaxBlock, int newNumCh
         joinBuildThread();
         delete current.exchange (nullptr);
         delete pending.exchange (nullptr);
-        beginAsyncBuild (activeModeIndex);
+        if (deferInitialBuild)
+            deferredPending = true;   // wait for the mode chooser's pick
+        else
+            beginAsyncBuild (activeModeIndex);
     }
 }
 
@@ -193,7 +196,10 @@ void SamplerEngine::setLibrary (const PresetLibrary& lib, SampleSource& src)
         joinBuildThread();
         delete current.exchange (nullptr);
         delete pending.exchange (nullptr);
-        beginAsyncBuild (activeModeIndex);
+        if (deferInitialBuild)
+            deferredPending = true;   // wait for the mode chooser's pick
+        else
+            beginAsyncBuild (activeModeIndex);
     }
 }
 
@@ -260,6 +266,8 @@ void SamplerEngine::setActiveMode (int index)
         return;
 
     activeModeIndex = index;
+    deferInitialBuild = false;   // a choice was made — build now and henceforth
+    deferredPending   = false;
 
     // Each mode is independent: drop the previous mode's UI overrides so the new
     // one starts from its own manifest defaults (the editor re-applies its controls).

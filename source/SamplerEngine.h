@@ -46,8 +46,18 @@ public:
     int  getActiveModeIndex() const noexcept { return activeModeIndex; }
 
     /** Switch the active mode. Safe to call while audio is running — builds the
-        new mode off-thread and swaps it in lock-free. Message thread. */
+        new mode off-thread and swaps it in lock-free. Message thread. Also clears
+        a deferred initial build (the mode-chooser's pick). */
     void setActiveMode (int index);
+
+    /** Multi-mode plugins can DEFER the initial decode until the user picks a mode
+        (the editor's mode chooser) instead of eagerly loading mode 0. Set BEFORE
+        prepare()/setLibrary(); setActiveMode() clears it and builds. */
+    void setDeferInitialBuild (bool defer) { deferInitialBuild = defer; }
+
+    /** True while an initial build was skipped because of setDeferInitialBuild —
+        i.e. no mode is loaded and the engine is waiting for a choice. */
+    bool awaitingModeChoice() const noexcept { return deferredPending; }
 
     /** Render one block (samples + amp ADSR + FX for the active mode). */
     void processBlock (juce::AudioBuffer<float>& buffer,
@@ -270,6 +280,8 @@ private:
     std::atomic<double> seqBpm { 120.0 };
     std::atomic<double> seqBeatsPerStep { 0.25 };
     std::atomic<float>  masterTuneCents { 0.0f }; // settings master tuning
+    bool deferInitialBuild = false;   // message thread (see setDeferInitialBuild)
+    bool deferredPending   = false;   // an initial build was skipped, awaiting a pick
     std::atomic<int>    velocityCurve { 1 };      // 0 soft · 1 linear · 2 hard
     std::atomic<float> pitchDriftAmount  { 0.0f };  // pitch-drift wheel (0..1); applied to voices per block
     std::atomic<float> volumeDriftAmount { 0.0f };  // volume-drift wheel (0..1)
