@@ -77,6 +77,52 @@ public:
         testVelocityLayers();
         testMorphNote();
         testMorphNoteInRelease();
+        testGroupVelTrackOverride();
+    }
+
+    void testGroupVelTrackOverride()
+    {
+        beginTest ("per-group AMP_VEL_TRACK override affects only its group");
+
+        // Two groups with velTrack 0 (velocity ignored), on different notes.
+        auto flac = encodeFlac (makeDc (0.5f, 4000), kSR);
+        dm::EmbeddedFlacSource src;
+        expect (src.addFlac ("flac:a", flac.getData(), flac.getSize()));
+
+        auto m = dm::loadManifestFromJson (R"({
+            "schema":1,
+            "modes":[{ "name":"VT",
+              "amp":{"attack":0,"decay":0,"sustain":1,"release":0,"volume":1,"velTrack":0},
+              "groups":[
+                { "samples":[{ "source":"flac:a","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000,"pitchKeyTrack":false }] },
+                { "samples":[{ "source":"flac:a","loNote":62,"hiNote":62,"rootNote":62,"sampleRate":48000,"pitchKeyTrack":false }] }
+              ] }]
+        })");
+        expect (m.ok, "manifest should load");
+
+        dm::VoiceEngine ve;
+        ve.prepare (kSR, 512, 1);
+        ve.setMode (m.library.modes.getReference (0), src);
+
+        // Full tracking on group 1 ONLY: its note at half velocity halves, while
+        // group 0's note keeps ignoring velocity.
+        ve.setGroupVelTrack (1, 1.0f);
+
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 64), 0);
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 100), 0.25f, 0.03f);
+        }
+        ve.allNotesOff();
+        {
+            juce::AudioBuffer<float> out (1, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 64), 0);
+            ve.processBlock (out, midi);
+            expectWithinAbsoluteError (out.getSample (0, 100), 0.5f, 0.03f);
+        }
     }
 
     void testMorphNoteInRelease()
