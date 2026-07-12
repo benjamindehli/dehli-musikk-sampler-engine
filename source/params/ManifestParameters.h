@@ -16,6 +16,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <model/Manifest.h>
+#include <model/NoteValues.h>
 #include <SamplerEngine.h>
 #include <atomic>
 #include <cstdint>
@@ -48,20 +49,12 @@ namespace id
 inline constexpr int kPolyphonyChoices[] = { 8, 16, 32, 64, 128 };
 inline constexpr int kNumPolyphonyChoices = 5;
 
-// Tempo-synced sequencer step lengths (choice index → label / beats). Triplet =
-// 2/3 of the straight value, dotted = 1.5x.
-inline constexpr const char* kNoteValueLabels[] = {
-    "1/4", "1/4 triplet", "1/4 dotted",
-    "1/8", "1/8 triplet", "1/8 dotted",
-    "1/16", "1/16 triplet", "1/16 dotted",
-    "1/32", "1/32 triplet", "1/32 dotted" };
-inline constexpr double kNoteValueBeats[] = {
-    1.0, 2.0 / 3.0, 1.5,
-    0.5, 1.0 / 3.0, 0.75,
-    0.25, 1.0 / 6.0, 0.375,
-    0.125, 1.0 / 12.0, 0.1875 };
-inline constexpr int kNumNoteValues = 12;
-inline constexpr int kDefaultNoteValue = 6;   // 1/16
+// Tempo-synced sequencer step lengths — the shared table (also used by the
+// NoteSequencer for StrumSpeed note-value snapping) lives in model/NoteValues.h.
+inline constexpr const char* const* kNoteValueLabels = notevalues::labels;
+inline constexpr const double*      kNoteValueBeats  = notevalues::beats;
+inline constexpr int kNumNoteValues   = notevalues::count;
+inline constexpr int kDefaultNoteValue = notevalues::defaultIndex;
 
 /** Build the APVTS layout for a whole library (auto-union of every mode's
     engine-supported controls/buttons/menus, + mode + pitch-bend range). */

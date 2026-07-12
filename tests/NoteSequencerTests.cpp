@@ -107,15 +107,17 @@ public:
         const int b8 = findOn (e8, 60);
         expect (b8 >= 0 && findOn (e8, 64) == b8 + 2400, "8th steps double the step length");
 
-        // A StrumSpeed knob keeps the rate override applied every block — tempo
-        // sync must still win while on (the knob is the free-mode control).
+        // With a StrumSpeed override present (applied every block by the knob's
+        // compiled plan), the knob SCROLLS the note values: its steps/s snap to
+        // the nearest musical rate. 480 steps/s at 600 BPM snaps to 1/32 triplet
+        // (120 steps/s → 400-sample steps).
         s.setRate (480.0);
         juce::MidiBuffer inO, outO;
         inO.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
         s.process (inO, outO, 8192);
         auto eO = collect (outO);
         const int bO = findOn (eO, 60);
-        expect (bO >= 0 && findOn (eO, 64) == bO + 2400, "tempo sync overrides the rate override");
+        expect (bO >= 0 && findOn (eO, 64) == bO + 400, "knob snaps to the nearest note value");
         s.setRate (0.0);
 
         // Back to free: per-trigger rate (480 steps/s → 100-sample steps) again.

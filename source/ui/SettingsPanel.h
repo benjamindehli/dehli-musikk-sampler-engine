@@ -184,11 +184,17 @@ private:
     {
         const bool sync       = syncToggle.getToggleState();
         const bool followHost = ! standalone && syncDawToggle.getToggleState();
-        syncDawToggle.setEnabled (sync && ! standalone);
-        bpmSlider.setEnabled (sync && ! followHost);
-        bpmLabel.setEnabled  (sync && ! followHost);
-        noteValueBox.setEnabled (sync);
-        noteValueLabel.setEnabled (sync);
+
+        // setEnabled alone barely changes some widgets' looks — dim rows explicitly.
+        auto enableRow = [] (juce::Component& control, juce::Label& label, bool on)
+        {
+            control.setEnabled (on);
+            control.setAlpha (on ? 1.0f : 0.4f);
+            label.setAlpha (on ? 1.0f : 0.4f);
+        };
+        enableRow (syncDawToggle, syncDawLabel, sync && ! standalone);
+        enableRow (bpmSlider,     bpmLabel,     sync && ! followHost);
+        enableRow (noteValueBox,  noteValueLabel, sync);
     }
 
     juce::AudioProcessorValueTreeState& apvts;

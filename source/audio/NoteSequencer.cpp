@@ -1,4 +1,6 @@
 #include "NoteSequencer.h"
+#include <model/NoteValues.h>
+#include <cmath>
 #include <algorithm>
 
 namespace dm
@@ -96,10 +98,32 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     a.done       = false;
     a.fired.clear();   // keeps capacity
 
-    // Tempo sync WINS over everything, including the SEQ_PLAYBACK_RATE override —
-    // libraries with a StrumSpeed knob (Omni-84) apply that override every block,
-    // so it is never unset; the knob is the FREE-mode speed control.
-    double rate = tempoSync.load() ? syncBpm.load() / 60.0 / beatsPerStep.load() : 0.0;
+    // Tempo sync WINS over the free-mode rates. With a SEQ_PLAYBACK_RATE override
+    // present (a StrumSpeed knob applies it every block, so it is never unset), the
+    // KNOB picks the note value: its free-mode steps/s snap to the nearest musical
+    // rate at the current tempo (log-domain nearest, so the knob's sweep spreads
+    // evenly across the values). Without a knob, the settings dropdown decides.
+    double rate = 0.0;
+    if (tempoSync.load())
+    {
+        const double perBeat = syncBpm.load() / 60.0;
+        const double knob = rateOverride.load();
+        if (knob > 0.0)
+        {
+            rate = perBeat / notevalues::beats[0];
+            double bestDiff = std::abs (std::log (knob) - std::log (rate));
+            for (int i = 1; i < notevalues::count; ++i)
+            {
+                const double cand = perBeat / notevalues::beats[i];
+                const double diff = std::abs (std::log (knob) - std::log (cand));
+                if (diff < bestDiff) { bestDiff = diff; rate = cand; }
+            }
+        }
+        else
+        {
+            rate = perBeat / beatsPerStep.load();
+        }
+    }
     if (rate <= 0.0) rate = rateOverride.load();
     if (rate <= 0.0) rate = keyRate;   // per-strum-key rate (select+strum mode)
     if (rate <= 0.0) rate = t.rate;
