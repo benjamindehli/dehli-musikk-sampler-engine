@@ -117,7 +117,49 @@ public:
     }
     bool  isLoading() const override    { return engine.isLoading(); }
     float loadProgress() const override { return engine.loadProgress(); }
-    void  pollEngine() override         { engine.drainRetired(); }   // free retired modes (message thread)
+    void  pollEngine() override   // message-thread housekeeping (editor timer)
+    {
+        engine.drainRetired();
+        // Finalize a pending MIDI learn: the audio thread only captured the CC
+        // number; the mapping table + state tree are message-thread territory.
+        if (const int cc = learnedCcPending.exchange (-1); cc >= 0 && learnParamId.isNotEmpty())
+        {
+            setMidiMapping (cc, learnParamId);
+            learnParamId.clear();
+        }
+    }
+
+    // ── MIDI learn (right-click a controller in the editor) ─────────────────
+    void startMidiLearn (const juce::String& paramId) override
+    {
+        learnParamId = paramId;
+        learnArmed.store (true);
+    }
+    void cancelMidiLearn() override
+    {
+        learnArmed.store (false);
+        learnedCcPending.store (-1);
+        learnParamId.clear();
+    }
+    bool isMidiLearnActive() const override { return learnArmed.load(); }
+    int  getMidiMappingCc (const juce::String& paramId) const override
+    {
+        if (apvts == nullptr) return -1;
+        const auto maps = apvts->state.getChildWithName (kMidiMapTag);
+        for (int i = 0; i < maps.getNumChildren(); ++i)
+            if (maps.getChild (i)["param"].toString() == paramId)
+                return (int) maps.getChild (i)["cc"];
+        return -1;
+    }
+    void removeMidiMapping (const juce::String& paramId) override
+    {
+        if (apvts == nullptr) return;
+        auto maps = apvts->state.getChildWithName (kMidiMapTag);
+        for (int i = maps.getNumChildren(); --i >= 0;)
+            if (maps.getChild (i)["param"].toString() == paramId)
+                maps.removeChild (i, nullptr);
+        rebuildCcTargets();
+    }
     void noteButtonClicked (int buttonIndex) override
     {
         if (buttonIndex >= 0 && buttonIndex < kMaxUiButtons)
@@ -131,6 +173,8 @@ protected:
 
 private:
     void loadEmbeddedLibrary();
+    void setMidiMapping (int cc, const juce::String& paramId);   // message thread
+    void rebuildCcTargets();                                     // message thread
     void parameterChanged (const juce::String& paramID, float newValue) override;
     void handleAsyncUpdate() override;
     void applyMenuIrFor (int modeIndex);   // cabinet-menu FX_IR_FILE → engine (message thread)
@@ -165,6 +209,15 @@ private:
     std::atomic<float>* prmSeqNoteValue   { nullptr };
     std::atomic<float>* prmMasterTune     { nullptr };
     std::atomic<float>* prmVelocityCurve  { nullptr };
+
+    // ── MIDI learn state ────────────────────────────────────────────────────
+    // ccTargets is the audio thread's mapping table (atomics; message thread
+    // rebuilds it). Mappings persist as a "midiMappings" child of the APVTS state.
+    static constexpr const char* kMidiMapTag = "midiMappings";
+    std::atomic<juce::RangedAudioParameter*> ccTargets[128] {};
+    std::atomic<bool> learnArmed { false };
+    std::atomic<int>  learnedCcPending { -1 };
+    juce::String learnParamId;   // message thread only
 
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };

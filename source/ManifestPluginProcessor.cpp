@@ -252,6 +252,40 @@ void ManifestPluginProcessor::parameterChanged (const juce::String& paramID, flo
         triggerAsyncUpdate();
 }
 
+void ManifestPluginProcessor::setMidiMapping (int cc, const juce::String& paramId)
+{
+    if (apvts == nullptr || cc < 0 || cc > 127)
+        return;
+    auto maps = apvts->state.getOrCreateChildWithName (kMidiMapTag, nullptr);
+
+    // One CC per parameter and one parameter per CC: learning replaces both ways.
+    for (int i = maps.getNumChildren(); --i >= 0;)
+        if ((int) maps.getChild (i)["cc"] == cc
+            || maps.getChild (i)["param"].toString() == paramId)
+            maps.removeChild (i, nullptr);
+
+    juce::ValueTree m ("map");
+    m.setProperty ("cc", cc, nullptr);
+    m.setProperty ("param", paramId, nullptr);
+    maps.appendChild (m, nullptr);
+    rebuildCcTargets();
+}
+
+void ManifestPluginProcessor::rebuildCcTargets()
+{
+    for (auto& t : ccTargets)
+        t.store (nullptr);
+    if (apvts == nullptr)
+        return;
+    const auto maps = apvts->state.getChildWithName (kMidiMapTag);
+    for (int i = 0; i < maps.getNumChildren(); ++i)
+    {
+        const int cc = (int) maps.getChild (i)["cc"];
+        if (cc >= 0 && cc <= 127)
+            ccTargets[cc].store (apvts->getParameter (maps.getChild (i)["param"].toString()));
+    }
+}
+
 void ManifestPluginProcessor::handleAsyncUpdate()
 {
     if (apvts == nullptr)
@@ -384,6 +418,24 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         const int mi = engine.getActiveModeIndex();
         if (mi >= 0 && mi < (int) compiledModes.size())
         {
+            // User MIDI mappings (right-click MIDI Learn). In learn mode the first CC
+            // is captured for pollEngine to finalize instead of being applied.
+            for (const auto meta : midi)
+            {
+                const auto msg = meta.getMessage();
+                if (! msg.isController()) continue;
+                const int cc = msg.getControllerNumber();
+                if (cc >= 120) continue;   // channel-mode messages are not knobs
+                if (learnArmed.load())
+                {
+                    learnArmed.store (false);
+                    learnedCcPending.store (cc);
+                    continue;
+                }
+                if (auto* p = ccTargets[cc].load())
+                    p->setValueNotifyingHost ((float) msg.getControllerValue() / 127.0f);
+            }
+
             const auto& cm = *compiledModes[(size_t) mi];
             cm.applyCc (midi);
             cm.applyNoteSwitches (midi);
@@ -423,6 +475,7 @@ void ManifestPluginProcessor::setStateInformation (const void* data, int sizeInB
         if (xml->hasTagName (apvts->state.getType()))
         {
             apvts->replaceState (juce::ValueTree::fromXml (*xml));
+            rebuildCcTargets();     // user MIDI mappings ride along in the state tree
             triggerAsyncUpdate();   // restore active mode to match the Mode param
         }
 }

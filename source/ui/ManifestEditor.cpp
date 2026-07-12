@@ -134,21 +134,16 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
 
     // Player-level options live in the settings overlay (gear button) — see
     // SettingsPanel.h. Created lazily so a plugin without the panel open pays nothing.
-    settingsButton.onClick = [this]
-    {
-        if (settingsPanel == nullptr)
-        {
-            settingsPanel = std::make_unique<SettingsPanel> (host.getApvts(), host.hasSequencer(),
-                                                             host.isStandaloneBuild());
-            settingsPanel->setLookAndFeel (&stripLnf);
-            settingsPanel->onClose = [this] { settingsPanel->setVisible (false); };
-            addChildComponent (*settingsPanel);
-        }
-        settingsPanel->setBounds (getLocalBounds());
-        settingsPanel->setVisible (true);
-        settingsPanel->toFront (true);
-    };
+    settingsButton.onClick = [this] { openSettings(); };
     addAndMakeVisible (settingsButton);
+
+    // MIDI-learn banner: shown while learn is armed (the timer tracks the host's
+    // state); clicking it cancels, as does Esc.
+    learnBanner.setButtonText ("MIDI Learn: move a controller...  (click or press Esc to cancel)");
+    learnBanner.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff7a4a10));
+    learnBanner.setColour (juce::TextButton::textColourOffId, juce::Colour (0xfffdfeff));
+    learnBanner.onClick = [this] { host.cancelMidiLearn(); learnBanner.setVisible (false); };
+    addChildComponent (learnBanner);
 
     masterSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     masterSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);   // no inline number
@@ -324,6 +319,16 @@ void ManifestEditor::rebuildUi()
         if (isFirstMenu (menu))
             setParam (params::id::chordOrder, (float) idx);
     };
+    uiComponent->onControlRightClick = [this] (const Control& c, juce::Component& w)
+    {
+        const auto ids = params::controlParamIds (c);
+        showContextMenu (ids.isEmpty() ? juce::String() : ids[0], &w);
+    };
+    uiComponent->onButtonRightClick = [this] (const Button& b, int idx, juce::Component& w)
+    {
+        showContextMenu (params::buttonParamId (b, idx), &w);
+    };
+    uiComponent->onBackgroundRightClick = [this] { showContextMenu ({}, nullptr); };
     addAndMakeVisible (*uiComponent);
     // z-order (back → front): manifest face, then the translucent backdrop, then the
     // wheels/labels/keyboard sit on top. Push the panel back first so the face lands
@@ -371,6 +376,54 @@ void ManifestEditor::applyPreferredSize()
         parent->setSize (w, h);
     if (themedWindow != nullptr)                // standalone window follows its content
         themedWindow->setContentComponentSize (w, h);
+}
+
+void ManifestEditor::openSettings()
+{
+    if (settingsPanel == nullptr)
+    {
+        settingsPanel = std::make_unique<SettingsPanel> (host.getApvts(), host.hasSequencer(),
+                                                         host.isStandaloneBuild());
+        settingsPanel->setLookAndFeel (&stripLnf);
+        settingsPanel->onClose = [this] { settingsPanel->setVisible (false); };
+        addChildComponent (*settingsPanel);
+    }
+    settingsPanel->setBounds (getLocalBounds());
+    settingsPanel->setVisible (true);
+    settingsPanel->toFront (true);
+}
+
+void ManifestEditor::showContextMenu (const juce::String& paramId, juce::Component* target)
+{
+    juce::PopupMenu m;
+    m.setLookAndFeel (&stripLnf);
+    const int mappedCc = paramId.isNotEmpty() ? host.getMidiMappingCc (paramId) : -1;
+    if (paramId.isNotEmpty())
+    {
+        m.addItem (1, "MIDI Learn");
+        if (mappedCc >= 0)
+            m.addItem (2, "Remove MIDI mapping (CC " + juce::String (mappedCc) + ")");
+        m.addSeparator();
+    }
+    m.addItem (3, "Settings...");
+
+    auto opts = juce::PopupMenu::Options();
+    if (target != nullptr)
+        opts = opts.withTargetComponent (target);
+    juce::Component::SafePointer<ManifestEditor> safe (this);
+    m.showMenuAsync (opts, [safe, paramId] (int result)
+    {
+        if (safe == nullptr)
+            return;
+        if (result == 1)
+        {
+            safe->host.startMidiLearn (paramId);
+            safe->learnBanner.setVisible (true);
+            safe->learnBanner.toFront (false);
+        }
+        else if (result == 2) safe->host.removeMidiMapping (paramId);
+        else if (result == 3) safe->openSettings();
+    });
 }
 
 void ManifestEditor::setParam (const char* paramId, float nativeValue)
@@ -461,6 +514,9 @@ void ManifestEditor::timerCallback()
 
     host.pollEngine();   // message-thread housekeeping (free retired modes)
 
+    if (learnBanner.isVisible() && ! host.isMidiLearnActive())
+        learnBanner.setVisible (false);   // learn completed (CC captured) or cancelled
+
     // The keyboard's own scroll buttons give no callback — poll the first visible
     // key so the captions band tracks scrolling.
     if (keyLabelStrip.isVisible())
@@ -493,6 +549,12 @@ void ManifestEditor::timerCallback()
 
 bool ManifestEditor::handleKey (const juce::KeyPress& key)
 {
+    if (key == juce::KeyPress::escapeKey && host.isMidiLearnActive())
+    {
+        host.cancelMidiLearn();
+        learnBanner.setVisible (false);
+        return true;
+    }
     const auto c = key.getTextCharacter();
     if (c == 'z' || c == 'Z') { shiftKeyboardOctave (-1); return true; }
     if (c == 'x' || c == 'X') { shiftKeyboardOctave (+1); return true; }
@@ -528,6 +590,12 @@ void ManifestEditor::shiftKeyboardOctave (int deltaOctaves)
         lowestVisibleKey = juce::jlimit (usedLow, maxFirst, lowestVisibleKey + deltaOctaves * 12);
     }
     keyboard.setLowestVisibleKey (lowestVisibleKey);
+}
+
+void ManifestEditor::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu())
+        showContextMenu ({}, nullptr);
 }
 
 void ManifestEditor::paint (juce::Graphics& g)
@@ -630,6 +698,9 @@ void ManifestEditor::resized()
 
     // Captions band shares the keyboard's final x-space so key rects map 1:1.
     keyLabelStrip.setBounds (keyboard.getX(), wheelTop - stripH, keyboard.getWidth(), stripH);
+
+    learnBanner.setBounds (getLocalBounds().withSizeKeepingCentre (420, 26)
+                               .withY (kTopStrip + 8));
 
     if (settingsPanel != nullptr)
         settingsPanel->setBounds (getLocalBounds());

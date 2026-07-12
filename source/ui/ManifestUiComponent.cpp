@@ -26,6 +26,7 @@ public:
     std::function<void (double)> onChange;
     std::function<void (juce::Component&, const juce::String&)> onShowValue;   // live value readout
     std::function<void()> onHideValue;
+    std::function<void()> onRightClick;   // context menu (MIDI Learn / Settings)
 
     double getValue() const noexcept { return value; }
 
@@ -59,6 +60,8 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
+        if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(); return; }
+
         // Option (macOS) / Ctrl (Windows) + click resets to the manifest default value.
        #if JUCE_MAC
         const bool resetClick = e.mods.isAltDown();       // Option key on macOS
@@ -126,6 +129,7 @@ public:
         : images (std::move (imgs)), state (initial) {}
 
     std::function<void (int)> onChange;
+    std::function<void()> onRightClick;   // context menu (MIDI Learn / Settings)
     int getState() const noexcept { return state; }
 
     /** Set the state WITHOUT firing onChange (used for external sync). */
@@ -141,8 +145,9 @@ public:
                          juce::RectanglePlacement::stretchToFit);
     }
 
-    void mouseDown (const juce::MouseEvent&) override
+    void mouseDown (const juce::MouseEvent& e) override
     {
+        if (e.mods.isPopupMenu()) { if (onRightClick) onRightClick(); return; }
         if (images.size() < 2)
             return;
         state = (state + 1) % (int) images.size();
@@ -267,6 +272,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
             applyVisibilityBindings (*cp, v);   // drive any LED segment images
         };
         knob->onShowValue = [this] (juce::Component& k, const juce::String& t) { showValueBubble (k, t); };
+        knob->onRightClick = [this, cp, knob] { if (onControlRightClick) onControlRightClick (*cp, *knob); };
         knob->onHideValue = [this] { if (valueBubble) valueBubble->setVisible (false); };
         addAndMakeVisible (knob);
         knob->setVisible (c.visible);
@@ -291,6 +297,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         const Button* bp = &b;
         const int bi = i;
         btn->onChange = [this, bp, bi] (int s) { handleButton (*bp, bi, s); };
+        btn->onRightClick = [this, bp, bi, btn] { if (onButtonRightClick) onButtonRightClick (*bp, bi, *btn); };
         addAndMakeVisible (btn);
         btn->setVisible (b.visible);
 
@@ -641,6 +648,12 @@ void ManifestUiComponent::paint (juce::Graphics& g)
     }
     else
         g.fillAll (juce::Colour (0xff222222));
+}
+
+void ManifestUiComponent::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && onBackgroundRightClick)
+        onBackgroundRightClick();
 }
 
 void ManifestUiComponent::resized()

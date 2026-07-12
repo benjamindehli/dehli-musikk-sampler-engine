@@ -63,6 +63,16 @@ public:
         answers from its wrapperType — the only reliable source. */
     virtual bool isStandaloneBuild() const { return false; }
 
+    // ── MIDI learn (right-click a controller) ───────────────────────────────
+    // startMidiLearn arms capture: the next incoming CC (on the audio thread) maps
+    // to `paramId` and learn ends. isMidiLearnActive turns false on completion or
+    // cancel — the editor polls it for its banner. Mappings persist in the state.
+    virtual void startMidiLearn (const juce::String& /*paramId*/) {}
+    virtual void cancelMidiLearn() {}
+    virtual bool isMidiLearnActive() const { return false; }
+    virtual int  getMidiMappingCc (const juce::String& /*paramId*/) const { return -1; }
+    virtual void removeMidiMapping (const juce::String& /*paramId*/) {}
+
     /** Async load state for the progress overlay. isLoading()=true while the active mode
         is decoding on the background thread; loadProgress() is 0..1. */
     virtual bool  isLoading() const { return false; }
@@ -97,6 +107,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;   // right-click outside the face → Settings menu
     void parentHierarchyChanged() override;   // theme the Standalone window when attached
     bool keyPressed (const juce::KeyPress& key) override { return handleKey (key); }
 
@@ -106,6 +117,8 @@ private:
     void refreshWidgets();
     bool isFirstMenu (const Menu& menu) const;   // structural (Ui tree is copied in the renderer)
     void setParam (const char* paramId, float nativeValue);
+    void openSettings();
+    void showContextMenu (const juce::String& paramId, juce::Component* target);   // empty id → Settings only
     void shiftKeyboardOctave (int deltaOctaves);
     void timerCallback() override;
 
@@ -203,6 +216,7 @@ private:
     juce::Component::SafePointer<juce::DocumentWindow> themedWindow;   // standalone window we styled (if any)
     juce::TextButton settingsButton { "Settings" };   // opens the settings overlay
     std::unique_ptr<SettingsPanel> settingsPanel;      // created lazily on first open
+    juce::TextButton learnBanner;                      // "MIDI Learn armed" banner; click = cancel
     juce::Slider masterSlider;   // master output fader (top strip, between "Out" and the meter)
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
     LevelMeter outputMeter;

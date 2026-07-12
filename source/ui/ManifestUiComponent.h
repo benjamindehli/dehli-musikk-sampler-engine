@@ -36,6 +36,12 @@ public:
     /** A dropdown menu selected `optionIndex` (0-based). */
     std::function<void (const Menu&, int optionIndex)> onMenuChanged;
 
+    // Right-click (context menu) hooks: on a knob/button widget → the editor shows
+    // MIDI Learn etc.; on the background → the editor shows the plain menu.
+    std::function<void (const Control&, juce::Component&)> onControlRightClick;
+    std::function<void (const Button&, int buttonIndex, juce::Component&)> onButtonRightClick;
+    std::function<void()> onBackgroundRightClick;
+
     /** Push externally-held values (e.g. host automation / restored params) into the
         widgets WITHOUT firing the change callbacks. Each callback is asked, per
         widget model, what it should display; std::nullopt leaves it untouched. The
@@ -46,6 +52,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;   // background right-click → context menu
 
 private:
     class FilmstripKnob;
