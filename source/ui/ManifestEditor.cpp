@@ -132,27 +132,23 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
         addAndMakeVisible (*c.first);
     }
 
-    bendLabel.setText ("Bend", juce::dontSendNotification);
-    bendLabel.setJustificationType (juce::Justification::centredRight);
-    bendLabel.setColour (juce::Label::textColourId, juce::Colour (0xfffdfeff));
-    addAndMakeVisible (bendLabel);
-
-    bendRangeSlider.setSliderStyle (juce::Slider::IncDecButtons);
-    bendRangeSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 36, 22);
-    bendRangeSlider.setTextValueSuffix (" st");
-    addAndMakeVisible (bendRangeSlider);
-    bendRangeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        host.getApvts(), params::id::pitchBendRange, bendRangeSlider);
-
-    // Performance/fidelity toggle: when on (default), notes skip drawbars pulled fully
-    // down; off = every group triggers so raising a drawbar mid-note brings it in.
-    skipMutedButton.setColour (juce::ToggleButton::textColourId, juce::Colour (0xfffdfeff));
-    skipMutedButton.setTooltip ("Poly-save: notes skip drawbars/groups pulled fully down, saving "
-                                "polyphony and CPU. Turn off to let raising a drawbar while a note is "
-                                "held bring it in (uses more voices).");
-    addAndMakeVisible (skipMutedButton);
-    skipMutedAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
-        host.getApvts(), params::id::skipMuted, skipMutedButton);
+    // Player-level options live in the settings overlay (gear button) — see
+    // SettingsPanel.h. Created lazily so a plugin without the panel open pays nothing.
+    settingsButton.onClick = [this]
+    {
+        if (settingsPanel == nullptr)
+        {
+            settingsPanel = std::make_unique<SettingsPanel> (host.getApvts(), host.hasSequencer(),
+                                                             host.isStandaloneBuild());
+            settingsPanel->setLookAndFeel (&stripLnf);
+            settingsPanel->onClose = [this] { settingsPanel->setVisible (false); };
+            addChildComponent (*settingsPanel);
+        }
+        settingsPanel->setBounds (getLocalBounds());
+        settingsPanel->setVisible (true);
+        settingsPanel->toFront (true);
+    };
+    addAndMakeVisible (settingsButton);
 
     masterSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     masterSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);   // no inline number
@@ -177,7 +173,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     };
     stripLnf.setColourScheme (grayscale);
     for (juce::Component* c : { static_cast<juce::Component*> (&modeSelector),
-                                static_cast<juce::Component*> (&bendRangeSlider),
+                                static_cast<juce::Component*> (&settingsButton),
                                 static_cast<juce::Component*> (&masterSlider) })
         c->setLookAndFeel (&stripLnf);
 
@@ -207,7 +203,9 @@ ManifestEditor::~ManifestEditor()
     pitchDriftWheel.setLookAndFeel (nullptr);
     volDriftWheel.setLookAndFeel (nullptr);
     modeSelector.setLookAndFeel (nullptr);
-    bendRangeSlider.setLookAndFeel (nullptr);
+    settingsButton.setLookAndFeel (nullptr);
+    if (settingsPanel != nullptr)
+        settingsPanel->setLookAndFeel (nullptr);
     masterSlider.setLookAndFeel (nullptr);
     if (themedWindow != nullptr)   // detach before our LnF member dies (standalone only)
         themedWindow->setLookAndFeel (nullptr);
@@ -551,10 +549,7 @@ void ManifestEditor::resized()
         modeSelector.setBounds (top.removeFromLeft (220).withSizeKeepingCentre (220, kCtrlH));
         top.removeFromLeft (12);
     }
-    bendLabel.setBounds (top.removeFromLeft (40));
-    bendRangeSlider.setBounds (top.removeFromLeft (96).withSizeKeepingCentre (96, kCtrlH));
-    top.removeFromLeft (16);
-    skipMutedButton.setBounds (top.removeFromLeft (110).withSizeKeepingCentre (110, kCtrlH));
+    settingsButton.setBounds (top.removeFromLeft (84).withSizeKeepingCentre (76, kCtrlH));
 
     // Top-right group laid out left→right — "Out" label · master fader · level meter.
     auto outArea = top.removeFromRight (230).reduced (8, 3);
@@ -635,6 +630,9 @@ void ManifestEditor::resized()
 
     // Captions band shares the keyboard's final x-space so key rects map 1:1.
     keyLabelStrip.setBounds (keyboard.getX(), wheelTop - stripH, keyboard.getWidth(), stripH);
+
+    if (settingsPanel != nullptr)
+        settingsPanel->setBounds (getLocalBounds());
 
     loadingOverlay.setBounds (getLocalBounds());   // covers everything while decoding
 }

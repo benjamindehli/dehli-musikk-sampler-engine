@@ -12,6 +12,7 @@
 #include <model/Manifest.h>
 #include "ManifestUiComponent.h"
 #include "ColouredKeyboard.h"
+#include "SettingsPanel.h"
 #include "WheelLookAndFeel.h"
 #include "StandaloneWindowLookAndFeel.h"
 #include "LevelMeter.h"
@@ -53,6 +54,14 @@ public:
 
     /** Plugin display name (e.g. "Strykebrett") shown in the bottom strip. Empty → none. */
     virtual juce::String getPluginName() const { return {}; }
+
+    /** True when any mode carries sequence triggers — the settings overlay only
+        shows the sequencer block for libraries that actually sequence. */
+    virtual bool hasSequencer() const { return false; }
+
+    /** True in the Standalone build (no host transport to follow). The processor
+        answers from its wrapperType — the only reliable source. */
+    virtual bool isStandaloneBuild() const { return false; }
 
     /** Async load state for the progress overlay. isLoading()=true while the active mode
         is decoding on the background thread; loadProgress() is 0..1. */
@@ -102,7 +111,7 @@ private:
 
     ManifestEditorHost& host;
 
-    juce::Label    versionLabel, modeLabel, bendLabel, creditLabel;   // versionLabel + creditLabel: bottom strip
+    juce::Label    versionLabel, modeLabel, creditLabel;   // versionLabel + creditLabel: bottom strip
     juce::ComboBox modeSelector;
     ColouredKeyboard keyboard;
     juce::Slider pitchWheel, modWheel;                 // left of the keyboard
@@ -192,10 +201,8 @@ private:
     StandaloneWindowLookAndFeel standaloneLnf;
     juce::LookAndFeel_V4 stripLnf;   // grayscale scheme for the top-strip combo/steppers
     juce::Component::SafePointer<juce::DocumentWindow> themedWindow;   // standalone window we styled (if any)
-    juce::Slider bendRangeSlider;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bendRangeAttachment;
-    juce::ToggleButton skipMutedButton { "Poly-save" };   // skip triggering muted groups (drawbars fully down)
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> skipMutedAttachment;
+    juce::TextButton settingsButton { "Settings" };   // opens the settings overlay
+    std::unique_ptr<SettingsPanel> settingsPanel;      // created lazily on first open
     juce::Slider masterSlider;   // master output fader (top strip, between "Out" and the meter)
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
     LevelMeter outputMeter;

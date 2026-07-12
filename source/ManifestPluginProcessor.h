@@ -101,6 +101,20 @@ public:
     }
     juce::String getPluginVersion() const override { return assets.version; }
     juce::String getPluginName() const override { return getName(); }
+    bool isStandaloneBuild() const override
+    {
+        // Belt and braces: the custom standalone app should stamp wrapperType, but
+        // if either signal says standalone, there is no host transport to follow.
+        return wrapperType == wrapperType_Standalone
+            || juce::JUCEApplicationBase::isStandaloneApp();
+    }
+    bool hasSequencer() const override
+    {
+        for (const auto& m : library.modes)
+            if (! m.sequenceTriggers.isEmpty())
+                return true;
+        return false;
+    }
     bool  isLoading() const override    { return engine.isLoading(); }
     float loadProgress() const override { return engine.loadProgress(); }
     void  pollEngine() override         { engine.drainRetired(); }   // free retired modes (message thread)
@@ -138,11 +152,19 @@ private:
     std::vector<std::unique_ptr<params::CompiledMode>> compiledModes;
 
     // Always-present global params, resolved once (string map lookups per block add up).
-    std::atomic<float>* prmPitchBendRange { nullptr };
+    std::atomic<float>* prmPitchBendUp    { nullptr };
+    std::atomic<float>* prmPitchBendDown  { nullptr };
     std::atomic<float>* prmMasterOutput   { nullptr };
     std::atomic<float>* prmPitchDrift     { nullptr };
     std::atomic<float>* prmVolumeDrift    { nullptr };
     std::atomic<float>* prmSkipMuted      { nullptr };
+    std::atomic<float>* prmMaxPolyphony   { nullptr };
+    std::atomic<float>* prmSeqTempoSync   { nullptr };
+    std::atomic<float>* prmSeqSyncDaw     { nullptr };
+    std::atomic<float>* prmSeqBpm         { nullptr };
+    std::atomic<float>* prmSeqNoteValue   { nullptr };
+    std::atomic<float>* prmMasterTune     { nullptr };
+    std::atomic<float>* prmVelocityCurve  { nullptr };
 
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };

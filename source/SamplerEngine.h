@@ -109,6 +109,12 @@ public:
     /** Runtime SEQ_INDEX offset for the active mode (e.g. the chord-ordering menu). */
     void setSequencerIndexOffset (int offset);
 
+    /** Sequencer tempo sync (settings menu): when on, steps are 16th notes at the
+        given BPM (host tempo or the manual field — the processor decides which). */
+    void setSequencerTempoSync (bool on) { seqTempoSync.store (on); }
+    void setSequencerBpm (double bpm)    { seqBpm.store (bpm); }
+    void setSequencerNoteValue (double beatsPerStep) { seqBeatsPerStep.store (beatsPerStep); }
+
     // Amp envelope + per-group volume overrides for the active mode (ENV_*, AMP_VOLUME).
     void setAmpAttack (float seconds);
     void setAmpDecay (float seconds);
@@ -137,9 +143,22 @@ public:
     void setGroupAmpVelTrack (int groupIndex, float amount);
 
     /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
-    void setPitchBendRange (float semitones) { pitchBendRange.store (semitones); }
+    void setPitchBendRange (float upSemitones, float downSemitones)
+    {
+        pitchBendUp.store (upSemitones);
+        pitchBendDown.store (downSemitones);
+    }
     void setPitchDriftAmount  (float a) { pitchDriftAmount.store (a); }   // pitch-drift wheel (0..1)
     void setVolumeDriftAmount (float a) { volumeDriftAmount.store (a); }  // volume-drift wheel (0..1)
+
+    /** Runtime polyphony cap (settings menu); 0 = engine maximum. Applied per block. */
+    void setMaxPolyphony (int numVoices) { maxPolyphony.store (numVoices); }
+
+    /** Master tuning in cents (settings menu). Applied per block, live. */
+    void setMasterTune (float cents) { masterTuneCents.store (cents); }
+
+    /** Velocity response curve: 0 soft · 1 linear · 2 hard (settings menu). */
+    void setVelocityCurve (int curve) { velocityCurve.store (curve); }
 
     /** Skip triggering groups muted to silence (drawbar fully down). Default on — a big
         polyphony saving; off = every group triggers so mid-note drawbar changes sound. */
@@ -245,7 +264,13 @@ private:
     std::atomic<bool>  ovSequencerIndexTouched { false };
     std::atomic<int>    ovSequencerIndex { 0 };
 
-    std::atomic<float> pitchBendRange { 2.0f };   // semitones; applied to current voices per block
+    std::atomic<float> pitchBendUp { 2.0f }, pitchBendDown { 2.0f };   // semitones; applied per block
+    std::atomic<int>   maxPolyphony { 0 };   // runtime voice cap; 0 = engine maximum
+    std::atomic<bool>   seqTempoSync { false };   // sequencer: 16th-note steps at seqBpm
+    std::atomic<double> seqBpm { 120.0 };
+    std::atomic<double> seqBeatsPerStep { 0.25 };
+    std::atomic<float>  masterTuneCents { 0.0f }; // settings master tuning
+    std::atomic<int>    velocityCurve { 1 };      // 0 soft · 1 linear · 2 hard
     std::atomic<float> pitchDriftAmount  { 0.0f };  // pitch-drift wheel (0..1); applied to voices per block
     std::atomic<float> volumeDriftAmount { 0.0f };  // volume-drift wheel (0..1)
     std::atomic<bool>  skipMutedGroups   { true };  // note-on: skip silent groups (drawbar fully down)

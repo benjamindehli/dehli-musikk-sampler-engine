@@ -372,14 +372,21 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (ovSequencerRateTouched.load())
         cur->sequencer.setRate (ovSequencerRate.load());
+    cur->sequencer.setTempoSync (seqTempoSync.load());
+    cur->sequencer.setBpm (seqBpm.load());
+    cur->sequencer.setBeatsPerStep (seqBeatsPerStep.load());
     if (ovSequencerIndexTouched.load())
         cur->sequencer.setIndexOffset (ovSequencerIndex.load());
 
     applyFxOverrides (*cur);
-    cur->voices.setPitchBendRange (pitchBendRange.load());
+    cur->voices.setPitchBendRange (pitchBendUp.load(), pitchBendDown.load());
     cur->voices.setPitchDriftAmount (pitchDriftAmount.load());
     cur->voices.setVolumeDriftAmount (volumeDriftAmount.load());
     cur->voices.setSkipMutedGroups (skipMutedGroups.load());
+    cur->voices.setMasterTune (masterTuneCents.load());
+    cur->voices.setVelocityCurve (velocityCurve.load());
+    if (const int cap = maxPolyphony.load(); cap > 0)
+        cur->voices.setMaxPolyphony (cap);
 
     // Sequencer turns trigger keys into the strummed/played notes; non-trigger
     // keys pass straight through. In select+strum (Omnichord) mode a chord change

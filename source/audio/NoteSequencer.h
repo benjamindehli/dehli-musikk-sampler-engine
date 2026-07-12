@@ -40,6 +40,17 @@ public:
         each trigger's own rate. Thread-safe (the future StrumSpeed control). */
     void setRate (double stepsPerSecond);
 
+    /** Tempo-synced mode (settings menu): steps snap to the note value set by
+        setBeatsPerStep at `bpm`, overriding ALL free-mode rates including the
+        setRate override (a StrumSpeed knob applies that override every block, so
+        it is never unset — it is the free-mode control). Sampled at strum start. */
+    void setTempoSync (bool on) { tempoSync.store (on); }
+    void setBpm (double bpm)    { syncBpm.store (juce::jmax (1.0, bpm)); }
+
+    /** Step length in BEATS for tempo-synced mode (0.25 = 16th note, 1.0/6.0 =
+        16th triplet, 0.375 = dotted 16th, ...). */
+    void setBeatsPerStep (double beats) { beatsPerStep.store (juce::jmax (1.0e-3, beats)); }
+
     /** Added to every trigger's sequence index (clamped to the valid range) when a
         sequence starts. The runtime SEQ_INDEX — e.g. Omni-84's chord-ordering menu
         selecting a 0/84/168/252 block. Thread-safe. */
@@ -98,6 +109,9 @@ private:
 
     std::atomic<double> rateOverride { 0.0 };   // <= 0 → per-trigger rate
     std::atomic<int>    indexOffset { 0 };       // added to trigger.sequence (clamped)
+    std::atomic<bool>   tempoSync { false };     // step = 1/16 note at syncBpm
+    std::atomic<double> syncBpm { 120.0 };
+    std::atomic<double> beatsPerStep { 0.25 };   // synced step length (0.25 = 16th)
     std::vector<Active> active;
     juce::int64 streamPos = 0;
 

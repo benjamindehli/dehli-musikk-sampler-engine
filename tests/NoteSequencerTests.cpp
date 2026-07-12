@@ -74,6 +74,58 @@ public:
         testChordChangeMorphs();
         testStrumKeyReleaseStops();
         testReleasedTailMorphs();
+        testTempoSync();
+    }
+
+    void testTempoSync()
+    {
+        beginTest ("tempo sync: steps are 16th notes at the set BPM, overriding trigger rate");
+        auto mode = loadMode (strumJson (0, true));   // trigger rate 480 — overridden below
+        dm::NoteSequencer s;
+        s.prepare (kSR);
+        s.configure (mode);
+
+        // 600 BPM, 16th steps → 40 steps/s → 1200 samples per step at 48 kHz.
+        s.setTempoSync (true);
+        s.setBpm (600.0);
+        s.setBeatsPerStep (0.25);
+
+        juce::MidiBuffer in, out;
+        in.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
+        s.process (in, out, 4096);
+        auto ev = collect (out);
+        expectEquals (findOn (ev, 60), 0);
+        expectEquals (findOn (ev, 64), 1200);
+        expectEquals (findOn (ev, 67), 2400);
+
+        // 8th-note steps at the same tempo → half the rate → 2400-sample steps.
+        s.setBeatsPerStep (0.5);
+        juce::MidiBuffer in8, out8;
+        in8.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
+        s.process (in8, out8, 8192);
+        auto e8 = collect (out8);
+        const int b8 = findOn (e8, 60);
+        expect (b8 >= 0 && findOn (e8, 64) == b8 + 2400, "8th steps double the step length");
+
+        // A StrumSpeed knob keeps the rate override applied every block — tempo
+        // sync must still win while on (the knob is the free-mode control).
+        s.setRate (480.0);
+        juce::MidiBuffer inO, outO;
+        inO.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
+        s.process (inO, outO, 8192);
+        auto eO = collect (outO);
+        const int bO = findOn (eO, 60);
+        expect (bO >= 0 && findOn (eO, 64) == bO + 2400, "tempo sync overrides the rate override");
+        s.setRate (0.0);
+
+        // Back to free: per-trigger rate (480 steps/s → 100-sample steps) again.
+        s.setTempoSync (false);
+        juce::MidiBuffer in2, out2;
+        in2.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
+        s.process (in2, out2, 4096);
+        auto e2 = collect (out2);
+        const int base = findOn (e2, 60);
+        expect (base >= 0 && findOn (e2, 64) == base + 100, "free mode restores the trigger rate");
     }
 
     void testReleasedTailMorphs()

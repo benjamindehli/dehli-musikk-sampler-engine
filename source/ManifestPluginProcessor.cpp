@@ -36,11 +36,19 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
     // processBlock indexes by the active mode. Also resolve the global param pointers.
     for (const auto& m : library.modes)
         compiledModes.push_back (std::make_unique<params::CompiledMode> (m, *apvts));
-    prmPitchBendRange = apvts->getRawParameterValue (params::id::pitchBendRange);
+    prmPitchBendUp    = apvts->getRawParameterValue (params::id::pitchBendUp);
+    prmPitchBendDown  = apvts->getRawParameterValue (params::id::pitchBendDown);
     prmMasterOutput   = apvts->getRawParameterValue (params::id::masterOutput);
     prmPitchDrift     = apvts->getRawParameterValue (params::id::pitchDrift);
     prmVolumeDrift    = apvts->getRawParameterValue (params::id::volumeDrift);
     prmSkipMuted      = apvts->getRawParameterValue (params::id::skipMuted);
+    prmMaxPolyphony   = apvts->getRawParameterValue (params::id::maxPolyphony);
+    prmSeqTempoSync   = apvts->getRawParameterValue (params::id::seqTempoSync);
+    prmSeqSyncDaw     = apvts->getRawParameterValue (params::id::seqSyncDaw);
+    prmSeqBpm         = apvts->getRawParameterValue (params::id::seqBpm);
+    prmSeqNoteValue   = apvts->getRawParameterValue (params::id::seqNoteValue);
+    prmMasterTune     = apvts->getRawParameterValue (params::id::masterTune);
+    prmVelocityCurve  = apvts->getRawParameterValue (params::id::velocityCurve);
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor()
@@ -329,11 +337,47 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
 
     if (loaded && apvts != nullptr)
     {
-        if (prmPitchBendRange) engine.setPitchBendRange (prmPitchBendRange->load());
+        if (prmPitchBendUp && prmPitchBendDown)
+            engine.setPitchBendRange (prmPitchBendUp->load(), prmPitchBendDown->load());
         if (prmMasterOutput)   engine.setMasterOutputGain (juce::Decibels::decibelsToGain (prmMasterOutput->load(), -60.0f));
         if (prmPitchDrift)     engine.setPitchDriftAmount (prmPitchDrift->load());
         if (prmVolumeDrift)    engine.setVolumeDriftAmount (prmVolumeDrift->load());
         if (prmSkipMuted)      engine.setSkipMutedGroups (prmSkipMuted->load() > 0.5f);
+        if (prmMaxPolyphony)
+        {
+            const int idx = juce::jlimit (0, params::kNumPolyphonyChoices - 1,
+                                          (int) prmMaxPolyphony->load());
+            engine.setMaxPolyphony (params::kPolyphonyChoices[idx]);
+        }
+
+        if (prmMasterTune)    engine.setMasterTune (prmMasterTune->load());
+        if (prmVelocityCurve) engine.setVelocityCurve (juce::jlimit (0, 2, (int) prmVelocityCurve->load()));
+
+        // Sequencer tempo sync: manual BPM, or the host's when following the DAW
+        // (never in Standalone — there is no host transport to follow).
+        if (prmSeqTempoSync)
+        {
+            const bool sync = prmSeqTempoSync->load() > 0.5f;
+            engine.setSequencerTempoSync (sync);
+            if (sync)
+            {
+                double bpm = prmSeqBpm != nullptr ? (double) prmSeqBpm->load() : 120.0;
+                const bool followHost = prmSeqSyncDaw != nullptr && prmSeqSyncDaw->load() > 0.5f
+                                        && ! isStandaloneBuild();
+                if (followHost)
+                    if (auto* ph = getPlayHead())
+                        if (const auto pos = ph->getPosition())
+                            if (const auto hostBpm = pos->getBpm())
+                                bpm = *hostBpm;
+                engine.setSequencerBpm (bpm);
+
+                const int nv = prmSeqNoteValue != nullptr
+                                   ? juce::jlimit (0, params::kNumNoteValues - 1,
+                                                   (int) prmSeqNoteValue->load())
+                                   : params::kDefaultNoteValue;
+                engine.setSequencerNoteValue (params::kNoteValueBeats[nv]);
+            }
+        }
 
         // The active mode's pre-compiled binding plan (built once in the constructor):
         // allocation-free CC routing, note switches and param→engine apply.

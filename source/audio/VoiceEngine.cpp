@@ -150,6 +150,8 @@ float readLooped (const SincTable& st, const juce::AudioBuffer<float>& buf, int 
 VoiceEngine::VoiceEngine()
 {
     voices.resize (kMaxVoices + kStealFadeVoices);   // tail slots = steal fade-outs only
+    if (voiceCap <= 0)
+        voiceCap = kMaxVoices;   // default: full pool (a settings cap survives re-prepare)
 }
 
 void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int numChannels)
@@ -493,8 +495,10 @@ const VoiceEngine::Zone* VoiceEngine::pickZoneInGroup (int group, int note, int 
 
 VoiceEngine::Voice* VoiceEngine::allocateVoice()
 {
-    // Regular slots only — the tail slots are reserved for steal fade-outs below.
-    for (int i = 0; i < kMaxVoices; ++i)
+    // Regular slots only, within the runtime polyphony cap — the tail slots are
+    // reserved for steal fade-outs below.
+    const int cap = juce::jlimit (1, kMaxVoices, voiceCap > 0 ? voiceCap : kMaxVoices);
+    for (int i = 0; i < cap; ++i)
         if (! voices[(size_t) i].active)
             return &voices[(size_t) i];
 
@@ -504,7 +508,7 @@ VoiceEngine::Voice* VoiceEngine::allocateVoice()
     // the original slot to the new note. Voice holds no heap-owning members (buffers/
     // tags are pointers into stable storage), so the copy is allocation-free.
     Voice* oldest = &voices.front();
-    for (int i = 1; i < kMaxVoices; ++i)
+    for (int i = 1; i < cap; ++i)
         if (voices[(size_t) i].startOrder < oldest->startOrder)
             oldest = &voices[(size_t) i];
 
@@ -529,6 +533,11 @@ VoiceEngine::Voice* VoiceEngine::allocateVoice()
 
 void VoiceEngine::handleNoteOn (int note, float velocity)
 {
+    // Velocity response curve (settings): soft eases reaching full level, hard
+    // demands it. Shaped BEFORE layer selection so curves also reach the layers.
+    if (velocityCurve == 0)      velocity = std::sqrt (velocity);
+    else if (velocityCurve == 2) velocity = velocity * velocity;
+
     const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
     if (note >= 0 && note < 128)
         noteOnVelocity[note] = velocity;   // remembered for the release-trigger groups
@@ -753,8 +762,10 @@ void VoiceEngine::handleSustain (int value)
 
 void VoiceEngine::handlePitchWheel (int wheelValue)
 {
-    // Centre (8192) → no bend → multiplier 1.0. Range is configurable (default ±2).
-    const double semis = (wheelValue - 8192) / 8192.0 * bendRangeSemitones;
+    // Centre (8192) → no bend → multiplier 1.0. Up and down ranges are configured
+    // separately (settings menu), so a whole-tone lift can sit next to a fifth drop.
+    const double frac  = (wheelValue - 8192) / 8192.0;
+    const double semis = frac * (frac >= 0.0 ? bendUpSemitones : bendDownSemitones);
     pitchBendMul = std::pow (2.0, semis / 12.0);
 }
 
@@ -783,7 +794,7 @@ void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample
                                   && groupHasTrem[v.groupIndex]
                                   && (int) groupTrem[(size_t) v.groupIndex].size() >= startSample + numSamples;
         // Combined pitch multiplier for this voice: global vibrato × its group's vibrato.
-        double tuneMul = globalTuningMul;
+        double tuneMul = globalTuningMul * masterTuneMul;
         if (v.groupIndex >= 0 && v.groupIndex < groupTuningModMul.size())
             tuneMul *= groupTuningModMul[v.groupIndex];
 
@@ -1171,6 +1182,11 @@ void VoiceEngine::setGroupTuning (int groupIndex, float semitones)
 {
     if (groupIndex >= 0 && groupIndex < groupTuningMul.size())
         groupTuningMul.set (groupIndex, std::pow (2.0, semitones / 12.0));
+}
+
+void VoiceEngine::setMaxPolyphony (int numVoices)
+{
+    voiceCap = juce::jlimit (1, kMaxVoices, numVoices);
 }
 
 void VoiceEngine::setGroupVelTrack (int groupIndex, float amount)

@@ -96,7 +96,11 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     a.done       = false;
     a.fired.clear();   // keeps capacity
 
-    double rate = rateOverride.load();
+    // Tempo sync WINS over everything, including the SEQ_PLAYBACK_RATE override —
+    // libraries with a StrumSpeed knob (Omni-84) apply that override every block,
+    // so it is never unset; the knob is the FREE-mode speed control.
+    double rate = tempoSync.load() ? syncBpm.load() / 60.0 / beatsPerStep.load() : 0.0;
+    if (rate <= 0.0) rate = rateOverride.load();
     if (rate <= 0.0) rate = keyRate;   // per-strum-key rate (select+strum mode)
     if (rate <= 0.0) rate = t.rate;
     if (rate <= 0.0) rate = 10.0;

@@ -245,7 +245,39 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
     if (modeNames.isEmpty()) modeNames.add ("Default");
     p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { id::mode, 1 }, "Mode", modeNames, 0));
 
-    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendRange, 1 }, "Pitch Bend Range", 1, 12, 2));
+    {
+        StringArray polyOpts;
+        for (int i = 0; i < kNumPolyphonyChoices; ++i)
+            polyOpts.add (String (kPolyphonyChoices[i]) + " voices");
+        p.push_back (std::make_unique<AudioParameterChoice> (
+            ParameterID { id::maxPolyphony, 1 }, "Max Polyphony", polyOpts, kNumPolyphonyChoices - 1));
+    }
+
+    // Sequencer tempo sync (settings menu): free-running by default; synced = 16th
+    // steps at the host tempo (DAW builds; default follows the DAW) or a manual BPM.
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { id::seqTempoSync, 1 }, "Sequencer Tempo Sync", false));
+    p.push_back (std::make_unique<AudioParameterBool> (ParameterID { id::seqSyncDaw, 1 }, "Sequencer Sync To DAW", true));
+    p.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { id::seqBpm, 1 }, "Sequencer BPM",
+        juce::NormalisableRange<float> (30.0f, 300.0f, 0.1f), 120.0f));
+    {
+        StringArray nvOpts;
+        for (int i = 0; i < kNumNoteValues; ++i)
+            nvOpts.add (kNoteValueLabels[i]);
+        p.push_back (std::make_unique<AudioParameterChoice> (
+            ParameterID { id::seqNoteValue, 1 }, "Sequencer Note Value", nvOpts, kDefaultNoteValue));
+    }
+
+    p.push_back (std::make_unique<AudioParameterFloat> (
+        ParameterID { id::masterTune, 1 }, "Master Tuning",
+        juce::NormalisableRange<float> (-100.0f, 100.0f, 1.0f), 0.0f));
+    p.push_back (std::make_unique<AudioParameterChoice> (
+        ParameterID { id::velocityCurve, 1 }, "Velocity Curve",
+        StringArray { "Soft", "Linear", "Hard" }, 1));
+
+    // Separate up/down wheel ranges (settings menu). 0 disables that direction.
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendUp,   1 }, "Pitch Bend Up",   0, 24, 2));
+    p.push_back (std::make_unique<AudioParameterInt> (ParameterID { id::pitchBendDown, 1 }, "Pitch Bend Down", 0, 24, 2));
 
     // User master output fader (dB, post-everything). Independent of the preset's
     // AMP_VOLUME master. -60 dB = silence, 0 dB = unity, +6 dB = boost.

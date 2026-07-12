@@ -27,13 +27,41 @@ namespace dm::params
 namespace id
 {
     inline constexpr const char* mode           = "mode";
-    inline constexpr const char* pitchBendRange = "pitchBendRange";
+    inline constexpr const char* pitchBendUp    = "pitchBendUp";     // semitones, wheel above centre
+    inline constexpr const char* pitchBendDown  = "pitchBendDown";   // semitones, wheel below centre
     inline constexpr const char* chordOrder     = "chordOrder";   // first dropdown menu
     inline constexpr const char* masterOutput   = "masterOutput"; // user master output fader (dB)
     inline constexpr const char* pitchDrift     = "pitchDrift";   // global pitch-drift wheel (0..1)
     inline constexpr const char* volumeDrift    = "volumeDrift";  // global volume-drift wheel (0..1)
     inline constexpr const char* skipMuted      = "skipMuted";    // skip triggering silent groups (bool)
+    inline constexpr const char* maxPolyphony   = "maxPolyphony"; // voice-cap choice (see kPolyphonyChoices)
+    inline constexpr const char* seqTempoSync   = "seqTempoSync"; // sequencer: free (off) / 16th steps at BPM (on)
+    inline constexpr const char* seqSyncDaw     = "seqSyncDaw";   // synced BPM follows the host (DAW builds only)
+    inline constexpr const char* seqBpm         = "seqBpm";       // manual BPM when not following the host
+    inline constexpr const char* seqNoteValue   = "seqNoteValue"; // synced step length (see kNoteValue*)
+    inline constexpr const char* masterTune     = "masterTune";   // master tuning in cents
+    inline constexpr const char* velocityCurve  = "velocityCurve"; // 0 soft · 1 linear · 2 hard
 }
+
+// Voice-cap choices for the maxPolyphony parameter (choice index → voice count).
+// The engine clamps to its compile-time pool, so the last entry = "engine maximum".
+inline constexpr int kPolyphonyChoices[] = { 8, 16, 32, 64, 128 };
+inline constexpr int kNumPolyphonyChoices = 5;
+
+// Tempo-synced sequencer step lengths (choice index → label / beats). Triplet =
+// 2/3 of the straight value, dotted = 1.5x.
+inline constexpr const char* kNoteValueLabels[] = {
+    "1/4", "1/4 triplet", "1/4 dotted",
+    "1/8", "1/8 triplet", "1/8 dotted",
+    "1/16", "1/16 triplet", "1/16 dotted",
+    "1/32", "1/32 triplet", "1/32 dotted" };
+inline constexpr double kNoteValueBeats[] = {
+    1.0, 2.0 / 3.0, 1.5,
+    0.5, 1.0 / 3.0, 0.75,
+    0.25, 1.0 / 6.0, 0.375,
+    0.125, 1.0 / 12.0, 0.1875 };
+inline constexpr int kNumNoteValues = 12;
+inline constexpr int kDefaultNoteValue = 6;   // 1/16
 
 /** Build the APVTS layout for a whole library (auto-union of every mode's
     engine-supported controls/buttons/menus, + mode + pitch-bend range). */

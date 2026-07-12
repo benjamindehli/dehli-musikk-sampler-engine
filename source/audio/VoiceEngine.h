@@ -80,7 +80,11 @@ public:
     void setGroupEnabled (int groupIndex, bool enabled);
 
     /** Pitch-wheel bend range in semitones (default 2). Re-applied per block. */
-    void setPitchBendRange (double semitones) { bendRangeSemitones = semitones; }
+    void setPitchBendRange (double upSemitones, double downSemitones)
+    {
+        bendUpSemitones   = upSemitones;
+        bendDownSemitones = downSemitones;
+    }
     void setPitchDriftAmount  (float a) { pitchDriftAmount.store (a); }    // pitch-drift wheel (0..1)
     void setVolumeDriftAmount (float a) { volumeDriftAmount.store (a); }   // volume-drift wheel (0..1)
 
@@ -117,6 +121,19 @@ public:
         fades in at the matched position while the old fades out). Called between
         sequencer and render when a select+strum chord changes mid-ring. */
     void morphNote (int fromNote, int toNote);
+
+    /** Master tuning in cents (settings menu, e.g. matching an old recording).
+        Applied live to all voices, like the pitch wheel. */
+    void setMasterTune (float cents) { masterTuneMul = std::pow (2.0, (double) cents / 1200.0); }
+
+    /** Velocity response curve (settings menu): 0 = soft (easier to play loud),
+        1 = linear, 2 = hard. Shapes incoming velocity before layer selection. */
+    void setVelocityCurve (int curve) { velocityCurve = curve; }
+
+    /** Runtime polyphony cap (settings menu). New voices allocate/steal within the
+        first `maxPolyphony` slots; voices already ringing above a lowered cap simply
+        play out. Clamped to the compile-time voice pool size. */
+    void setMaxPolyphony (int numVoices);
 
     /** When true (default), a note skips spawning voices for groups muted to silence
         (e.g. a drawbar pulled fully down) — a big polyphony/CPU saving. When false,
@@ -215,7 +232,9 @@ private:
     bool anyGroupFx { false };
     juce::uint32 orderCounter = 0;
     double pitchBendMul = 1.0;        // global playback-rate multiplier from the MIDI pitch wheel
-    double bendRangeSemitones = 2.0;  // pitch-wheel range
+    double masterTuneMul = 1.0;       // settings master tuning (cents → rate multiplier)
+    int    velocityCurve = 1;         // 0 soft · 1 linear · 2 hard
+    double bendUpSemitones = 2.0, bendDownSemitones = 2.0;   // pitch-wheel range per direction
 
     // Round-robin state, indexed by groupIndex.
     juce::Array<int> rrCounter;   // next candidate for round_robin mode
@@ -233,6 +252,7 @@ private:
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
     juce::Array<float> groupVelTrackOv;   // per-group AMP_VEL_TRACK override (-1 = unset)
     bool  skipMutedGroups { true };   // note-on: skip groups at ~zero volume (drawbar fully down)
+    int   voiceCap { 0 };             // runtime polyphony cap (set to kMaxVoices in prepare)
 
     // ── Modulators (LFOs) ──────────────────────────────────────────────────
     // A mode can define several: tremolo on different group sets at different rates,
