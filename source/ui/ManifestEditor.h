@@ -201,6 +201,8 @@ private:
         {
             bar.setColour (juce::ProgressBar::backgroundColourId, juce::Colour (0xff2c2d2e));
             bar.setColour (juce::ProgressBar::foregroundColourId, juce::Colour (0xff6a9bd1));
+            bar.setPercentageDisplay (false);   // % lives in the caption below — the
+                                                // on-bar text was unreadable over the fill
             addAndMakeVisible (bar);
             setInterceptsMouseClicks (true, true);   // swallow clicks on the loading face
         }
@@ -209,8 +211,8 @@ private:
             g.fillAll (juce::Colour (0xff141516).withAlpha (0.92f));
             g.setColour (juce::Colour (0xffe8e9ea));
             g.setFont (juce::Font (juce::FontOptions (16.0f)));
-            g.drawText ("Loading samples...", getLocalBounds().withTrimmedBottom (40),
-                        juce::Justification::centred);
+            g.drawText ("Loading samples...  " + juce::String ((int) std::round (progress * 100.0)) + "%",
+                        getLocalBounds().withTrimmedBottom (40), juce::Justification::centred);
         }
         void resized() override { bar.setBounds (getLocalBounds().withSizeKeepingCentre (300, 20)); }
     };

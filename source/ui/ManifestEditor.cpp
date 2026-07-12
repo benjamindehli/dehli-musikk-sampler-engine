@@ -554,6 +554,7 @@ void ManifestEditor::timerCallback()
     if (loading)
     {
         loadingOverlay.progress = juce::jlimit (0.0, 1.0, (double) host.loadProgress());
+        loadingOverlay.repaint();   // the caption carries the percentage now
         applyPreferredSize();   // keep the window at full size during load so the bar is visible
                                 // (the standalone's startup layout otherwise leaves it tiny)
     }
