@@ -227,6 +227,9 @@ void ManifestEditor::parentHierarchyChanged()
 {
     // In the Standalone build the editor's top-level parent is a DocumentWindow;
     // theme it flat monochrome. In a DAW there is no such parent → nothing to do.
+    // An embedding app (DMSE Studio) also has one, but it is NOT ours to touch.
+    if (! host.manageTopLevelWindow())
+        return;
     if (auto* dw = findParentComponentOfClass<juce::DocumentWindow>())
     {
         if (themedWindow != dw)
@@ -391,8 +394,8 @@ void ManifestEditor::applyPreferredSize()
     const int w = preferredWidth(), h = preferredHeight();
     if (auto* parent = getParentComponent())    // the AudioProcessorEditor
         parent->setSize (w, h);
-    if (themedWindow != nullptr)                // standalone window follows its content
-        themedWindow->setContentComponentSize (w, h);
+    if (themedWindow != nullptr && host.manageTopLevelWindow())
+        themedWindow->setContentComponentSize (w, h);   // standalone window follows its content
 }
 
 void ManifestEditor::openSettings()

@@ -101,6 +101,11 @@ public:
     }
     juce::String getPluginVersion() const override { return assets.version; }
     juce::String getPluginName() const override { return getName(); }
+    /** Embedding hosts (DMSE Studio) call this with false so the editor leaves
+        the surrounding app window alone. Default true = plugin behaviour. */
+    void setEditorManagesWindow (bool manages) { editorManagesWindow = manages; }
+    bool manageTopLevelWindow() const override { return editorManagesWindow; }
+
     bool isStandaloneBuild() const override
     {
         // Belt and braces: the custom standalone app should stamp wrapperType, but
@@ -232,6 +237,7 @@ private:
     // Multi-mode fresh instances wait for the editor's mode chooser before decoding
     // anything; a DAW session restore confirms the saved mode instead (no popup).
     bool modeChoicePending = false;   // message thread
+    bool editorManagesWindow = true;  // false when embedded in a larger app (Studio)
 
     std::atomic<int> uiPitchWheel { -1 };
     std::atomic<int> uiModWheel   { -1 };

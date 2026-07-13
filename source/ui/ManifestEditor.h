@@ -67,6 +67,11 @@ public:
         answers from its wrapperType — the only reliable source. */
     virtual bool isStandaloneBuild() const { return false; }
 
+    /** Whether the editor may theme + resize its top-level DocumentWindow (the
+        plugin's own standalone window). Hosts that embed the editor in a larger
+        app window (DMSE Studio) return false. */
+    virtual bool manageTopLevelWindow() const { return true; }
+
     /** Fresh multi-mode instance: the editor should show the mode chooser and call
         confirmModeChoice with the pick before anything decodes. */
     virtual bool needsModeChoice() const { return false; }
