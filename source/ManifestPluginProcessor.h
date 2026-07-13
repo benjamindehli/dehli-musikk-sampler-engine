@@ -104,6 +104,19 @@ public:
     /** Embedding hosts (DMSE Studio) call this with false so the editor leaves
         the surrounding app window alone. Default true = plugin behaviour. */
     void setEditorManagesWindow (bool manages) { editorManagesWindow = manages; }
+
+    /** UI-only hot edit (the Studio's GUI designer): replace one mode's ui tree and
+        rebuild the editor face in place — NO sample decode, audio keeps running.
+        Safe because the audio thread never reads the Ui tree (compiled plans hold
+        baked values and parameter pointers). MESSAGE THREAD. */
+    void applyUiEdit (int modeIndex, const dm::Ui& ui)
+    {
+        if (modeIndex < 0 || modeIndex >= library.modes.size())
+            return;
+        library.modes.getReference (modeIndex).ui = ui;
+        if (onModeChanged != nullptr && modeIndex == engine.getActiveModeIndex())
+            onModeChanged();   // the editor rebuilds its face from the new tree
+    }
     bool manageTopLevelWindow() const override { return editorManagesWindow; }
 
     bool isStandaloneBuild() const override
