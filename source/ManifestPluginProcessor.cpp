@@ -204,7 +204,14 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
         DBG ("ManifestPluginProcessor: no asset for id " << id << " (" << filename << ")");
     }
 
-    loaded = ! library.modes.isEmpty() && sampleSource->size() > 0;
+    // A library with no audio assets yet is still valid and must render its UI —
+    // the Studio authors plugins from scratch (background + controls first, samples
+    // later), and the voice engine safely skips samples it cannot resolve. A
+    // shipping build with zero assets now shows its face and plays silence, which
+    // diagnoses better than the old blank editor anyway.
+    loaded = ! library.modes.isEmpty();
+    if (loaded && sampleSource->size() == 0)
+        DBG ("ManifestPluginProcessor: no audio assets registered (from-scratch library?)");
     if (loaded)
         engine.setLibrary (library, *sampleSource);
 }
