@@ -59,6 +59,10 @@ public:
         i.e. no mode is loaded and the engine is waiting for a choice. */
     bool awaitingModeChoice() const noexcept { return deferredPending; }
 
+    /** Display text for the active mode's effective strum rate (see
+        NoteSequencer::rateText); empty when no mode is live. Message thread. */
+    juce::String strumRateText() const;
+
     /** Render one block (samples + amp ADSR + FX for the active mode). */
     void processBlock (juce::AudioBuffer<float>& buffer,
                        juce::MidiBuffer& midi,

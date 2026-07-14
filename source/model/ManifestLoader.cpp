@@ -421,7 +421,8 @@ Ui parseUi (const var& v)
 {
     Ui ui;
     checkKeys (v, "ui", { "background", "width", "height", "cropTop", "layoutMode", "bgMode",
-                          "whiteKeyTint", "blackKeyTint", "tabs", "keyboard", "buttonLinks" });
+                          "whiteKeyTint", "blackKeyTint", "tabs", "keyboard", "buttonLinks",
+                          "strumSpeedReadout" });
     ui.background = str (v, "background");
     ui.width      = intg (v, "width", 0);
     ui.height     = intg (v, "height", 0);
@@ -430,6 +431,8 @@ Ui parseUi (const var& v)
     ui.bgMode     = str (v, "bgMode");
     ui.whiteKeyTint = str (v, "whiteKeyTint");
     ui.blackKeyTint = str (v, "blackKeyTint");
+    if (const auto sr = get (v, "strumSpeedReadout"); sr.isObject())
+        ui.strumSpeedReadout = parseRect (sr);
 
     if (auto* tabs = get (v, "tabs").getArray())
     {

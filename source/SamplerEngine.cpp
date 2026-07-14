@@ -14,6 +14,13 @@ SamplerEngine::~SamplerEngine()
     drainRetired();
 }
 
+juce::String SamplerEngine::strumRateText() const
+{
+    if (auto* r = current.load())
+        return r->sequencer.rateText();
+    return {};
+}
+
 juce::String SamplerEngine::getVersion()
 {
     return "dehli-musikk-sampler-engine 0.5.0 (M5)";

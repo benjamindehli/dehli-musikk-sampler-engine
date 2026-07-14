@@ -50,6 +50,10 @@ public:
                   const std::function<std::optional<int> (const Button&, int idx)>& buttonState,
                   const std::function<std::optional<int> (const Menu&)>&            menuSelection);
 
+    /** Live strum-speed readout text (mode has ui.strumSpeedReadout): white text over
+        the ribbon painted in the background. No-op when the mode has no readout. */
+    void setStrumSpeedText (const juce::String& text);
+
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;   // background right-click → context menu
@@ -65,6 +69,10 @@ private:
     // Floating value readout shown next to a knob while it is being turned.
     void showValueBubble (juce::Component& knob, const juce::String& text);
     std::unique_ptr<juce::Label> valueBubble;
+
+    // Strum-speed readout (ui.strumSpeedReadout): transparent centred label the
+    // editor feeds via setStrumSpeedText each tick.
+    std::unique_ptr<juce::Label> strumSpeedLabel;
 
     // One record per rendered widget, in build order (lights, knobs, buttons, menus —
     // same as before, so painting/z-order defaults are unchanged). Replaces the former

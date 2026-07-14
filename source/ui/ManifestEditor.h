@@ -96,6 +96,11 @@ public:
         message-thread housekeeping (e.g. free retired modes). */
     virtual void pollEngine() {}
 
+    /** Display text for the sequencer's effective strum rate, shown in the mode's
+        strumSpeedReadout zone (note value when tempo synced, steps/s when free).
+        Empty hides the readout text. */
+    virtual juce::String strumSpeedText() const { return {}; }
+
     /** A UI button was clicked (its index in the tab). Lets the host resolve radio-style
         button groups by "last clicked wins" — momentary buttons that all target the same
         effects (e.g. Strykebrett's ensemble O/Acc/Solo/Organ). Default: no-op. */

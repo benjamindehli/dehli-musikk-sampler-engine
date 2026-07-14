@@ -58,6 +58,12 @@ public:
 
     bool hasTriggers() const noexcept { return ! triggers.isEmpty(); }
 
+    /** Display text for the current effective strum rate (mirrors the rate chain a
+        strum start uses): tempo synced -> the snapped note value ("1/8 triplet"),
+        free -> the steps/s number ("12.5"); empty when free with no rate override
+        (per-trigger rates rule and there is nothing global to show). Message thread. */
+    juce::String rateText() const;
+
     /** Produce the played MIDI for this block from the input MIDI. `out` is
         cleared first; events are emitted at sample-accurate offsets.
 

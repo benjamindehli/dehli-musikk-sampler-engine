@@ -324,6 +324,7 @@ var writeUi (const Ui& ui)
     o.setStr ("bgMode", ui.bgMode);
     if (ui.whiteKeyTint.isNotEmpty()) o.setStr ("whiteKeyTint", ui.whiteKeyTint);
     if (ui.blackKeyTint.isNotEmpty()) o.setStr ("blackKeyTint", ui.blackKeyTint);
+    if (ui.strumSpeedReadout) o.set ("strumSpeedReadout", writeRect (*ui.strumSpeedReadout));
 
     juce::Array<var> tabs;
     for (const auto& t : ui.tabs)

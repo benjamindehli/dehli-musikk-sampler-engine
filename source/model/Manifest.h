@@ -385,6 +385,10 @@ struct Ui
     juce::String whiteKeyTint;
     juce::String blackKeyTint;
     juce::Array<ButtonLink> buttonLinks;   // "when button X → state S, set button Y → state T"
+    // Optional live strum-speed readout (design px; the converter records the removed
+    // chord-order menu's rect here). The editor shows the sequencer's effective rate
+    // in it: the snapped note value when tempo synced, the free steps/s otherwise.
+    std::optional<Rect> strumSpeedReadout;
 };
 
 // ---------------------------------------------------------------------------

@@ -214,6 +214,17 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
             for (auto& im : t.images)   im.rect.y -= crop;
             for (auto& mn : t.menus)    mn.rect.y -= crop;
         }
+        if (uiData.strumSpeedReadout)
+            uiData.strumSpeedReadout->y -= crop;
+    }
+
+    if (uiData.strumSpeedReadout)
+    {
+        strumSpeedLabel = std::make_unique<juce::Label>();
+        strumSpeedLabel->setJustificationType (juce::Justification::centred);
+        strumSpeedLabel->setColour (juce::Label::textColourId, juce::Colours::white);
+        strumSpeedLabel->setInterceptsMouseClicks (false, false);   // right-click passes through
+        addAndMakeVisible (*strumSpeedLabel);
     }
 
     if (uiData.tabs.isEmpty())
@@ -672,6 +683,18 @@ void ManifestUiComponent::resized()
 
     for (auto& w : widgets)
         place (*w.comp, w.rect);
+
+    if (strumSpeedLabel != nullptr && uiData.strumSpeedReadout)
+    {
+        place (*strumSpeedLabel, *uiData.strumSpeedReadout);
+        strumSpeedLabel->setFont (juce::FontOptions ((float) strumSpeedLabel->getHeight() * 0.72f));
+    }
+}
+
+void ManifestUiComponent::setStrumSpeedText (const juce::String& text)
+{
+    if (strumSpeedLabel != nullptr)
+        strumSpeedLabel->setText (text, juce::dontSendNotification);
 }
 
 } // namespace dm

@@ -535,6 +535,9 @@ void ManifestEditor::timerCallback()
 
     host.pollEngine();   // message-thread housekeeping (free retired modes)
 
+    if (uiComponent != nullptr)
+        uiComponent->setStrumSpeedText (host.strumSpeedText());
+
     if (learnBanner.isVisible() && ! host.isMidiLearnActive())
         learnBanner.setVisible (false);   // learn completed (CC captured) or cancelled
 

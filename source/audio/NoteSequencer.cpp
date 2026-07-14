@@ -131,6 +131,35 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     a.samplesPerStep = sampleRate / rate;
 }
 
+juce::String NoteSequencer::rateText() const
+{
+    const double knob = rateOverride.load();
+    if (tempoSync.load())
+    {
+        int idx = 0;
+        if (knob > 0.0)   // the knob picks the note value (same snap as startTrigger)
+        {
+            const double perBeat = syncBpm.load() / 60.0;
+            double bestDiff = std::abs (std::log (knob) - std::log (perBeat / notevalues::beats[0]));
+            for (int i = 1; i < notevalues::count; ++i)
+            {
+                const double diff = std::abs (std::log (knob) - std::log (perBeat / notevalues::beats[i]));
+                if (diff < bestDiff) { bestDiff = diff; idx = i; }
+            }
+        }
+        else              // settings dropdown decides; find its table entry
+        {
+            const double bps = beatsPerStep.load();
+            double bestDiff = std::abs (notevalues::beats[0] - bps);
+            for (int i = 1; i < notevalues::count; ++i)
+                if (const double diff = std::abs (notevalues::beats[i] - bps); diff < bestDiff)
+                    { bestDiff = diff; idx = i; }
+        }
+        return notevalues::labels[idx];
+    }
+    return knob > 0.0 ? juce::String (knob, 1) : juce::String();
+}
+
 // Chord changed while strummed notes still ring (select+strum): retarget every strum
 // to the newly selected trigger's sequence AT ITS OWN order offset — ringing notes
 // are remapped by their position within the sequence (→ voice morphs), and notes not
