@@ -23,7 +23,7 @@ juce::String SamplerEngine::strumRateText() const
 
 juce::String SamplerEngine::getVersion()
 {
-    return "dehli-musikk-sampler-engine 0.5.0 (M5)";
+    return "dehli-musikk-sampler-engine 1.0.0";
 }
 
 SamplerEngine::ModeRender* SamplerEngine::buildMode (int index, std::atomic<float>* progress,
