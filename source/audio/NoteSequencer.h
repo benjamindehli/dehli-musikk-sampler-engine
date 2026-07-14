@@ -40,6 +40,12 @@ public:
         each trigger's own rate. Thread-safe (the future StrumSpeed control). */
     void setRate (double stepsPerSecond);
 
+    /** The StrumSpeed knob's NORMALISED position (0..1). Tempo-synced mode maps it
+        evenly across the note-value table (slowest at 0, fastest at 1) — the raw
+        steps/s value would make the mapping depend on the current BPM. < 0 = no
+        knob; the settings dropdown (setBeatsPerStep) decides. Thread-safe. */
+    void setRateNorm (double norm) { rateNorm.store (norm); }
+
     /** Tempo-synced mode (settings menu): steps snap to the note value set by
         setBeatsPerStep at `bpm`, overriding ALL free-mode rates including the
         setRate override (a StrumSpeed knob applies that override every block, so
@@ -74,6 +80,7 @@ public:
                   juce::Array<NoteMorph>* morphsOut = nullptr);
 
 private:
+    double syncedBeats() const;   // tempo-synced step length in beats (knob or dropdown)
     struct Trigger
     {
         int    sequence = 0;
@@ -114,6 +121,7 @@ private:
     std::array<int, 128> triggerForNote { };   // index into triggers, or -1
 
     std::atomic<double> rateOverride { 0.0 };   // <= 0 → per-trigger rate
+    std::atomic<double> rateNorm { -1.0 };       // knob position 0..1; < 0 → no knob
     std::atomic<int>    indexOffset { 0 };       // added to trigger.sequence (clamped)
     std::atomic<bool>   tempoSync { false };     // step = 1/16 note at syncBpm
     std::atomic<double> syncBpm { 120.0 };

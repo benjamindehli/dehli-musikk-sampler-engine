@@ -107,17 +107,27 @@ public:
         const int b8 = findOn (e8, 60);
         expect (b8 >= 0 && findOn (e8, 64) == b8 + 2400, "8th steps double the step length");
 
-        // With a StrumSpeed override present (applied every block by the knob's
-        // compiled plan), the knob SCROLLS the note values: its steps/s snap to
-        // the nearest musical rate. 480 steps/s at 600 BPM snaps to 1/32 triplet
-        // (120 steps/s → 400-sample steps).
-        s.setRate (480.0);
+        // With a StrumSpeed knob present its NORMALISED position scrolls the
+        // note-value table evenly slowest -> fastest, independent of BPM (the raw
+        // steps/s override is ignored while synced). Full-up = 1/32 triplet: at
+        // 600 BPM that is 120 steps/s -> 400-sample steps.
+        s.setRate (480.0);   // raw override must NOT shift the synced mapping
+        s.setRateNorm (0.999);
         juce::MidiBuffer inO, outO;
         inO.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
         s.process (inO, outO, 8192);
         auto eO = collect (outO);
         const int bO = findOn (eO, 60);
-        expect (bO >= 0 && findOn (eO, 64) == bO + 400, "knob snaps to the nearest note value");
+        expect (bO >= 0 && findOn (eO, 64) == bO + 400, "knob full up = fastest note value");
+
+        // Full-down = 1/4 dotted (slowest): 600 BPM -> 6.67 steps/s -> 7200-sample steps.
+        s.setRateNorm (0.0);
+        juce::MidiBuffer inD, outD;
+        inD.addEvent (juce::MidiMessage::noteOn (1, 36, 1.0f), 0);
+        s.process (inD, outD, 16384);
+        auto eD = collect (outD);
+        const int bD = findOn (eD, 60);
+        expect (bD >= 0 && findOn (eD, 64) == bD + 7200, "knob full down = slowest note value");
         s.setRate (0.0);
 
         // Back to free: per-trigger rate (480 steps/s → 100-sample steps) again.

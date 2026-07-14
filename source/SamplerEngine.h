@@ -119,6 +119,7 @@ public:
     /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
         each trigger's own rate. (The future StrumSpeed control.) */
     void setSequencerRate (double stepsPerSecond);
+    void setSequencerRateNorm (double norm);   // knob position 0..1 (tempo-synced note-value sweep)
 
     /** Runtime SEQ_INDEX offset for the active mode (e.g. the chord-ordering menu). */
     void setSequencerIndexOffset (int offset);
@@ -279,6 +280,8 @@ private:
 
     std::atomic<bool>  ovSequencerRateTouched { false };
     std::atomic<double> ovSequencerRate { 0.0 };
+    std::atomic<bool>  ovSequencerRateNormTouched { false };
+    std::atomic<double> ovSequencerRateNorm { -1.0 };
     std::atomic<bool>  ovSequencerIndexTouched { false };
     std::atomic<int>    ovSequencerIndex { 0 };
 

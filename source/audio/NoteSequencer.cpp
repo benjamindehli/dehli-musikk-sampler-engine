@@ -107,22 +107,7 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     if (tempoSync.load())
     {
         const double perBeat = syncBpm.load() / 60.0;
-        const double knob = rateOverride.load();
-        if (knob > 0.0)
-        {
-            rate = perBeat / notevalues::beats[0];
-            double bestDiff = std::abs (std::log (knob) - std::log (rate));
-            for (int i = 1; i < notevalues::count; ++i)
-            {
-                const double cand = perBeat / notevalues::beats[i];
-                const double diff = std::abs (std::log (knob) - std::log (cand));
-                if (diff < bestDiff) { bestDiff = diff; rate = cand; }
-            }
-        }
-        else
-        {
-            rate = perBeat / beatsPerStep.load();
-        }
+        rate = perBeat / syncedBeats();
     }
     if (rate <= 0.0) rate = rateOverride.load();
     if (rate <= 0.0) rate = keyRate;   // per-strum-key rate (select+strum mode)
@@ -131,32 +116,33 @@ void NoteSequencer::startActive (const Trigger& t, int triggerNote, float veloci
     a.samplesPerStep = sampleRate / rate;
 }
 
+// Tempo-synced step length in beats: a StrumSpeed knob's normalised position sweeps
+// the note-value table evenly slowest -> fastest (BPM-independent); without a knob
+// the settings dropdown (setBeatsPerStep) decides.
+double NoteSequencer::syncedBeats() const
+{
+    if (const double norm = rateNorm.load(); norm >= 0.0)
+    {
+        const int slot = juce::jlimit (0, notevalues::count - 1,
+                                       (int) (norm * notevalues::count));
+        return notevalues::beats[notevalues::speedOrder[slot]];
+    }
+    return beatsPerStep.load();
+}
+
 juce::String NoteSequencer::rateText() const
 {
-    const double knob = rateOverride.load();
     if (tempoSync.load())
     {
+        const double bps = syncedBeats();
         int idx = 0;
-        if (knob > 0.0)   // the knob picks the note value (same snap as startTrigger)
-        {
-            const double perBeat = syncBpm.load() / 60.0;
-            double bestDiff = std::abs (std::log (knob) - std::log (perBeat / notevalues::beats[0]));
-            for (int i = 1; i < notevalues::count; ++i)
-            {
-                const double diff = std::abs (std::log (knob) - std::log (perBeat / notevalues::beats[i]));
-                if (diff < bestDiff) { bestDiff = diff; idx = i; }
-            }
-        }
-        else              // settings dropdown decides; find its table entry
-        {
-            const double bps = beatsPerStep.load();
-            double bestDiff = std::abs (notevalues::beats[0] - bps);
-            for (int i = 1; i < notevalues::count; ++i)
-                if (const double diff = std::abs (notevalues::beats[i] - bps); diff < bestDiff)
-                    { bestDiff = diff; idx = i; }
-        }
+        double bestDiff = std::abs (notevalues::beats[0] - bps);
+        for (int i = 1; i < notevalues::count; ++i)
+            if (const double diff = std::abs (notevalues::beats[i] - bps); diff < bestDiff)
+                { bestDiff = diff; idx = i; }
         return notevalues::labels[idx];
     }
+    const double knob = rateOverride.load();
     return knob > 0.0 ? juce::String (knob, 1) : juce::String();
 }
 

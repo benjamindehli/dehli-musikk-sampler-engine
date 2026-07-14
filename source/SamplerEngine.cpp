@@ -391,6 +391,8 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
 
     if (ovSequencerRateTouched.load())
         cur->sequencer.setRate (ovSequencerRate.load());
+    if (ovSequencerRateNormTouched.load())
+        cur->sequencer.setRateNorm (ovSequencerRateNorm.load());
     cur->sequencer.setTempoSync (seqTempoSync.load());
     cur->sequencer.setBpm (seqBpm.load());
     cur->sequencer.setBeatsPerStep (seqBeatsPerStep.load());
@@ -600,6 +602,12 @@ void SamplerEngine::setSequencerRate (double stepsPerSecond)
 {
     ovSequencerRate.store (stepsPerSecond);
     ovSequencerRateTouched.store (true);
+}
+
+void SamplerEngine::setSequencerRateNorm (double norm)
+{
+    ovSequencerRateNorm.store (norm);
+    ovSequencerRateNormTouched.store (true);
 }
 
 void SamplerEngine::setSequencerIndexOffset (int offset)

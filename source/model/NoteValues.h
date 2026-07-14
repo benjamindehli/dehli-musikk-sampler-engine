@@ -20,6 +20,11 @@ namespace dm::notevalues
         0.25,  1.0 / 6.0,  0.375,
         0.125, 1.0 / 12.0, 0.1875 };
 
+    // labels/beats indices sorted slowest -> fastest (beats descending): the sweep a
+    // StrumSpeed knob scrolls through when tempo synced, so knob-up is always faster
+    // regardless of the straight/triplet/dotted interleaving above.
+    inline constexpr int speedOrder[] = { 2, 0, 5, 1, 3, 8, 4, 6, 11, 7, 9, 10 };
+
     inline constexpr int count = 12;
     inline constexpr int defaultIndex = 6;   // 1/16
 } // namespace dm::notevalues

@@ -554,6 +554,18 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
             {
                 if (auto route = compileRoute (b))
                     item.ops.push_back ({ makeXform (b, mn, mx, false), std::move (route) });
+                // A StrumSpeed knob also reports its NORMALISED position: tempo-synced
+                // mode sweeps the note-value table with it (the raw steps/s value
+                // would make the note-value mapping depend on the current BPM).
+                if (b.parameter == "SEQ_PLAYBACK_RATE")
+                {
+                    Op op;
+                    op.xform.kind   = Xform::Kind::outRange;
+                    op.xform.outMin = 0.0;
+                    op.xform.outMax = 1.0;
+                    op.route = [] (SamplerEngine& e, double v) { e.setSequencerRateNorm (v); };
+                    item.ops.push_back (std::move (op));
+                }
             }
         }
         if (! item.ops.empty())
