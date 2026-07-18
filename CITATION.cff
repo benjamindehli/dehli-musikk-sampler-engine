@@ -8,8 +8,8 @@ authors:
     given-names: Benjamin
 repository-code: https://github.com/benjamindehli/dehli-musikk-sampler-engine
 license: GPL-3.0
-version: 0.5.0
-date-released: "2026-07-11"
+version: 1.0.0
+date-released: "2026-07-18"
 keywords:
   - sampler
   - audio plugin
