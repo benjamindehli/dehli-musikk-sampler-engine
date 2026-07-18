@@ -150,6 +150,13 @@ function(dmse_add_plugin target)
         set(_dmse_pack false)
     endif()
     get_filename_component(_dmse_dir "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
+    # Clear the metadata dir once per configure: a removed plugin would otherwise
+    # leave a stale <Target>.json that the packaging scripts still iterate.
+    get_property(_dmse_meta_cleared GLOBAL PROPERTY DMSE_PLUGIN_META_CLEARED)
+    if(NOT _dmse_meta_cleared)
+        file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/dmse_plugins")
+        set_property(GLOBAL PROPERTY DMSE_PLUGIN_META_CLEARED TRUE)
+    endif()
     file(WRITE "${CMAKE_BINARY_DIR}/dmse_plugins/${target}.json"
 "{
   \"target\": \"${target}\",
