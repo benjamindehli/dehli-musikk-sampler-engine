@@ -156,7 +156,8 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
     addChildComponent (modeChooser);
     if (host.needsModeChoice())
     {
-        const int last = (int) host.getApvts().getRawParameterValue (params::id::mode)->load();
+        auto* modeValue = host.getApvts().getRawParameterValue (params::id::mode);
+        const int last = modeValue != nullptr ? (int) modeValue->load() : 0;
         modeChooser.setModes (host.getModeNames(), last);
         modeChooser.setVisible (true);
     }

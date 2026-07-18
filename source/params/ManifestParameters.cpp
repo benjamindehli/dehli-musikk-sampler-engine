@@ -242,8 +242,11 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
 
     StringArray modeNames;
     for (const auto& m : lib.modes) modeNames.add (m.name);
-    if (modeNames.isEmpty()) modeNames.add ("Default");
-    p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { id::mode, 1 }, "Mode", modeNames, 0));
+    // Single-mode libraries get NO Mode parameter: an AudioParameterChoice with one
+    // item has a zero-width range whose 0..1 conversion divides by zero, so auval
+    // reads NaN back and fails the plugin. There is nothing to switch anyway.
+    if (modeNames.size() > 1)
+        p.push_back (std::make_unique<AudioParameterChoice> (ParameterID { id::mode, 1 }, "Mode", modeNames, 0));
 
     {
         StringArray polyOpts;

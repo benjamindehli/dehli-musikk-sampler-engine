@@ -311,7 +311,8 @@ void ManifestPluginProcessor::handleAsyncUpdate()
     if (modeChoicePending)
         return;   // fresh multi-mode instance: the editor's mode chooser decides
 
-    const int requested = (int) apvts->getRawParameterValue (params::id::mode)->load();
+    auto* modeValue = apvts->getRawParameterValue (params::id::mode);   // absent in single-mode plugins
+    const int requested = modeValue != nullptr ? (int) modeValue->load() : 0;
     const bool modeChanged = requested != engine.getActiveModeIndex()
                           || engine.awaitingModeChoice();   // first build after a pick
 
