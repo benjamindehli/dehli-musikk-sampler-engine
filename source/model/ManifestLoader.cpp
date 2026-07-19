@@ -723,13 +723,14 @@ ManifestParseResult loadManifest (const var& root)
 
     ScopedLintSink lint (res.warnings);   // unknown-key warnings land in res.warnings
     checkKeys (root, "manifest", { "schema", "format", "library", "gainDb",
-                                   "polySaveDefault", "airSupply", "modes" });
+                                   "polySaveDefault", "retriggerMuteDefault", "airSupply", "modes" });
 
     res.library.schema  = intg (root, "schema", 0);
     res.library.format  = str (root, "format");
     res.library.library = str (root, "library");
     res.library.gainDb  = optD (root, "gainDb").value_or (0.0);
     res.library.polySaveDefault = optB (root, "polySaveDefault").value_or (true);
+    res.library.retriggerMuteDefault = optB (root, "retriggerMuteDefault").value_or (true);
     if (const auto air = get (root, "airSupply"); air.isObject())
     {
         checkKeys (air, "airSupply", { "volume", "brightness", "attack", "tags" });

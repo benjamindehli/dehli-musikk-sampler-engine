@@ -183,6 +183,11 @@ public:
         polyphony saving; off = every group triggers so mid-note drawbar changes sound. */
     void setSkipMutedGroups (bool skip) { skipMutedGroups.store (skip); }
 
+    /** One voice per key within a group (default on): retriggering a note fades the
+        previous voice in the same group instead of stacking, so long releases and
+        one-shots do not pile up. Notes in different groups still layer on one key. */
+    void setRetriggerMute (bool on) { retriggerMute.store (on); }
+
     /** User master output gain (linear), applied AFTER everything else — independent
         of the preset's AMP_VOLUME master. Set per block from the plugin's Master fader. */
     void setMasterOutputGain (float gainLinear) noexcept { uiMasterGain = gainLinear; }
@@ -298,6 +303,7 @@ private:
     std::atomic<float> pitchDriftAmount  { 0.0f };  // pitch-drift wheel (0..1); applied to voices per block
     std::atomic<float> volumeDriftAmount { 0.0f };  // volume-drift wheel (0..1)
     std::atomic<bool>  skipMutedGroups   { true };  // note-on: skip silent groups (drawbar fully down)
+    std::atomic<bool>  retriggerMute     { true };  // note-on: one voice per key within a group
 
     // Gain stages in processBlock (audio thread): the per-library trim (--gain) applied
     // BEFORE the FX (DecentSampler reduces level ahead of its effects, so the level-

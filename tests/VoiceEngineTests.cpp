@@ -79,6 +79,67 @@ public:
         testMorphNoteInRelease();
         testGroupVelTrackOverride();
         testAirSupply();
+        testRetriggerMute();
+    }
+
+    void testRetriggerMute()
+    {
+        beginTest ("retrigger mute — one voice per key within a group, groups still layer");
+
+        // Two groups, NO choke tags, sustaining (release 0). Both cover note 60 (a
+        // layer). Holding sustain means a retrigger would normally stack a second
+        // voice for the same note within each group.
+        auto flacA = encodeFlac (makeDc (0.50f, (int) kSR), kSR);
+        auto flacB = encodeFlac (makeDc (0.25f, (int) kSR), kSR);
+        dm::EmbeddedFlacSource src;
+        src.addFlac ("flac:a", flacA.getData(), flacA.getSize());
+        src.addFlac ("flac:b", flacB.getData(), flacB.getSize());
+
+        auto m = dm::loadManifestFromJson (R"({
+            "schema": 1,
+            "modes": [{
+                "name": "Layer",
+                "amp": { "attack": 0.0, "decay": 0.0, "sustain": 1.0, "release": 0.0, "volume": 1.0, "velTrack": 0.0 },
+                "groups": [
+                    { "samples": [ { "source": "flac:a", "loNote": 60, "hiNote": 60, "rootNote": 60, "sampleRate": 48000.0, "pitchKeyTrack": false } ] },
+                    { "samples": [ { "source": "flac:b", "loNote": 60, "hiNote": 60, "rootNote": 60, "sampleRate": 48000.0, "pitchKeyTrack": false } ] }
+                ]
+            }]
+        })");
+        expect (m.ok);
+
+        auto noteOn = [] (dm::VoiceEngine& ve, juce::AudioBuffer<float>& out, int note)
+        {
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, note, 1.0f), 0);
+            ve.processBlock (out, midi);
+        };
+
+        juce::AudioBuffer<float> out (1, 512);
+
+        // Default ON: the first note-on layers both groups (2 voices). A retrigger of
+        // the same note fades each group's previous voice → still 2, not 4.
+        {
+            dm::VoiceEngine ve;
+            ve.prepare (kSR, 512, 1);
+            ve.setMode (m.library.modes.getReference (0), src);
+            noteOn (ve, out, 60);
+            expectEquals (ve.getActiveVoiceCount(), 2, "one voice per group layers on one key");
+            noteOn (ve, out, 60);
+            expectEquals (ve.getActiveVoiceCount(), 2, "retrigger fades the previous voice per group");
+        }
+
+        // OFF: retriggering the same note stacks a second voice in each group → 4.
+        {
+            dm::VoiceEngine ve;
+            ve.prepare (kSR, 512, 1);
+            ve.setMode (m.library.modes.getReference (0), src);
+            ve.setRetriggerMute (false);
+            noteOn (ve, out, 60);
+            expectEquals (ve.getActiveVoiceCount(), 2);
+            noteOn (ve, out, 60);
+            expectEquals (ve.getActiveVoiceCount(), 4, "with retrigger mute off, voices stack");
+        }
     }
 
     void testAirSupply()

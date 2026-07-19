@@ -73,6 +73,14 @@ public:
         polySaveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
             apvts, params::id::skipMuted, polySaveToggle);
 
+        initLabel (retriggerLabel, "Retrigger mute");
+        retriggerToggle.setTooltip ("Retriggering a key silences its previous note in each group "
+                                    "(with a tiny fade), so long releases and one-shots do not stack "
+                                    "up. Notes in different groups still layer on one key.");
+        addAndMakeVisible (retriggerToggle);
+        retriggerAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+            apvts, params::id::retriggerMute, retriggerToggle);
+
         initLabel (tuneLabel, "Master tuning");
         tuneSlider.setSliderStyle (juce::Slider::LinearHorizontal);
         tuneSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 52, 22);
@@ -154,7 +162,7 @@ public:
     void resized() override
     {
         const int rowH = 30, labelW = 130, pad = 14;
-        const int rows = 6 + (hasAirSupply ? 1 : 0)
+        const int rows = 7 + (hasAirSupply ? 1 : 0)
                        + (hasSequencer ? 5 : 0);   // + title row; seq adds header + 4
         const int panelW = 330, panelH = pad * 2 + rowH * (rows + 1);
         panelRect = getLocalBounds().withSizeKeepingCentre (panelW, panelH);
@@ -174,6 +182,7 @@ public:
         row (bendDownLabel, bendDownSlider);
         row (polyLabel,     polyBox);
         row (polySaveLabel, polySaveToggle);
+        row (retriggerLabel, retriggerToggle);
         row (tuneLabel,     tuneSlider);
         row (velCurveLabel, velCurveBox);
         if (hasAirSupply)
@@ -219,19 +228,19 @@ private:
     juce::Rectangle<int> panelRect;
 
     juce::Label titleLabel, bendUpLabel, bendDownLabel, polyLabel, polySaveLabel,
-                tuneLabel, velCurveLabel, seqHeader, syncLabel, syncDawLabel, bpmLabel,
-                noteValueLabel, airLabel;
+                retriggerLabel, tuneLabel, velCurveLabel, seqHeader, syncLabel, syncDawLabel,
+                bpmLabel, noteValueLabel, airLabel;
     juce::TextButton closeButton;
     juce::Slider bendUpSlider, bendDownSlider, tuneSlider, bpmSlider;
     juce::ComboBox polyBox, velCurveBox, noteValueBox;
-    juce::ToggleButton polySaveToggle, syncToggle, syncDawToggle, airToggle;
+    juce::ToggleButton polySaveToggle, retriggerToggle, syncToggle, syncDawToggle, airToggle;
 
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
         bendUpAttachment, bendDownAttachment, tuneAttachment, bpmAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment>
         polyAttachment, velCurveAttachment, noteValueAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
-        polySaveAttachment, syncAttachment, syncDawAttachment, airAttachment;
+        polySaveAttachment, retriggerAttachment, syncAttachment, syncDawAttachment, airAttachment;
 };
 
 } // namespace dm

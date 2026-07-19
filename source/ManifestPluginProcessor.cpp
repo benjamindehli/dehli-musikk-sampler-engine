@@ -42,6 +42,7 @@ ManifestPluginProcessor::ManifestPluginProcessor (Assets a)
     prmPitchDrift     = apvts->getRawParameterValue (params::id::pitchDrift);
     prmVolumeDrift    = apvts->getRawParameterValue (params::id::volumeDrift);
     prmSkipMuted      = apvts->getRawParameterValue (params::id::skipMuted);
+    prmRetriggerMute  = apvts->getRawParameterValue (params::id::retriggerMute);
     prmMaxPolyphony   = apvts->getRawParameterValue (params::id::maxPolyphony);
     prmSeqTempoSync   = apvts->getRawParameterValue (params::id::seqTempoSync);
     prmSeqSyncDaw     = apvts->getRawParameterValue (params::id::seqSyncDaw);
@@ -399,6 +400,7 @@ void ManifestPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
         if (prmPitchDrift)     engine.setPitchDriftAmount (prmPitchDrift->load());
         if (prmVolumeDrift)    engine.setVolumeDriftAmount (prmVolumeDrift->load());
         if (prmSkipMuted)      engine.setSkipMutedGroups (prmSkipMuted->load() > 0.5f);
+        if (prmRetriggerMute)  engine.setRetriggerMute (prmRetriggerMute->load() > 0.5f);
         if (prmMaxPolyphony)
         {
             const int idx = juce::jlimit (0, params::kNumPolyphonyChoices - 1,

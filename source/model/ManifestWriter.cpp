@@ -542,6 +542,8 @@ var manifestToVar (const PresetLibrary& library)
         o.set ("gainDb", library.gainDb);
     if (! library.polySaveDefault)
         o.set ("polySaveDefault", false);
+    if (! library.retriggerMuteDefault)
+        o.set ("retriggerMuteDefault", false);
     if (library.airSupply)
     {
         Obj air;

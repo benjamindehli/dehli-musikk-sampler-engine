@@ -404,6 +404,7 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     cur->voices.setPitchDriftAmount (pitchDriftAmount.load());
     cur->voices.setVolumeDriftAmount (volumeDriftAmount.load());
     cur->voices.setSkipMutedGroups (skipMutedGroups.load());
+    cur->voices.setRetriggerMute (retriggerMute.load());
     cur->voices.setAirSupplyEnabled (airSupplyEnabled.load());
     cur->voices.setMasterTune (masterTuneCents.load());
     cur->voices.setVelocityCurve (velocityCurve.load());

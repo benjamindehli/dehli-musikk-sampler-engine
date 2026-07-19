@@ -600,6 +600,25 @@ void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
         }
     }
 
+    // One voice per key within a group (settings "Retrigger mute"): retriggering the
+    // same note fades out its previous voice in the SAME group, so a long release or a
+    // one-shot does not build up on repeated hits. The tag choke above handles mono
+    // GROUPS; this de-duplicates per NOTE. note < 0 (damper/one-shot noise) is exempt —
+    // those never correspond to a key and should be free to overlap.
+    if (retriggerMute && note >= 0)
+    {
+        for (auto& v : voices)
+        {
+            if (! v.active || v.fadingOut)
+                continue;
+            if (v.note == note && v.groupIndex == zone.groupIndex)
+            {
+                v.fadingOut = true;
+                v.declickDelta = -1.0f / (float) fadeOutSamples;
+            }
+        }
+    }
+
     Voice* v = allocateVoice();
     v->active = true;
     v->buffer = zone.buffer;

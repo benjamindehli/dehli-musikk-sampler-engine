@@ -145,6 +145,12 @@ public:
         every group triggers, so raising a drawbar while a note is held brings it in. */
     void setSkipMutedGroups (bool skip) { skipMutedGroups = skip; }
 
+    /** When true (default), retriggering a key allows only ONE voice per group for
+        that note: the previous voice in the same group fades out (a tiny anti-click
+        ramp) instead of stacking up. Long releases and one-shots therefore do not
+        pile up on repeated hits. Notes in DIFFERENT groups still layer on one key. */
+    void setRetriggerMute (bool on) { retriggerMute = on; }
+
 private:
     struct Zone
     {
@@ -257,6 +263,7 @@ private:
     float ovVelTrack { -1.0f };   // global velocity-tracking override (AMP_VEL_TRACK)
     juce::Array<float> groupVelTrackOv;   // per-group AMP_VEL_TRACK override (-1 = unset)
     bool  skipMutedGroups { true };   // note-on: skip groups at ~zero volume (drawbar fully down)
+    bool  retriggerMute   { true };   // note-on: one voice per key WITHIN a group (fade the previous)
     int   voiceCap { 0 };             // runtime polyphony cap (set to kMaxVoices in prepare)
 
     // ── Shared-air ("fan") simulation (AirSupply; Elektrisk Salmesykkel) ────────

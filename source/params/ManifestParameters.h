@@ -35,6 +35,7 @@ namespace id
     inline constexpr const char* pitchDrift     = "pitchDrift";   // global pitch-drift wheel (0..1)
     inline constexpr const char* volumeDrift    = "volumeDrift";  // global volume-drift wheel (0..1)
     inline constexpr const char* skipMuted      = "skipMuted";    // skip triggering silent groups (bool)
+    inline constexpr const char* retriggerMute  = "retriggerMute"; // one voice per key within a group (bool)
     inline constexpr const char* maxPolyphony   = "maxPolyphony"; // voice-cap choice (see kPolyphonyChoices)
     inline constexpr const char* seqTempoSync   = "seqTempoSync"; // sequencer: free (off) / 16th steps at BPM (on)
     inline constexpr const char* seqSyncDaw     = "seqSyncDaw";   // synced BPM follows the host (DAW builds only)

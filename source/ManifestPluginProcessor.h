@@ -230,6 +230,7 @@ private:
     std::atomic<float>* prmPitchDrift     { nullptr };
     std::atomic<float>* prmVolumeDrift    { nullptr };
     std::atomic<float>* prmSkipMuted      { nullptr };
+    std::atomic<float>* prmRetriggerMute  { nullptr };
     std::atomic<float>* prmMaxPolyphony   { nullptr };
     std::atomic<float>* prmSeqTempoSync   { nullptr };
     std::atomic<float>* prmSeqSyncDaw     { nullptr };

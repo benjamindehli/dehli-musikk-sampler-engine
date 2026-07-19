@@ -481,6 +481,9 @@ struct PresetLibrary
     bool polySaveDefault = true; // default for the Poly-save toggle (skip silent groups at note-on).
                                  // false for libraries whose controls BLEND muted groups in mid-note
                                  // (e.g. Elektrisk's mod-wheel Normal/Full sweep).
+    bool retriggerMuteDefault = true; // default for the Retrigger-mute toggle (one voice per key
+                                      // within a group). Set false per-library where stacking the
+                                      // same key is wanted (e.g. overlapping cymbal hits).
     std::optional<AirSupply> airSupply;   // present → the settings panel offers the toggle
     juce::Array<Mode> modes;
 };
