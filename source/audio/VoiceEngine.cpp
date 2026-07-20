@@ -69,7 +69,7 @@ struct SincTable
     SincTable()
     {
         const double pi = juce::MathConstants<double>::pi;
-        auto sinc = [pi] (double x) { return x == 0.0 ? 1.0 : std::sin (pi * x) / (pi * x); };
+        auto sinc = [pi] (double x) { return juce::exactlyEqual (x, 0.0) ? 1.0 : std::sin (pi * x) / (pi * x); };
         const double a = (double) kSincHalf;   // Lanczos window half-width
 
         for (int p = 0; p <= kSincPhases; ++p)
@@ -84,7 +84,7 @@ struct SincTable
                 sum   += w;
             }
             for (int t = 0; t < kSincTaps; ++t)   // normalise for unity DC gain
-                k[p][t] = (float) (sum != 0.0 ? row[t] / sum : 0.0);
+                k[p][t] = (float) (! juce::exactlyEqual (sum, 0.0) ? row[t] / sum : 0.0);
         }
     }
 };

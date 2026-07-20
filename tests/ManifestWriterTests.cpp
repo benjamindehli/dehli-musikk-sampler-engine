@@ -27,19 +27,19 @@ public:
 
     void runTest() override
     {
-        for (auto* name : { "bass.json", "drums.json", "wurli.json", "autostrum.json", "kitchensink.json" })
-            roundTrip (name);
+        for (auto* fixtureName : { "bass.json", "drums.json", "wurli.json", "autostrum.json", "kitchensink.json" })
+            roundTrip (fixtureName);
     }
 
-    void roundTrip (const juce::String& name)
+    void roundTrip (const juce::String& fixtureName)
     {
-        beginTest ("round-trip " + name);
+        beginTest ("round-trip " + fixtureName);
 
-        auto file = writerFixturesDir().getChildFile (name);
+        auto file = writerFixturesDir().getChildFile (fixtureName);
         expect (file.existsAsFile(), "fixture not found: " + file.getFullPathName());
 
         auto m1 = dm::loadManifestFromJson (file.loadFileAsString());
-        expect (m1.ok, name + " should load");
+        expect (m1.ok, fixtureName + " should load");
 
         const auto text1 = dm::writeManifestToJson (m1.library);
 
@@ -47,7 +47,7 @@ public:
         expect (m2.ok, "writer output should re-load: " + m2.errors.joinIntoString ("; "));
 
         const auto text2 = dm::writeManifestToJson (m2.library);
-        expect (text1 == text2, "serialization should be idempotent for " + name);
+        expect (text1 == text2, "serialization should be idempotent for " + fixtureName);
 
         // Sanity: a concrete value survives the trip.
         expect (m2.library.modes.size() == m1.library.modes.size());

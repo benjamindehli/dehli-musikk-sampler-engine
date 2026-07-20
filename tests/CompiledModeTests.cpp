@@ -21,6 +21,7 @@ struct DummyProcessor : juce::AudioProcessor
     void prepareToPlay (double, int) override {}
     void releaseResources() override {}
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+    using juce::AudioProcessor::processBlock;
     juce::AudioProcessorEditor* createEditor() override { return nullptr; }
     bool hasEditor() const override { return false; }
     bool acceptsMidi() const override { return true; }

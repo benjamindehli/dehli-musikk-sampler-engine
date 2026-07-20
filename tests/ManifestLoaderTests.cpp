@@ -25,9 +25,9 @@ class ManifestLoaderTests : public juce::UnitTest
 public:
     ManifestLoaderTests() : juce::UnitTest ("ManifestLoader", "manifest") {}
 
-    dm::ManifestParseResult loadFixture (const juce::String& name)
+    dm::ManifestParseResult loadFixture (const juce::String& fixtureName)
     {
-        auto file = fixturesDir().getChildFile (name);
+        auto file = fixturesDir().getChildFile (fixtureName);
         if (! file.existsAsFile())
         {
             expect (false, "fixture not found: " + file.getFullPathName());

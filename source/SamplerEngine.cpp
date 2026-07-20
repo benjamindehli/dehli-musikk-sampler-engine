@@ -427,12 +427,12 @@ void SamplerEngine::processBlock (juce::AudioBuffer<float>& buffer,
     // push harder, rather than a fully-clipped/collapsed signal. The master AMP_VOLUME
     // is an output control, applied AFTER the FX. (For a library with no active
     // wave_shaper the chain is linear, so pre- vs post-FX placement is equivalent.)
-    if (libraryGain != 1.0f)
+    if (! juce::exactlyEqual (libraryGain, 1.0f))
         buffer.applyGain (libraryGain);
     cur->fx.process (buffer);
-    if (masterGain != 1.0f)
+    if (! juce::exactlyEqual (masterGain, 1.0f))
         buffer.applyGain (masterGain);
-    if (uiMasterGain != 1.0f)   // user master output fader — the very last stage
+    if (! juce::exactlyEqual (uiMasterGain, 1.0f))   // user master output fader — the very last stage
         buffer.applyGain (uiMasterGain);
 
     // Output safety limiter. Summing many voices (this organ stacks 9 drawbars ×

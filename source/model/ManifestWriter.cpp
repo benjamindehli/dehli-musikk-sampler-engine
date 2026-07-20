@@ -538,7 +538,7 @@ var manifestToVar (const PresetLibrary& library)
     o.set ("schema", library.schema > 0 ? library.schema : kManifestSchemaVersion);
     o.setStr ("format", library.format.isNotEmpty() ? library.format : juce::String ("dmse-manifest"));
     o.setStr ("library", library.library);
-    if (library.gainDb != 0.0)
+    if (! juce::exactlyEqual (library.gainDb, 0.0))
         o.set ("gainDb", library.gainDb);
     if (! library.polySaveDefault)
         o.set ("polySaveDefault", false);

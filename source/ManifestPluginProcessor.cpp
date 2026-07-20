@@ -212,7 +212,9 @@ void ManifestPluginProcessor::loadEmbeddedLibrary()
     // diagnoses better than the old blank editor anyway.
     loaded = ! library.modes.isEmpty();
     if (loaded && sampleSource->size() == 0)
+    {
         DBG ("ManifestPluginProcessor: no audio assets registered (from-scratch library?)");
+    }
     if (loaded)
         engine.setLibrary (library, *sampleSource);
 }
