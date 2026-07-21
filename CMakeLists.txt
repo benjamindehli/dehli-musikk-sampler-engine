@@ -71,6 +71,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/NoteSequencerTests.cpp
         tests/CompiledModeTests.cpp
         tests/ManifestLintTests.cpp
+        tests/AudioRegressionTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE
@@ -83,6 +84,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
     # Absolute path to the fixtures so the test can find them regardless of cwd.
     target_compile_definitions(dmse_tests PRIVATE
         DMSE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        DMSE_TEST_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/golden"
         JUCE_USE_CURL=0
         JUCE_WEB_BROWSER=0
     )
