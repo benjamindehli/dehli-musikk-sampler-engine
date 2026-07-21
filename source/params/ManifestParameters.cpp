@@ -178,14 +178,37 @@ static int effectSlotFor (const Mode& mode, const Binding& b)
     return b.effectIndex.value_or (-1);
 }
 
-// Resolve a binding's group target to a group index: prefer the id (targetId → group
-// uid), falling back to the legacy groupIndex during the id migration.
+// Resolve a group-effect binding (an effect living inside a group's insert chain) to
+// its (group index, slot). The binding's targetId names the effect by its own id, so a
+// single id addresses the two-level (group, slot) target with no positional effectIndex.
+// Returns false when the targetId does not name any group effect.
+static bool groupEffectSlotFor (const Mode& mode, const Binding& b, int& groupOut, int& slotOut)
+{
+    if (b.targetId.isNotEmpty())
+        for (int gi = 0; gi < mode.groups.size(); ++gi)
+        {
+            const auto& fx = mode.groups.getReference (gi).effects;
+            for (int si = 0; si < fx.size(); ++si)
+                if (fx.getReference (si).id == b.targetId)
+                    { groupOut = gi; slotOut = si; return true; }
+        }
+    return false;
+}
+
+// Resolve a binding's group target to a group index: prefer the id — targetId names
+// either the group (uid) or an effect inside it (a group-effect binding) — falling back
+// to the legacy groupIndex during the id migration.
 static int groupSlotFor (const Mode& mode, const Binding& b)
 {
     if (b.targetId.isNotEmpty())
+    {
         for (int i = 0; i < mode.groups.size(); ++i)
             if (mode.groups.getReference (i).uid == b.targetId)
                 return i;
+        int g = -1, s = -1;
+        if (groupEffectSlotFor (mode, b, g, s))
+            return g;
+    }
     return b.groupIndex.value_or (-1);
 }
 
@@ -442,9 +465,13 @@ CompiledMode::CompiledMode (const Mode& mode, juce::AudioProcessorValueTreeState
         const auto& p  = b.parameter;
         const int  fx  = effectSlotFor (mode, b);   // instrument effect slot (id-resolved)
         const int  grp = groupSlotFor (mode, b);    // group index (id-resolved)
-        const bool groupEffect = b.level == "group" && grp >= 0 && b.effectIndex.has_value();
+        // Group-effect slot: id-resolved (targetId names the effect) with the legacy
+        // effectIndex as the fallback slot within the group's chain.
+        int geGrp = -1, geSlot = -1;
+        const bool idGroupEffect = groupEffectSlotFor (mode, b, geGrp, geSlot);
+        const bool groupEffect = b.level == "group" && grp >= 0 && (idGroupEffect || b.effectIndex.has_value());
         const bool groupLevel  = b.level == "group" && grp >= 0;
-        const int  gei = b.effectIndex.value_or (0);
+        const int  gei = idGroupEffect ? geSlot : b.effectIndex.value_or (0);
 
         // FX param routed group-chain → addressed instrument effect → semantic fallback.
         auto fxRoute = [&] (P fp, Route fallback, bool allowGroup = true) -> Route

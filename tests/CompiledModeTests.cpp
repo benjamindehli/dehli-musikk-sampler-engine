@@ -9,10 +9,44 @@
 #include <params/CompiledMode.h>
 #include <model/ManifestLoader.h>
 #include <SamplerEngine.h>
+#include <audio/EmbeddedFlacSource.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 
 namespace
 {
+constexpr double kSR = 48000.0;
+
+// A mono FLAC blob holding a constant DC level — a stand-in sample whose rendered
+// value we can read straight back to observe what the FX chain did to it.
+juce::MemoryBlock dcFlac (float level, int frames)
+{
+    juce::AudioBuffer<float> buf (1, frames);
+    juce::FloatVectorOperations::fill (buf.getWritePointer (0), level, frames);
+    juce::MemoryBlock mb;
+    juce::FlacAudioFormat flac;
+    auto* out = new juce::MemoryOutputStream (mb, false);
+    std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (out, kSR, 1, 16, {}, 0));
+    if (w == nullptr) { delete out; return {}; }
+    w->writeFromAudioSampleBuffer (buf, 0, frames);
+    w.reset();
+    return mb;
+}
+
+void waitForBuild (dm::SamplerEngine& engine)
+{
+    for (int i = 0; i < 5000 && engine.isLoading(); ++i)
+        juce::Thread::sleep (1);
+}
+
+float renderNote (dm::SamplerEngine& engine, int note)
+{
+    juce::AudioBuffer<float> out (1, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent (juce::MidiMessage::noteOn (1, note, 1.0f), 0);
+    engine.processBlock (out, midi, nullptr);
+    return out.getSample (0, 200);
+}
 
 // Minimal host processor — just enough to own an APVTS in a console app.
 struct DummyProcessor : juce::AudioProcessor
@@ -107,6 +141,71 @@ public:
         dm::SamplerEngine engine;
         cm.apply (engine, nullptr);
         expect (true, "apply with LFO routes should be safe");
+
+        testGroupEffectByIdRoute();
+    }
+
+    // A group-effect binding addressed purely by the effect's id (no positional
+    // effectIndex) must route to the right slot inside the right group's chain. The
+    // group has a transparent lowpass in slot 0 and a gain in slot 1; a LEVEL binding
+    // that names the gain by id must attenuate the signal. If the id failed to resolve,
+    // the fallback slot (0, the lowpass) ignores LEVEL and the signal stays untouched —
+    // so an attenuated result proves the id resolved to the gain in slot 1.
+    void testGroupEffectByIdRoute()
+    {
+        beginTest ("group-effect binding resolves the effect slot by id");
+
+        auto flac = dcFlac (0.50f, 4000);
+        dm::EmbeddedFlacSource source;
+        expect (source.addFlac ("flac:a", flac.getData(), flac.getSize()));
+
+        auto parsed = dm::loadManifestFromJson (R"({
+            "schema": 1,
+            "modes": [
+                { "name": "GrpFx",
+                  "amp": { "attack":0, "decay":0, "sustain":1, "release":0, "volume":1, "velTrack":0 },
+                  "groups": [
+                      { "uid":"g0",
+                        "effects": [
+                            { "type":"lowpass", "id":"g0_fx_lowpass", "frequency":18000.0 },
+                            { "type":"gain",    "id":"g0_fx_gain",    "gain":0.0 } ],
+                        "samples": [
+                            { "source":"flac:a", "loNote":60, "hiNote":60, "rootNote":60, "sampleRate":48000, "pitchKeyTrack":false } ] } ],
+                  "ui": { "width":400, "height":200, "tabs": [ { "name":"main",
+                      "controls": [
+                          { "id":"ctl_0", "label":"gaintrim", "controlIndex":0, "min":0.0, "max":1.0, "value":0.0,
+                            "bindings": [
+                                { "type":"effect", "level":"group", "parameter":"LEVEL", "targetId":"g0_fx_gain",
+                                  "translation":"linear", "translationOutputMin":0.0, "translationOutputMax":-48.0 } ] } ] } ] }
+                }
+            ]
+        })");
+        expect (parsed.ok, "group-effect manifest should load");
+
+        dm::SamplerEngine engine;
+        engine.prepare (kSR, 512, 1);
+        engine.setLibrary (parsed.library, source);
+        waitForBuild (engine);
+
+        // Baseline: gain at 0 dB (unity), lowpass transparent to DC → sample passes.
+        expectWithinAbsoluteError (renderNote (engine, 60), 0.50f, 0.03f);
+
+        DummyProcessor proc;
+        juce::AudioProcessorValueTreeState apvts (
+            proc, nullptr, "PARAMS", dm::params::createLayout (parsed.library));
+        auto* knob = apvts.getParameter ("ctl_gaintrim");
+        expect (knob != nullptr, "group-effect knob should have a param");
+        if (knob == nullptr)
+            return;
+
+        const auto& mode = parsed.library.modes.getReference (0);
+        dm::params::CompiledMode cm (mode, apvts);
+
+        // Knob to max → LEVEL binding drives the gain slot to -48 dB.
+        knob->setValueNotifyingHost (1.0f);
+        cm.apply (engine, nullptr);
+        expect (renderNote (engine, 60) < 0.05f,
+                "id-resolved group-effect LEVEL should attenuate the gain slot");
     }
 };
 
