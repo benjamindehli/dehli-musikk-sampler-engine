@@ -19,6 +19,14 @@ struct Obj
     template <typename T>
     void setOpt (const char* key, const std::optional<T>& v) { if (v) o->setProperty (key, *v); }
 
+    // Emit a positional element index only when `suppress` is false. Bindings are
+    // id-based (targetId), so a resolved binding suppresses its now-redundant index;
+    // a hand-authored binding that lacks a targetId keeps the index as the fallback
+    // the loader and engine still honour.
+    template <typename T>
+    void setOptUnless (bool suppress, const char* key, const std::optional<T>& v)
+    { if (! suppress && v) o->setProperty (key, *v); }
+
     var toVar() const { return var (o.get()); }
 };
 
@@ -45,13 +53,16 @@ var writeBinding (const Binding& b)
     o.setOpt ("translationOutputMin", b.translationOutputMin);
     o.setOpt ("translationOutputMax", b.translationOutputMax);
 
-    o.setOpt ("effectIndex", b.effectIndex);
-    o.setOpt ("controlIndex", b.controlIndex);
-    o.setOpt ("groupIndex", b.groupIndex);
+    // Element-reference indices: suppressed once the binding is id-based (targetId set).
+    const bool hasId = b.targetId.isNotEmpty();
+    o.setOptUnless (hasId, "effectIndex", b.effectIndex);
+    o.setOptUnless (hasId, "controlIndex", b.controlIndex);
+    o.setOptUnless (hasId, "groupIndex", b.groupIndex);
+    o.setOptUnless (hasId, "position", b.position);
+    // Sequence / note references — not element ids, always kept.
     o.setOpt ("noteIndex", b.noteIndex);
     o.setOpt ("bindingIndex", b.bindingIndex);
     o.setOpt ("seqIndex", b.seqIndex);
-    o.setOpt ("position", b.position);
 
     if (! b.translationValue.isVoid())
         o.set ("translationValue", b.translationValue);
@@ -505,8 +516,9 @@ var writeMode (const Mode& m)
             co.set ("cc", cb.cc);
             co.setStr ("parameter", cb.parameter);
             co.setStr ("targetId", cb.targetId);
-            co.setOpt ("groupIndex", cb.groupIndex);
-            co.setOpt ("controlIndex", cb.controlIndex);
+            const bool ccHasId = cb.targetId.isNotEmpty();
+            co.setOptUnless (ccHasId, "groupIndex", cb.groupIndex);
+            co.setOptUnless (ccHasId, "controlIndex", cb.controlIndex);
             co.set ("normMin", cb.normMin);
             co.set ("normMax", cb.normMax);
             ccs.add (co.toVar());

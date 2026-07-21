@@ -391,14 +391,24 @@ void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
         m.depth    = (float) lfo.modAmount;
         m.shape    = lfoShapeFromString (lfo.shape);
 
-        // Resolve id-based group targets → indices ONCE here, so the audio thread
-        // (applyLfoBlock) reads plain group indices. targetId is a group uid during the
-        // migration; fall back to the binding's own groupIndex when absent.
+        // Resolve id-based targets → indices ONCE here, so the audio thread
+        // (applyLfoBlock) reads plain group + effect indices. targetId names either a
+        // group (uid) or an effect inside a group (group-effect binding, e.g. a
+        // tremulant swelling a stop's gain slot); recover the group and, for the latter,
+        // the slot within its chain. Falls back to the binding's own indices when absent.
         juce::Array<Binding> bindings = lfo.bindings;
         for (auto& b : bindings)
             if (b.targetId.isNotEmpty())
                 for (int gi = 0; gi < mode.groups.size(); ++gi)
+                {
                     if (mode.groups.getReference (gi).uid == b.targetId) { b.groupIndex = gi; break; }
+                    const auto& fx = mode.groups.getReference (gi).effects;
+                    bool found = false;
+                    for (int si = 0; si < fx.size(); ++si)
+                        if (fx.getReference (si).id == b.targetId)
+                            { b.groupIndex = gi; b.effectIndex = si; found = true; break; }
+                    if (found) break;
+                }
 
         for (const auto& b : bindings)
         {

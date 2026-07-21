@@ -206,6 +206,70 @@ public:
         cm.apply (engine, nullptr);
         expect (renderNote (engine, 60) < 0.05f,
                 "id-resolved group-effect LEVEL should attenuate the gain slot");
+
+        testModulatorGroupEffectById();
+    }
+
+    // The engine's LFO path resolves group-effect modulator targets separately from the
+    // param plan (Elektrisk's tremulant swells a group's gain slot). With the manifest
+    // now id-based, that binding carries only the effect's id — no groupIndex/effectIndex
+    // — so the VoiceEngine must recover (group, slot) from the id. If it fails, no groupFx
+    // target is built and the output is constant; success means the LFO sweeps the gain,
+    // so the rendered level varies block to block.
+    void testModulatorGroupEffectById()
+    {
+        beginTest ("LFO modulator resolves a group-effect target by id");
+
+        auto flac = dcFlac (0.50f, 40000);
+        dm::EmbeddedFlacSource source;
+        expect (source.addFlac ("flac:a", flac.getData(), flac.getSize()));
+
+        // One group with a transparent lowpass (slot 0) and a gain (slot 1). A sine LFO
+        // drives the gain LEVEL by id only — no positional indices in the binding.
+        auto parsed = dm::loadManifestFromJson (R"({
+            "schema": 1,
+            "modes": [
+                { "name": "Trem",
+                  "amp": { "attack":0, "decay":0, "sustain":1, "release":0, "volume":1, "velTrack":0 },
+                  "groups": [
+                      { "uid":"g0",
+                        "effects": [
+                            { "type":"lowpass", "id":"g0_fx_lowpass", "frequency":18000.0 },
+                            { "type":"gain",    "id":"g0_fx_gain",    "gain":0.0 } ],
+                        "samples": [
+                            { "source":"flac:a", "loNote":60, "hiNote":60, "rootNote":60, "sampleRate":48000, "pitchKeyTrack":false } ] } ],
+                  "modulators": [
+                      { "id":"mod_0", "shape":"sine", "frequency":20.0, "modAmount":1.0,
+                        "bindings": [
+                            { "type":"effect", "level":"group", "parameter":"LEVEL", "targetId":"g0_fx_gain",
+                              "modBehavior":"set", "translation":"linear",
+                              "translationOutputMin":0.0, "translationOutputMax":-40.0 } ] } ],
+                  "ui": { "width":400, "height":200, "tabs": [ { "name":"main", "controls": [] } ] }
+                }
+            ]
+        })");
+        expect (parsed.ok, "modulator manifest should load");
+
+        dm::SamplerEngine engine;
+        engine.prepare (kSR, 512, 1);
+        engine.setLibrary (parsed.library, source);
+        waitForBuild (engine);
+
+        juce::AudioBuffer<float> out (1, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
+        engine.processBlock (out, midi, nullptr);   // note on
+
+        float lo = 1.0e9f, hi = -1.0e9f;
+        for (int blk = 0; blk < 30; ++blk)
+        {
+            juce::MidiBuffer empty;
+            engine.processBlock (out, empty, nullptr);
+            const float s = std::abs (out.getSample (0, 200));
+            lo = juce::jmin (lo, s);
+            hi = juce::jmax (hi, s);
+        }
+        expect (hi - lo > 0.05f, "LFO should sweep the id-resolved group gain slot (constant means it did not resolve)");
     }
 };
 
