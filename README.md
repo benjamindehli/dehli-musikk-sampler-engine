@@ -17,6 +17,10 @@ The engine does not read DecentSampler files itself. The companion tool [ds-plug
 * Lazy per mode decoding, so only the active mode's samples are held in memory
 * Mode switching through a lock free pointer swap that is safe while audio runs
 
+## Large libraries
+
+Multi gigabyte libraries do not need a huge binary or a full decode into RAM. By default the converter emits the samples as an external, memory mapped `samples.pak` file rather than compiling them into the plugin, so the binary stays small and the operating system pages in only the slices that are actually used. On top of that, decoding is lazy and per mode: a sample is decoded to PCM the first time a mode acquires it and freed when the last mode using it is retired, so only the active mode's samples are resident. Switching modes releases the previous mode's audio. A plugin can still embed its samples instead (the `EmbeddedFlacSource` backend also serves them from the binary's data), which suits small libraries. The `SampleSource` interface is the seam, so a future fully streamed backend could slot in without touching the voice engine.
+
 ## Repository layout
 
 * `source/model/` holds the native data model and the JSON manifest loader and writer. This is the single source of truth for the manifest schema, with lint warnings for unknown keys and dangling references.

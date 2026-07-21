@@ -72,6 +72,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/CompiledModeTests.cpp
         tests/ManifestLintTests.cpp
         tests/AudioRegressionTests.cpp
+        tests/SampleSourceTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE
