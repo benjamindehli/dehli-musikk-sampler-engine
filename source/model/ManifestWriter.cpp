@@ -329,6 +329,7 @@ var writeUi (const Ui& ui)
     Obj o;
     o.setStr ("background", ui.background);
     o.setStr ("overlay", ui.overlay);
+    o.setStr ("overlayScope", ui.overlayScope);
     o.set ("width", ui.width);
     o.set ("height", ui.height);
     if (ui.cropTop != 0) o.set ("cropTop", ui.cropTop);

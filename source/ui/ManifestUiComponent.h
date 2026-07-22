@@ -54,6 +54,12 @@ public:
         the ribbon painted in the background. No-op when the mode has no readout. */
     void setStrumSpeedText (const juce::String& text);
 
+    /** True when the overlay is present AND scoped to reach beyond the face (over the
+        keyboard). In that case this component does NOT draw it — the editor paints it
+        across the wider region instead — but exposes it via getOverlayImage(). */
+    bool overlayCoversKeyboard() const { return overlayInstrumentScope && overlay.isValid(); }
+    const juce::Image& getOverlayImage() const { return overlay; }
+
     void paint (juce::Graphics&) override;
     void paintOverChildren (juce::Graphics&) override;   // overlay image, drawn over every control
     void resized() override;
@@ -118,6 +124,7 @@ private:
     ImageProvider provider;
     juce::Image background;
     juce::Image overlay;                // optional, drawn over the background AND all controls
+    bool overlayInstrumentScope { false };  // overlay reaches over the keyboard → editor draws it
     float bgCropFrac { 0.0f };          // fraction of the background trimmed off the top
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestUiComponent)

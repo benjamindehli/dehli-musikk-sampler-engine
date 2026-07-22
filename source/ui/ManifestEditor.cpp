@@ -632,6 +632,19 @@ void ManifestEditor::paint (juce::Graphics& g)
     g.fillAll (juce::Colour (0xff191a1b));   // top + bottom strip background
 }
 
+void ManifestEditor::paintOverChildren (juce::Graphics& g)
+{
+    // An overlay scoped to "instrument" is drawn HERE (not in the face) so it can span
+    // the face AND the keyboard row while excluding the top settings/output bar and the
+    // bottom credit/version bar — exactly the region left after removing those strips.
+    // Painted over all children, so it never blocks the controls or the keys.
+    if (uiComponent == nullptr || ! uiComponent->overlayCoversKeyboard())
+        return;
+
+    const auto region = getLocalBounds().withTrimmedTop (kTopStrip).withTrimmedBottom (kBottomStrip);
+    g.drawImage (uiComponent->getOverlayImage(), region.toFloat(), juce::RectanglePlacement::stretchToFit);
+}
+
 void ManifestEditor::resized()
 {
     auto area = getLocalBounds();

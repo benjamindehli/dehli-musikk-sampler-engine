@@ -125,6 +125,7 @@ public:
     bool handleKey (const juce::KeyPress& key);   // Z / X octave shift (host wrapper forwards too)
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;   // "instrument"-scoped overlay (face + keyboard)
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;   // right-click outside the face → Settings menu
     void parentHierarchyChanged() override;   // theme the Standalone window when attached

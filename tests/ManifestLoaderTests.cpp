@@ -95,8 +95,9 @@ public:
         // UI
         expectEquals (mode.ui.width, 812);
         expectEquals (mode.ui.height, 375);
-        expectEquals (mode.ui.background, juce::String ("img:background_bass"));
-        expectEquals (mode.ui.overlay,    juce::String ("img:overlay_bass"));
+        expectEquals (mode.ui.background,   juce::String ("img:background_bass"));
+        expectEquals (mode.ui.overlay,      juce::String ("img:overlay_bass"));
+        expectEquals (mode.ui.overlayScope, juce::String ("instrument"));
         expectEquals (mode.ui.tabs.size(), 1);
         const auto& tab = mode.ui.tabs.getReference (0);
         expectEquals (tab.controls.size(), 3);

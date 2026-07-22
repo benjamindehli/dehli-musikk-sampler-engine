@@ -420,11 +420,12 @@ UiImage parseImage (const var& v)
 Ui parseUi (const var& v)
 {
     Ui ui;
-    checkKeys (v, "ui", { "background", "overlay", "width", "height", "cropTop", "layoutMode", "bgMode",
-                          "whiteKeyTint", "blackKeyTint", "tabs", "keyboard", "buttonLinks",
-                          "strumSpeedReadout" });
-    ui.background = str (v, "background");
-    ui.overlay    = str (v, "overlay");
+    checkKeys (v, "ui", { "background", "overlay", "overlayScope", "width", "height", "cropTop",
+                          "layoutMode", "bgMode", "whiteKeyTint", "blackKeyTint", "tabs", "keyboard",
+                          "buttonLinks", "strumSpeedReadout" });
+    ui.background   = str (v, "background");
+    ui.overlay      = str (v, "overlay");
+    ui.overlayScope = str (v, "overlayScope");
     ui.width      = intg (v, "width", 0);
     ui.height     = intg (v, "height", 0);
     ui.cropTop    = intg (v, "cropTop", 0);

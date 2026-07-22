@@ -199,6 +199,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         background = provider (uiData.background);
     if (uiData.overlay.isNotEmpty() && provider)
         overlay = provider (uiData.overlay);
+    overlayInstrumentScope = uiData.overlayScope == "instrument";
 
     // Per-mode top crop: trim `cropTop` design-px off the top. Shrink the height,
     // shift every element up by the same amount, and remember the fraction so paint()
@@ -669,7 +670,9 @@ void ManifestUiComponent::paintOverChildren (juce::Graphics& g)
     // background and all controls. It is pure painting — not a component — so it never
     // intercepts mouse events; the controls underneath stay fully interactive. Uses the
     // same stretch + top-crop transform as the background so it stays aligned at any size.
-    if (! overlay.isValid())
+    // When the overlay is scoped to also cover the keyboard, the EDITOR paints it across
+    // that wider region instead, so skip it here.
+    if (! overlay.isValid() || overlayInstrumentScope)
         return;
 
     const int imgW = overlay.getWidth();

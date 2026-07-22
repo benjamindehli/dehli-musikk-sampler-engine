@@ -374,6 +374,10 @@ struct Ui
                                  // PNG drawn OVER the background AND every control (glass,
                                  // vignette, branding). Purely painted, so it never blocks
                                  // mouse events; controls underneath stay interactive.
+    juce::String overlayScope;   // how far the overlay reaches: "" / "face" (default) = the
+                                 // manifest face only; "instrument" = the face PLUS the
+                                 // keyboard row, excluding the top settings/output bar and
+                                 // the bottom credit/version bar (drawn at the editor level).
     int width = 0, height = 0;
     int cropTop = 0;             // design-px trimmed off the TOP: shrinks the height,
                                  // shifts every element up, and shows only the lower
