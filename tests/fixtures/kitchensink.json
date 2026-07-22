@@ -99,6 +99,7 @@
       "menuKeySwitches": [ { "note": 25, "option": 1 } ],
       "ui": {
         "background": "img:sink_bg",
+        "overlay": "img:sink_overlay",
         "width": 812, "height": 375, "cropTop": 40,
         "layoutMode": "relative", "bgMode": "top_left",
         "whiteKeyTint": "80FFE082", "blackKeyTint": "40FFE082",

@@ -29,6 +29,7 @@
       ],
       "ui": {
         "background": "img:background_bass",
+        "overlay": "img:overlay_bass",
         "width": 812, "height": 375,
         "layoutMode": "relative", "bgMode": "top_left",
         "tabs": [

@@ -55,6 +55,7 @@ public:
     void setStrumSpeedText (const juce::String& text);
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;   // overlay image, drawn over every control
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;   // background right-click → context menu
 
@@ -116,6 +117,7 @@ private:
                                         // already adjusted for cropTop in the ctor)
     ImageProvider provider;
     juce::Image background;
+    juce::Image overlay;                // optional, drawn over the background AND all controls
     float bgCropFrac { 0.0f };          // fraction of the background trimmed off the top
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestUiComponent)

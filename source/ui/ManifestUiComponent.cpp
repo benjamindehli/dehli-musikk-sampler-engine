@@ -197,6 +197,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
 {
     if (uiData.background.isNotEmpty() && provider)
         background = provider (uiData.background);
+    if (uiData.overlay.isNotEmpty() && provider)
+        overlay = provider (uiData.overlay);
 
     // Per-mode top crop: trim `cropTop` design-px off the top. Shrink the height,
     // shift every element up by the same amount, and remember the fraction so paint()
@@ -659,6 +661,23 @@ void ManifestUiComponent::paint (juce::Graphics& g)
     }
     else
         g.fillAll (juce::Colour (0xff222222));
+}
+
+void ManifestUiComponent::paintOverChildren (juce::Graphics& g)
+{
+    // The overlay is drawn AFTER every child component, so it sits on top of the
+    // background and all controls. It is pure painting — not a component — so it never
+    // intercepts mouse events; the controls underneath stay fully interactive. Uses the
+    // same stretch + top-crop transform as the background so it stays aligned at any size.
+    if (! overlay.isValid())
+        return;
+
+    const int imgW = overlay.getWidth();
+    const int imgH = overlay.getHeight();
+    const int srcY = juce::jlimit (0, juce::jmax (0, imgH - 1), juce::roundToInt (bgCropFrac * (float) imgH));
+    g.drawImage (overlay,
+                 0, 0, getWidth(), getHeight(),   // dest: the whole (cropped) component
+                 0, srcY, imgW, imgH - srcY);      // src: lower part only, matching the background crop
 }
 
 void ManifestUiComponent::mouseDown (const juce::MouseEvent& e)

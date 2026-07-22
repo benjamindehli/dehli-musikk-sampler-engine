@@ -370,6 +370,10 @@ struct ButtonLink
 struct Ui
 {
     juce::String background;     // bg image asset id
+    juce::String overlay;        // optional overlay image asset id — a mostly-transparent
+                                 // PNG drawn OVER the background AND every control (glass,
+                                 // vignette, branding). Purely painted, so it never blocks
+                                 // mouse events; controls underneath stay interactive.
     int width = 0, height = 0;
     int cropTop = 0;             // design-px trimmed off the TOP: shrinks the height,
                                  // shifts every element up, and shows only the lower
