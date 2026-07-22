@@ -108,9 +108,9 @@ public:
 
     // Compare the render against tests/golden/<name>.f32, or (re)write it when the file
     // is missing or DMSE_UPDATE_GOLDEN is set.
-    void checkGolden (const juce::String& name, const juce::AudioBuffer<float>& buf)
+    void checkGolden (const juce::String& goldenName, const juce::AudioBuffer<float>& buf)
     {
-        auto file = goldenDir().getChildFile (name + ".f32");
+        auto file = goldenDir().getChildFile (goldenName + ".f32");
         const int nCh = buf.getNumChannels();
         const int nSm = buf.getNumSamples();
 
@@ -133,12 +133,12 @@ public:
         }
 
         juce::MemoryBlock mb;
-        expect (file.loadFileAsData (mb), "golden unreadable: " + name);
+        expect (file.loadFileAsData (mb), "golden unreadable: " + goldenName);
         juce::MemoryInputStream is (mb, false);
         const int gCh = is.readInt();
         const int gSm = is.readInt();
-        expectEquals (gCh, nCh, "golden channel count mismatch: " + name);
-        expectEquals (gSm, nSm, "golden sample count mismatch: " + name);
+        expectEquals (gCh, nCh, "golden channel count mismatch: " + goldenName);
+        expectEquals (gSm, nSm, "golden sample count mismatch: " + goldenName);
         if (gCh != nCh || gSm != nSm)
             return;
 
@@ -154,9 +154,9 @@ public:
             }
         }
         expect (maxDiff <= kTol,
-                name + " diverged from golden (max abs diff " + juce::String (maxDiff, 6)
+                goldenName + " diverged from golden (max abs diff " + juce::String (maxDiff, 6)
                 + " > tolerance " + juce::String (kTol, 6) + ")");
-        logMessage (name + ": max abs diff from golden = " + juce::String (maxDiff, 8));
+        logMessage (goldenName + ": max abs diff from golden = " + juce::String (maxDiff, 8));
     }
 
     void runTest() override
