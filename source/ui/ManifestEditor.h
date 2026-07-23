@@ -129,7 +129,17 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;   // right-click outside the face → Settings menu
     void parentHierarchyChanged() override;   // theme the Standalone window when attached
-    bool keyPressed (const juce::KeyPress& key) override { return handleKey (key); }
+
+    // Route computer-keyboard note keys to the on-screen keyboard REGARDLESS of which
+    // control currently holds focus, so you can keep playing while adjusting a knob —
+    // clicking a knob otherwise moves focus off the keyboard and its keyStateChanged
+    // (which drives the notes) stops firing. Z/X octave shift + Esc (handleKey) win first.
+    // The plugin-editor wrapper forwards to these too, so focus anywhere in the chain works.
+    bool handleKeyOrPlayNote (const juce::KeyPress& key) { return handleKey (key) || keyboard.keyPressed (key); }
+    bool forwardKeyState (bool isKeyDown) { return keyboard.keyStateChanged (isKeyDown); }
+
+    bool keyPressed (const juce::KeyPress& key) override { return handleKeyOrPlayNote (key); }
+    bool keyStateChanged (bool isKeyDown) override { return forwardKeyState (isKeyDown); }
 
 private:
     void rebuildUi();
@@ -329,7 +339,8 @@ public:
     }
 
     void resized() override { editor.setBounds (getLocalBounds()); }
-    bool keyPressed (const juce::KeyPress& key) override { return editor.handleKey (key); }
+    bool keyPressed (const juce::KeyPress& key) override { return editor.handleKeyOrPlayNote (key); }
+    bool keyStateChanged (bool isKeyDown) override { return editor.forwardKeyState (isKeyDown); }
 
 private:
     ManifestEditor editor;
