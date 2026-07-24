@@ -641,6 +641,13 @@ void ManifestEditor::paintOverChildren (juce::Graphics& g)
     if (uiComponent == nullptr || ! uiComponent->overlayCoversKeyboard())
         return;
 
+    // The full-cover modals (settings, mode chooser, loading) dim the whole editor and
+    // must read cleanly, so they sit ABOVE the decorative overlay — skip it while any is
+    // showing (their dim backdrop means nothing would show through underneath anyway).
+    if ((settingsPanel != nullptr && settingsPanel->isVisible())
+        || modeChooser.isVisible() || loadingOverlay.isVisible())
+        return;
+
     const auto region = getLocalBounds().withTrimmedTop (kTopStrip).withTrimmedBottom (kBottomStrip);
     g.drawImage (uiComponent->getOverlayImage(), region.toFloat(), juce::RectanglePlacement::stretchToFit);
 }
