@@ -98,6 +98,10 @@ public:
         expectEquals (mode.ui.background,   juce::String ("img:background_bass"));
         expectEquals (mode.ui.overlay,      juce::String ("img:overlay_bass"));
         expectEquals (mode.ui.overlayScope, juce::String ("instrument"));
+        expectEquals (mode.ui.menuPopupBackground,    juce::String ("FF202122"));
+        expectEquals (mode.ui.menuPopupText,          juce::String ("FFE8E9EA"));
+        expectEquals (mode.ui.menuPopupHighlight,     juce::String ("FF0891B2"));
+        expectEquals (mode.ui.menuPopupHighlightText, juce::String ("FFFFFFFF"));
         expectEquals (mode.ui.tabs.size(), 1);
         const auto& tab = mode.ui.tabs.getReference (0);
         expectEquals (tab.controls.size(), 3);

@@ -127,6 +127,12 @@ private:
     bool overlayInstrumentScope { false };  // overlay reaches over the keyboard → editor draws it
     float bgCropFrac { 0.0f };          // fraction of the background trimmed off the top
 
+    // Per-plugin dropdown-popup styling (ui.menuPopup*). Assigned to the select ComboBoxes
+    // so their popup list uses these PopupMenu colours; the settings/mode menus (which use a
+    // different LookAndFeel) are unaffected. Cleared off the combos in the destructor.
+    juce::LookAndFeel_V4 menuPopupLnf;
+    bool hasMenuPopupStyle { false };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ManifestUiComponent)
 };
 

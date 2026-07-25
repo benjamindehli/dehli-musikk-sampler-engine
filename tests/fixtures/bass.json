@@ -31,6 +31,10 @@
         "background": "img:background_bass",
         "overlay": "img:overlay_bass",
         "overlayScope": "instrument",
+        "menuPopupBackground": "FF202122",
+        "menuPopupText": "FFE8E9EA",
+        "menuPopupHighlight": "FF0891B2",
+        "menuPopupHighlightText": "FFFFFFFF",
         "width": 812, "height": 375,
         "layoutMode": "relative", "bgMode": "top_left",
         "tabs": [

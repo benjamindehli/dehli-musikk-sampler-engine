@@ -392,6 +392,13 @@ struct Ui
     // e.g. whiteKeyTint "30ffcc00" = subtle yellow on white keys only. Empty = none.
     juce::String whiteKeyTint;
     juce::String blackKeyTint;
+    // Optional per-plugin colours (ARGB hex) for the dropdown POPUP list of in-GUI select
+    // menus. The closed box keeps each Menu's own backgroundColor/textColor; these style the
+    // list that drops down. Empty = default look. Highlight = hovered item.
+    juce::String menuPopupBackground;
+    juce::String menuPopupText;
+    juce::String menuPopupHighlight;
+    juce::String menuPopupHighlightText;
     juce::Array<ButtonLink> buttonLinks;   // "when button X → state S, set button Y → state T"
     // Optional live strum-speed readout (design px; the converter records the removed
     // chord-order menu's rect here). The editor shows the sequencer's effective rate

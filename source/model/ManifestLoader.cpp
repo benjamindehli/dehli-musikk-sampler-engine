@@ -421,8 +421,9 @@ Ui parseUi (const var& v)
 {
     Ui ui;
     checkKeys (v, "ui", { "background", "overlay", "overlayScope", "width", "height", "cropTop",
-                          "layoutMode", "bgMode", "whiteKeyTint", "blackKeyTint", "tabs", "keyboard",
-                          "buttonLinks", "strumSpeedReadout" });
+                          "layoutMode", "bgMode", "whiteKeyTint", "blackKeyTint",
+                          "menuPopupBackground", "menuPopupText", "menuPopupHighlight", "menuPopupHighlightText",
+                          "tabs", "keyboard", "buttonLinks", "strumSpeedReadout" });
     ui.background   = str (v, "background");
     ui.overlay      = str (v, "overlay");
     ui.overlayScope = str (v, "overlayScope");
@@ -433,6 +434,10 @@ Ui parseUi (const var& v)
     ui.bgMode     = str (v, "bgMode");
     ui.whiteKeyTint = str (v, "whiteKeyTint");
     ui.blackKeyTint = str (v, "blackKeyTint");
+    ui.menuPopupBackground    = str (v, "menuPopupBackground");
+    ui.menuPopupText          = str (v, "menuPopupText");
+    ui.menuPopupHighlight     = str (v, "menuPopupHighlight");
+    ui.menuPopupHighlightText = str (v, "menuPopupHighlightText");
     if (const auto sr = get (v, "strumSpeedReadout"); sr.isObject())
         ui.strumSpeedReadout = parseRect (sr);
 

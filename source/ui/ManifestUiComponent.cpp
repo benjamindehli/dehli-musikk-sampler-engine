@@ -201,6 +201,25 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         overlay = provider (uiData.overlay);
     overlayInstrumentScope = uiData.overlayScope == "instrument";
 
+    // Per-plugin dropdown-popup colours: configure a dedicated LookAndFeel (assigned to the
+    // select ComboBoxes below) so only the in-GUI dropdown lists are restyled. ARGB hex; a
+    // 6-digit value (no alpha) is treated as opaque.
+    {
+        auto argb = [] (const juce::String& s)
+        {
+            auto c = juce::Colour ((juce::uint32) s.getHexValue32());
+            return c.getAlpha() == 0 ? c.withAlpha (1.0f) : c;
+        };
+        auto set = [&] (int colourId, const juce::String& hex)
+        {
+            if (hex.isNotEmpty()) { menuPopupLnf.setColour (colourId, argb (hex)); hasMenuPopupStyle = true; }
+        };
+        set (juce::PopupMenu::backgroundColourId,          uiData.menuPopupBackground);
+        set (juce::PopupMenu::textColourId,                uiData.menuPopupText);
+        set (juce::PopupMenu::highlightedBackgroundColourId, uiData.menuPopupHighlight);
+        set (juce::PopupMenu::highlightedTextColourId,     uiData.menuPopupHighlightText);
+    }
+
     // Per-mode top crop: trim `cropTop` design-px off the top. Shrink the height,
     // shift every element up by the same amount, and remember the fraction so paint()
     // draws only the lower part of the background. Everything downstream (resized()
@@ -351,6 +370,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         combo->setColour (juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
         if (m.textColor.isNotEmpty())
             combo->setColour (juce::ComboBox::textColourId, argb (m.textColor));
+        if (hasMenuPopupStyle)
+            combo->setLookAndFeel (&menuPopupLnf);   // restyle only this dropdown's popup list
         combo->setJustificationType (m.hAlign == "center" ? juce::Justification::centred
                                    : m.hAlign == "right"  ? juce::Justification::centredRight
                                                           : juce::Justification::centredLeft);
@@ -614,7 +635,15 @@ void ManifestUiComponent::applyAllVisibility()
                                      static_cast<FilmstripKnob*> (w.comp.get())->getValue());
 }
 
-ManifestUiComponent::~ManifestUiComponent() = default;
+ManifestUiComponent::~ManifestUiComponent()
+{
+    // Detach menuPopupLnf from the ComboBoxes before that member is destroyed (JUCE
+    // requires a component's LookAndFeel to outlive it).
+    if (hasMenuPopupStyle)
+        for (auto& w : widgets)
+            if (w.comp != nullptr)
+                w.comp->setLookAndFeel (nullptr);
+}
 
 void ManifestUiComponent::handleButton (const Button& b, int index, int stateIndex)
 {
