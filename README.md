@@ -9,7 +9,7 @@ The engine does not read DecentSampler files itself. The companion tool [ds-plug
 * Custom polyphonic voice engine with windowed sinc interpolation, velocity layers, round robin selection, loop crossfades, monophonic tag choke and voice steal declicking
 * Curved ADSR amplitude envelopes matching DecentSampler's response, per group envelope overrides, one shot playback
 * Effect chain: lowpass, highpass, gain, wave shaper (tanh), convolution with runtime impulse response switching, anti phase stereo chorus, phaser and delay, at instrument and per group level
-* Note sequencer for auto strum and Omnichord style select and strum playing, where chord keys select and strum keys fire, with seamless voice morphing when the chord changes under ringing notes
+* Note sequencer for auto strum and Omnichord style select and strum playing, where chord keys select and strum keys fire, and ringing notes morph over to the new chord when the chord changes
 * Multiple LFO modulators with waveform shapes, per group tremolo, global and per group tuning modulation
 * Data driven editor rendered from the manifest: filmstrip knobs, image buttons, indicator lights, menus, tabs, keyboard color ranges and caption labels, value bubbles, a master output fader and level meter
 * Host automation through a generated APVTS parameter layout with bindings compiled at load time, so the audio thread does no string work
