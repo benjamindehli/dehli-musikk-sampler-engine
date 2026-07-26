@@ -15,7 +15,14 @@ namespace dm
 class ColouredKeyboard : public juce::MidiKeyboardComponent
 {
 public:
-    using juce::MidiKeyboardComponent::MidiKeyboardComponent;
+    ColouredKeyboard (juce::MidiKeyboardState& stateToUse, Orientation orient)
+        : juce::MidiKeyboardComponent (stateToUse, orient)
+    {
+        // Drop JUCE's amber hover/press overlay. The draw methods below give neutral
+        // feedback instead: white keys darken, black keys brighten, with no added hue.
+        setColour (mouseOverKeyOverlayColourId, juce::Colours::transparentBlack);
+        setColour (keyDownOverlayColourId,      juce::Colours::transparentBlack);
+    }
 
     void setColourRanges (const juce::Array<KeyboardColor>& ranges)
     {
@@ -52,6 +59,12 @@ protected:
     static constexpr float kWhiteTintAlpha = 0.75f;
     static constexpr float kBlackTintAlpha = 0.5f;
 
+    // Neutral hover/press feedback (drawn last, over any tint): white keys darken with a
+    // translucent black, black keys brighten with a translucent white. Press is stronger
+    // than hover. No hue, so it reads on plain, tinted, and zone-coloured keys alike.
+    static constexpr float kWhiteHoverDarken = 0.13f, kWhitePressDarken  = 0.28f;
+    static constexpr float kBlackHoverBright = 0.22f, kBlackPressBright  = 0.42f;
+
     void drawWhiteNote (int note, juce::Graphics& g, juce::Rectangle<float> area,
                         bool isDown, bool isOver, juce::Colour lineColour, juce::Colour textColour) override
     {
@@ -64,6 +77,11 @@ protected:
         if (auto c = colourFor (note))       // DecentSampler playable-zone tint
         {
             g.setColour (c->withAlpha (kWhiteTintAlpha));
+            g.fillRect (area);
+        }
+        if (isDown || isOver)
+        {
+            g.setColour (juce::Colours::black.withAlpha (isDown ? kWhitePressDarken : kWhiteHoverDarken));
             g.fillRect (area);
         }
     }
@@ -80,6 +98,11 @@ protected:
         if (auto c = colourFor (note))       // DecentSampler playable-zone tint
         {
             g.setColour (c->withAlpha (kBlackTintAlpha));
+            g.fillRect (area);
+        }
+        if (isDown || isOver)
+        {
+            g.setColour (juce::Colours::white.withAlpha (isDown ? kBlackPressBright : kBlackHoverBright));
             g.fillRect (area);
         }
     }
