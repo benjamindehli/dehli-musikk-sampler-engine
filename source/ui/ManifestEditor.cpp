@@ -154,6 +154,7 @@ ManifestEditor::ManifestEditor (ManifestEditorHost& h)
         host.confirmModeChoice (i);
     };
     addChildComponent (modeChooser);
+    addChildComponent (instrumentOverlay);   // shown per mode by layerOverlay() when scope = instrument
     if (host.needsModeChoice())
     {
         auto* modeValue = host.getApvts().getRawParameterValue (params::id::mode);
@@ -383,6 +384,7 @@ void ManifestEditor::rebuildUi()
     keyLabelStrip.setVisible (! ui.keyboardLabels.isEmpty());
 
     refreshWidgets();
+    layerOverlay();          // show/hide + raise the instrument-overlay layer for this mode
     resized();
     applyPreferredSize();   // modes may differ in height (per-mode cropTop) → resize host
 }
@@ -632,24 +634,28 @@ void ManifestEditor::paint (juce::Graphics& g)
     g.fillAll (juce::Colour (0xff191a1b));   // top + bottom strip background
 }
 
-void ManifestEditor::paintOverChildren (juce::Graphics& g)
+void ManifestEditor::layerOverlay()
 {
-    // An overlay scoped to "instrument" is drawn HERE (not in the face) so it can span
-    // the face AND the keyboard row while excluding the top settings/output bar and the
-    // bottom credit/version bar — exactly the region left after removing those strips.
-    // Painted over all children, so it never blocks the controls or the keys.
-    if (uiComponent == nullptr || ! uiComponent->overlayCoversKeyboard())
-        return;
+    // An "instrument"-scoped overlay is a real click-through layer (not a paintOverChildren
+    // pass) so it can sit ABOVE the face and the keyboard row yet BELOW the modals, staying
+    // visible and dimmed behind the settings panel etc. It spans the region left after the
+    // top settings/output bar and the bottom credit/version bar are removed.
+    if (uiComponent != nullptr && uiComponent->overlayCoversKeyboard())
+    {
+        instrumentOverlay.setImage (uiComponent->getOverlayImage());
+        instrumentOverlay.setVisible (true);
+        instrumentOverlay.toFront (false);   // above the face + keyboard, which the ctor/rebuild sent back
+    }
+    else
+    {
+        instrumentOverlay.setVisible (false);
+    }
 
-    // The full-cover modals (settings, mode chooser, loading) dim the whole editor and
-    // must read cleanly, so they sit ABOVE the decorative overlay — skip it while any is
-    // showing (their dim backdrop means nothing would show through underneath anyway).
-    if ((settingsPanel != nullptr && settingsPanel->isVisible())
-        || modeChooser.isVisible() || loadingOverlay.isVisible())
-        return;
-
-    const auto region = getLocalBounds().withTrimmedTop (kTopStrip).withTrimmedBottom (kBottomStrip);
-    g.drawImage (uiComponent->getOverlayImage(), region.toFloat(), juce::RectanglePlacement::stretchToFit);
+    // Keep the full-cover modals above the overlay, so it reads as a dimmed layer behind them.
+    if (loadingOverlay.isVisible())                             loadingOverlay.toFront (false);
+    if (modeChooser.isVisible())                                modeChooser.toFront (false);
+    if (settingsPanel != nullptr && settingsPanel->isVisible()) settingsPanel->toFront (false);
+    if (learnBanner.isVisible())                                learnBanner.toFront (false);
 }
 
 void ManifestEditor::resized()
@@ -756,6 +762,8 @@ void ManifestEditor::resized()
 
     modeChooser.setBounds (getLocalBounds());
     loadingOverlay.setBounds (getLocalBounds());   // covers everything while decoding
+    // Instrument overlay spans the face + keyboard row, minus the top and bottom bars.
+    instrumentOverlay.setBounds (getLocalBounds().withTrimmedTop (kTopStrip).withTrimmedBottom (kBottomStrip));
 }
 
 } // namespace dm

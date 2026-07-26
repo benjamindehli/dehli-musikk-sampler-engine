@@ -125,7 +125,6 @@ public:
     bool handleKey (const juce::KeyPress& key);   // Z / X octave shift (host wrapper forwards too)
 
     void paint (juce::Graphics&) override;
-    void paintOverChildren (juce::Graphics&) override;   // "instrument"-scoped overlay (face + keyboard)
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;   // right-click outside the face → Settings menu
     void parentHierarchyChanged() override;   // theme the Standalone window when attached
@@ -143,6 +142,7 @@ public:
 
 private:
     void rebuildUi();
+    void layerOverlay();         // (re)position the instrument-overlay layer + keep modals above it
     void applyPreferredSize();   // resize host to the active mode (per-mode cropTop → varying height)
     void refreshWidgets();
     bool isFirstMenu (const Menu& menu) const;   // structural (Ui tree is copied in the renderer)
@@ -301,6 +301,24 @@ private:
         juce::Rectangle<int> panelRect;
     };
     ModeChooser modeChooser;
+
+    /** Click-through layer for an "instrument"-scoped overlay: sits above the face and the
+        keyboard row but below the modals, so the overlay stays visible (dimmed) behind the
+        settings panel and the like. "face"-scoped overlays are painted by ManifestUiComponent
+        over its own bounds instead. */
+    struct OverlayLayer : juce::Component
+    {
+        OverlayLayer() { setInterceptsMouseClicks (false, false); }
+        void setImage (const juce::Image& img) { image = img; repaint(); }
+        void paint (juce::Graphics& g) override
+        {
+            if (image.isValid())
+                g.drawImage (image, getLocalBounds().toFloat(), juce::RectanglePlacement::stretchToFit);
+        }
+        juce::Image image;
+    };
+    OverlayLayer instrumentOverlay;
+
     juce::Slider masterSlider;   // master output fader (top strip, between "Out" and the meter)
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
     LevelMeter outputMeter;
