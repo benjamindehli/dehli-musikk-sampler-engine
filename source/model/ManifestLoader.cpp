@@ -355,7 +355,7 @@ Control parseControl (const var& v)
     Control c;
     checkKeys (v, "control", { "id", "rect", "label", "valueType", "min", "max", "value",
                                "textColor", "style", "skin", "mouseDragSensitivity",
-                               "controlIndex", "visible", "bindings" });
+                               "controlIndex", "visible", "stepped", "valueLabels", "bindings" });
     c.id        = str (v, "id");
     c.rect      = parseRect (get (v, "rect"));
     c.label     = str (v, "label");
@@ -369,6 +369,10 @@ Control parseControl (const var& v)
     c.mouseDragSensitivity = optD (v, "mouseDragSensitivity");
     c.controlIndex = optI (v, "controlIndex");
     c.visible   = boolean (v, "visible", true);
+    c.stepped   = boolean (v, "stepped", false);
+    if (auto* labels = get (v, "valueLabels").getDynamicObject())
+        for (const auto& prop : labels->getProperties())
+            c.valueLabels[prop.name.toString().getIntValue()] = prop.value.toString();
     c.bindings  = parseBindings (v);
     return c;
 }

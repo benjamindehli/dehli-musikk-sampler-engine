@@ -15,12 +15,20 @@ class ManifestUiComponent::FilmstripKnob : public juce::Component
 {
 public:
     FilmstripKnob (juce::Image strip, int numFrames, double minV, double maxV, double initial,
-                   bool horizontalDrag = false, bool invertDrag = false)
+                   bool horizontalDrag = false, bool invertDrag = false,
+                   bool steppedIn = false, std::map<int, juce::String> labelsIn = {})
         : film (strip), frames (juce::jmax (1, numFrames)), minVal (minV), maxVal (maxV),
-          horizontal (horizontalDrag), inverted (invertDrag)
+          horizontal (horizontalDrag), inverted (invertDrag),
+          stepped (steppedIn), labels (std::move (labelsIn))
     {
-        defaultVal = juce::jlimit (minVal, maxVal, initial);   // manifest value = reset target
+        defaultVal = snap (juce::jlimit (minVal, maxVal, initial));   // manifest value = reset target
         value = defaultVal;
+    }
+
+    // Stepped controls (DecentSampler valueType="integer") snap to whole integers in range.
+    double snap (double v) const
+    {
+        return stepped ? juce::jlimit (minVal, maxVal, (double) juce::roundToInt (v)) : v;
     }
 
     std::function<void (double)> onChange;
@@ -34,13 +42,19 @@ public:
     // stays constant while turning (no jitter from trimming trailing zeros).
     juce::String valueText() const
     {
+        if (stepped)
+        {
+            const int v = juce::roundToInt (value);
+            const auto it = labels.find (v);
+            return it != labels.end() ? it->second : juce::String (v);
+        }
         return juce::String (value, 2);
     }
 
     /** Set the displayed value WITHOUT firing onChange (used for external sync). */
     void setValue (double v)
     {
-        const double nv = juce::jlimit (minVal, maxVal, v);
+        const double nv = snap (juce::jlimit (minVal, maxVal, v));
         if (! juce::exactlyEqual (nv, value)) { value = nv; repaint(); }
     }
 
@@ -96,7 +110,10 @@ public:
             delta = -delta;
         const double pxPerSweep = horizontal ? 120.0 : 200.0;
         double norm = (dragStartVal - minVal) / range + delta / pxPerSweep;
-        value = minVal + juce::jlimit (0.0, 1.0, norm) * range;
+        const double v = snap (minVal + juce::jlimit (0.0, 1.0, norm) * range);
+        if (juce::exactlyEqual (v, value))
+            return;   // stepped knob hasn't crossed to the next step yet
+        value = v;
         repaint();
         if (onChange)
             onChange (value);
@@ -115,6 +132,8 @@ private:
     double defaultVal { 0.0 };
     bool horizontal { false };
     bool inverted { false };
+    bool stepped { false };
+    std::map<int, juce::String> labels;
     float dragStartX { 0.0f }, dragStartY { 0.0f };
     double dragStartVal { 0.0 };
 };
@@ -297,7 +316,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
                                         c.min.value_or (0.0), c.max.value_or (1.0),
                                         c.value.value_or (c.min.value_or (0.0)),
                                         c.style.contains ("horizontal"),    // custom_skin_horizontal_drag → drag L/R
-                                        c.mouseDragSensitivity.value_or (100.0) < 0.0);   // DS: negative = inverted drag
+                                        c.mouseDragSensitivity.value_or (100.0) < 0.0,    // DS: negative = inverted drag
+                                        c.stepped, c.valueLabels);          // integer stepping + per-step labels
         const Control* cp = &c;
         knob->onChange = [this, cp] (double v)
         {

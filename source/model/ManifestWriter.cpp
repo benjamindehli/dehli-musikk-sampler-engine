@@ -283,6 +283,14 @@ var writeControl (const Control& c)
     o.setOpt ("mouseDragSensitivity", c.mouseDragSensitivity);
     o.setOpt ("controlIndex", c.controlIndex);
     if (! c.visible) o.set ("visible", false);
+    if (c.stepped) o.set ("stepped", true);
+    if (! c.valueLabels.empty())
+    {
+        Obj labels;
+        for (const auto& [val, text] : c.valueLabels)
+            labels.set (juce::String (val).toRawUTF8(), text);
+        o.set ("valueLabels", labels.toVar());
+    }
     o.set ("bindings", writeBindings (c.bindings));
     return o.toVar();
 }

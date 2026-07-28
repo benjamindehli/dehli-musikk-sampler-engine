@@ -49,6 +49,8 @@
                 "style": "custom_skin_vertical_drag",
                 "skin": { "image": "img:Knob", "numFrames": 101, "orientation": "vertical" },
                 "mouseDragSensitivity": 100,
+                "stepped": true,
+                "valueLabels": { "0": "dyn", "6": "inf" },
                 "bindings": [
                   { "type": "amp", "level": "instrument", "parameter": "ENV_RELEASE" }
                 ]

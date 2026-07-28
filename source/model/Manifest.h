@@ -13,6 +13,7 @@
 
 #include <juce_core/juce_core.h>
 #include <optional>
+#include <map>
 
 namespace dm
 {
@@ -271,6 +272,10 @@ struct Control
     juce::Array<Binding> bindings;
     std::optional<int> controlIndex;   // document-order UI index (VISIBLE/OPACITY binding target)
     bool visible = true;               // default visibility (DecentSampler `visible` attr)
+    bool stepped = false;              // DecentSampler valueType="integer" → the knob snaps to
+                                       // integer steps (min..max by 1) and the DAW param is discrete
+    std::map<int, juce::String> valueLabels;   // optional per-step readout/automation names
+                                               // (e.g. 0 -> "dyn"); values with no entry show the number
 };
 
 struct ButtonState

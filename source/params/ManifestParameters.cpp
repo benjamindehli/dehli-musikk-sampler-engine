@@ -338,10 +338,37 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout (const PresetLi
                 if (controlDrivesEngine (c))
                 {
                     const auto cid = controlKey (c.label);
-                    if (seen.insert (cid).second)
+                    if (! seen.insert (cid).second)
+                        continue;
+
+                    // Stepped control (DecentSampler valueType="integer"): a DISCRETE param
+                    // with an interval per integer step, and value text from the control's
+                    // valueLabels (else the plain number) so the DAW shows named steps.
+                    const double mnV = c.min.value_or (0.0), mxV = c.max.value_or (1.0);
+                    const int steps = (c.stepped && mxV > mnV) ? juce::roundToInt (mxV - mnV) + 1 : 0;
+                    if (steps >= 2)
+                    {
+                        const int lo = juce::roundToInt (mnV);
+                        const auto labels = c.valueLabels;   // captured into the lambda
+                        auto attrs = AudioParameterFloatAttributes().withStringFromValueFunction (
+                            [steps, lo, labels] (float norm, int) -> juce::String
+                            {
+                                const int step = juce::jlimit (0, steps - 1, juce::roundToInt (norm * (steps - 1)));
+                                const int val  = lo + step;
+                                const auto it  = labels.find (val);
+                                return it != labels.end() ? it->second : juce::String (val);
+                            });
+                        p.push_back (std::make_unique<AudioParameterFloat> (
+                            ParameterID { cid, 1 }, c.label,
+                            NormalisableRange<float> (0.0f, 1.0f, 1.0f / (float) (steps - 1)),
+                            (float) normOf (c), attrs));
+                    }
+                    else
+                    {
                         p.push_back (std::make_unique<AudioParameterFloat> (
                             ParameterID { cid, 1 }, c.label,
                             NormalisableRange<float> (0.0f, 1.0f), (float) normOf (c)));
+                    }
                 }
 
     // Button params: one Int per distinct button param id (0..numStates-1), deduped

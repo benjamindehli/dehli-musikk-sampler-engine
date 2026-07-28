@@ -109,6 +109,10 @@ public:
         expectEquals (c0.label, juce::String ("Sustain"));
         expect (c0.skin.has_value());
         expect (c0.skin->numFrames.has_value() && c0.skin->numFrames.value() == 101);
+        expect (c0.stepped, "stepped flag should load");
+        expectEquals (c0.valueLabels.size(), (size_t) 2);
+        expectEquals (c0.valueLabels.at (0), juce::String ("dyn"));
+        expectEquals (c0.valueLabels.at (6), juce::String ("inf"));
         expectEquals (c0.bindings.size(), 1);
         expectEquals (c0.bindings.getReference (0).parameter, juce::String ("ENV_RELEASE"));
 
