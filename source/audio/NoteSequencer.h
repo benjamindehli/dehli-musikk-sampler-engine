@@ -51,6 +51,7 @@ public:
         setRate override (a StrumSpeed knob applies that override every block, so
         it is never unset — it is the free-mode control). Sampled at strum start. */
     void setTempoSync (bool on) { tempoSync.store (on); }
+    bool isTempoSynced() const  { return tempoSync.load(); }
     void setBpm (double bpm)    { syncBpm.store (juce::jmax (1.0, bpm)); }
 
     /** Step length in BEATS for tempo-synced mode (0.25 = 16th note, 1.0/6.0 =

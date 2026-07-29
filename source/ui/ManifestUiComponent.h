@@ -54,6 +54,11 @@ public:
         the ribbon painted in the background. No-op when the mode has no readout. */
     void setStrumSpeedText (const juce::String& text);
 
+    /** Toggle the StrumSpeed knob's tempo-synced note-value detents. The editor calls
+        this each tick with the sequencer's sync state; no-op when the mode has no
+        SEQ_PLAYBACK_RATE knob. */
+    void setStrumSpeedSynced (bool synced);
+
     /** True when the overlay is present AND scoped to reach beyond the face (over the
         keyboard). In that case this component does NOT draw it — the editor paints it
         across the wider region instead — but exposes it via getOverlayImage(). */
@@ -80,6 +85,10 @@ private:
     // Strum-speed readout (ui.strumSpeedReadout): transparent centred label the
     // editor feeds via setStrumSpeedText each tick.
     std::unique_ptr<juce::Label> strumSpeedLabel;
+
+    // The knob driving SEQ_PLAYBACK_RATE (AutoStrum speed), or null if this mode has
+    // none. setStrumSpeedSynced toggles its note-value detents.
+    FilmstripKnob* strumSpeedKnob = nullptr;
 
     // One record per rendered widget, in build order (lights, knobs, buttons, menus —
     // same as before, so painting/z-order defaults are unchanged). Replaces the former

@@ -146,6 +146,7 @@ public:
     bool  isLoading() const override    { return engine.isLoading(); }
     float loadProgress() const override { return engine.loadProgress(); }
     juce::String strumSpeedText() const override { return engine.strumRateText(); }
+    bool  strumSpeedSynced() const override { return engine.strumSynced(); }
     void  pollEngine() override   // message-thread housekeeping (editor timer)
     {
         engine.drainRetired();

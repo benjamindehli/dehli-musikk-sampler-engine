@@ -21,6 +21,13 @@ juce::String SamplerEngine::strumRateText() const
     return {};
 }
 
+bool SamplerEngine::strumSynced() const
+{
+    if (auto* r = current.load())
+        return r->sequencer.isTempoSynced();
+    return false;
+}
+
 juce::String SamplerEngine::getVersion()
 {
     return "dehli-musikk-sampler-engine 1.0.0";

@@ -1,5 +1,6 @@
 #include "ManifestUiComponent.h"
 #include <model/TableEval.h>   // shared evalTableLinear (VISIBLE step tables / OPACITY ramps)
+#include <model/NoteValues.h>  // note-value table for the tempo-synced StrumSpeed detents
 #include <cmath>
 #include <vector>
 #include <algorithm>
@@ -25,10 +26,26 @@ public:
         value = defaultVal;
     }
 
-    // Stepped controls (DecentSampler valueType="integer") snap to whole integers in range.
+    // Snap the raw value onto a discrete grid, if this knob is stepped:
+    //  - noteValueSnap (the tempo-synced StrumSpeed knob): the normalised position
+    //    picks one of notevalues::count slots (same math as NoteSequencer::syncedBeats),
+    //    and the knob rests on the slot's CENTRE so it maps back to that same slot.
+    //  - stepped (DecentSampler valueType="integer"): whole integers in range.
     double snap (double v) const
     {
+        if (noteValueSnap && maxVal > minVal)
+        {
+            const double range = maxVal - minVal;
+            const int slot = noteValueSlot ((v - minVal) / range);
+            return minVal + (slot + 0.5) / notevalues::count * range;
+        }
         return stepped ? juce::jlimit (minVal, maxVal, (double) juce::roundToInt (v)) : v;
+    }
+
+    // Which note-value slot a normalised 0..1 position falls in (mirrors the sequencer).
+    static int noteValueSlot (double norm)
+    {
+        return juce::jlimit (0, notevalues::count - 1, (int) (norm * notevalues::count));
     }
 
     std::function<void (double)> onChange;
@@ -42,6 +59,11 @@ public:
     // stays constant while turning (no jitter from trimming trailing zeros).
     juce::String valueText() const
     {
+        if (noteValueSnap && maxVal > minVal)
+        {
+            const int slot = noteValueSlot ((value - minVal) / (maxVal - minVal));
+            return notevalues::labels[notevalues::speedOrder[slot]];   // e.g. "1/16"
+        }
         if (stepped)
         {
             const int v = juce::roundToInt (value);
@@ -49,6 +71,23 @@ public:
             return it != labels.end() ? it->second : juce::String (v);
         }
         return juce::String (value, 2);
+    }
+
+    /** Toggle tempo-synced note-value detents (the StrumSpeed knob while sync is on).
+        On the on/off transition the resting value snaps onto the nearest detent and
+        the change is pushed to the APVTS param so the knob and the audio agree. */
+    void setNoteValueSnap (bool on)
+    {
+        if (on == noteValueSnap)
+            return;
+        noteValueSnap = on;
+        const double nv = snap (value);
+        if (! juce::exactlyEqual (nv, value))
+        {
+            value = nv;
+            if (onChange) onChange (value);
+        }
+        repaint();
     }
 
     /** Set the displayed value WITHOUT firing onChange (used for external sync). */
@@ -133,6 +172,7 @@ private:
     bool horizontal { false };
     bool inverted { false };
     bool stepped { false };
+    bool noteValueSnap { false };   // tempo-synced StrumSpeed: detent onto note values
     std::map<int, juce::String> labels;
     float dragStartX { 0.0f }, dragStartY { 0.0f };
     double dragStartVal { 0.0 };
@@ -329,6 +369,11 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
         knob->onHideValue = [this] { if (valueBubble) valueBubble->setVisible (false); };
         addAndMakeVisible (knob);
         knob->setVisible (c.visible);
+
+        // The StrumSpeed knob (drives SEQ_PLAYBACK_RATE) detents onto the note-value
+        // table while tempo synced; the editor toggles that each tick.
+        for (const auto& b : c.bindings)
+            if (b.parameter == "SEQ_PLAYBACK_RATE") { strumSpeedKnob = knob; break; }
 
         Widget w;
         w.kind = Widget::Kind::knob;
@@ -766,6 +811,12 @@ void ManifestUiComponent::setStrumSpeedText (const juce::String& text)
 {
     if (strumSpeedLabel != nullptr)
         strumSpeedLabel->setText (text, juce::dontSendNotification);
+}
+
+void ManifestUiComponent::setStrumSpeedSynced (bool synced)
+{
+    if (strumSpeedKnob != nullptr)
+        strumSpeedKnob->setNoteValueSnap (synced);
 }
 
 } // namespace dm

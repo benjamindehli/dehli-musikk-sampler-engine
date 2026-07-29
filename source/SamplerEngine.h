@@ -63,6 +63,10 @@ public:
         NoteSequencer::rateText); empty when no mode is live. Message thread. */
     juce::String strumRateText() const;
 
+    /** True when the active mode's sequencer is tempo synced, so a StrumSpeed knob
+        should detent onto the discrete note values. Message thread. */
+    bool strumSynced() const;
+
     /** Render one block (samples + amp ADSR + FX for the active mode). */
     void processBlock (juce::AudioBuffer<float>& buffer,
                        juce::MidiBuffer& midi,

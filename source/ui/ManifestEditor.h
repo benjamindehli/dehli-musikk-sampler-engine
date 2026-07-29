@@ -101,6 +101,10 @@ public:
         Empty hides the readout text. */
     virtual juce::String strumSpeedText() const { return {}; }
 
+    /** True when the sequencer is tempo synced, so the StrumSpeed knob should detent
+        onto the discrete note values instead of sweeping continuously. */
+    virtual bool strumSpeedSynced() const { return false; }
+
     /** A UI button was clicked (its index in the tab). Lets the host resolve radio-style
         button groups by "last clicked wins" — momentary buttons that all target the same
         effects (e.g. Strykebrett's ensemble O/Acc/Solo/Organ). Default: no-op. */
