@@ -266,7 +266,7 @@ private:
     bool  retriggerMute   { true };   // note-on: one voice per key WITHIN a group (fade the previous)
     int   voiceCap { 0 };             // runtime polyphony cap (set to kMaxVoices in prepare)
 
-    // ── Shared-air ("fan") simulation (AirSupply; Elektrisk Salmesykkel) ────────
+    // ── Shared-air ("fan") simulation (AirSupply; any single-blower reed library) ─
     // Per block: count sounding (non-releasing) notes → target per-note gain,
     // output-lowpass cutoff and attack stretch, smoothed with a fan-like lag.
     void updateAirSupply (int numSamples);

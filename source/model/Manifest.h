@@ -474,8 +474,8 @@ struct Mode
 };
 
 /** The whole manifest: a library of modes for one plugin. */
-/** Shared-air ("fan") simulation for reed instruments driven by one blower (the
-    Yamaha L-20D behind Elektrisk Salmesykkel): the more notes sounding, the less
+/** Shared-air ("fan") simulation for any reed instrument driven by a single blower
+    (e.g. the Yamaha L-20D pump organ): the more notes sounding, the less
     air each reed gets — per-note volume drops (gain = n^-volume), the top end
     darkens (a gentle global lowpass), and new notes speak slower (attack × n^attack).
     All responses lag like a real fan (~80 ms). The user toggles it in the settings

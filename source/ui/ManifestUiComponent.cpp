@@ -311,7 +311,7 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
     if (uiData.tabs.isEmpty())
         return;
 
-    auto& tab = uiData.tabs.getReference (0);   // Omni-84 has a single "main" tab
+    auto& tab = uiData.tabs.getReference (0);   // render the first tab (every library authors a single "main" tab)
 
     // Every widget lands in `widgets` (build order = paint order); byIndex/byId let
     // bindings target any widget by document index or element id.
@@ -423,8 +423,8 @@ ManifestUiComponent::ManifestUiComponent (const Ui& ui, ImageProvider imageProvi
     {
         auto& m = tab.menus.getReference (i);
         auto* combo = new juce::ComboBox();
-        // Manifest-driven styling; defaults reproduce the transparent, left-aligned
-        // overlay used by Omni-84 (so unstyled menus look exactly as before).
+        // Manifest-driven styling; defaults reproduce a transparent, left-aligned
+        // overlay so a library that specifies no menu colours looks unstyled.
         auto argb = [] (const juce::String& s)
         {
             auto c = juce::Colour ((juce::uint32) s.getHexValue32());

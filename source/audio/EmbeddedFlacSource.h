@@ -3,7 +3,8 @@
 // dehli-musikk-sampler-engine — embedded FLAC sample backend.
 //
 // Decodes FLAC blobs (from juce_add_binary_data in the plugin, or from memory in
-// tests) into PCM resident in RAM. Zero added playback latency; used by Omni-84.
+// tests) into PCM resident in RAM. Zero added playback latency; the default backend
+// for every embedded-asset library.
 
 #include "SampleSource.h"
 #include <juce_audio_formats/juce_audio_formats.h>
