@@ -30,7 +30,7 @@ bool SamplerEngine::strumSynced() const
 
 juce::String SamplerEngine::getVersion()
 {
-    return "dehli-musikk-sampler-engine 1.0.0";
+    return "dehli-musikk-sampler-engine 1.1.0";
 }
 
 SamplerEngine::ModeRender* SamplerEngine::buildMode (int index, std::atomic<float>* progress,
