@@ -1,0 +1,30 @@
+# Formatting check — every tracked C++ file must match .clang-format (LLVM style).
+#
+# Fix locally with `./dmse format` from the dehli-musikk-sample-plugins workspace,
+# or `clang-format -i` on the offending files.
+#
+# The clang-format version is PINNED on purpose: LLVM style shifts between
+# releases, so an unpinned runner would eventually disagree with the version the
+# tree was formatted with and fail on untouched code. Bump this together with a
+# reformat commit (and add that commit to .git-blame-ignore-revs).
+
+name: Format
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: pipx install clang-format==22.1.8
+
+      - name: Check formatting
+        run: |
+          git ls-files -z '*.cpp' '*.h' '*.hpp' '*.mm' '*.cc' \
+            | xargs -0 -r clang-format --dry-run -Werror
