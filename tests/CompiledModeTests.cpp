@@ -1,86 +1,87 @@
 // Unit tests for the compiled param plan (params/CompiledMode).
 //
 // Reproduces the EDB-Orgel mod-wheel chain end to end at the params level:
-// a CC1 binding targets an INVISIBLE control (by id, with controlIndex fallback)
-// whose bindings drive a GLOBAL_TUNING vibrato modulator — the wheel must move the
-// control's param, and apply() must route the param to the engine's LFO.
+// a CC1 binding targets an INVISIBLE control (by id, with controlIndex
+// fallback) whose bindings drive a GLOBAL_TUNING vibrato modulator — the wheel
+// must move the control's param, and apply() must route the param to the
+// engine's LFO.
 
-#include <params/ManifestParameters.h>
-#include <params/CompiledMode.h>
-#include <model/ManifestLoader.h>
 #include <SamplerEngine.h>
 #include <audio/EmbeddedFlacSource.h>
-#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <model/ManifestLoader.h>
+#include <params/CompiledMode.h>
+#include <params/ManifestParameters.h>
 
-namespace
-{
+namespace {
 constexpr double kSR = 48000.0;
 
-// A mono FLAC blob holding a constant DC level — a stand-in sample whose rendered
-// value we can read straight back to observe what the FX chain did to it.
-juce::MemoryBlock dcFlac (float level, int frames)
-{
-    juce::AudioBuffer<float> buf (1, frames);
-    juce::FloatVectorOperations::fill (buf.getWritePointer (0), level, frames);
-    juce::MemoryBlock mb;
-    juce::FlacAudioFormat flac;
-    auto* out = new juce::MemoryOutputStream (mb, false);
-    std::unique_ptr<juce::AudioFormatWriter> w (flac.createWriterFor (out, kSR, 1, 16, {}, 0));
-    if (w == nullptr) { delete out; return {}; }
-    w->writeFromAudioSampleBuffer (buf, 0, frames);
-    w.reset();
-    return mb;
+// A mono FLAC blob holding a constant DC level — a stand-in sample whose
+// rendered value we can read straight back to observe what the FX chain did to
+// it.
+juce::MemoryBlock dcFlac(float level, int frames) {
+  juce::AudioBuffer<float> buf(1, frames);
+  juce::FloatVectorOperations::fill(buf.getWritePointer(0), level, frames);
+  juce::MemoryBlock mb;
+  juce::FlacAudioFormat flac;
+  auto *out = new juce::MemoryOutputStream(mb, false);
+  std::unique_ptr<juce::AudioFormatWriter> w(
+      flac.createWriterFor(out, kSR, 1, 16, {}, 0));
+  if (w == nullptr) {
+    delete out;
+    return {};
+  }
+  w->writeFromAudioSampleBuffer(buf, 0, frames);
+  w.reset();
+  return mb;
 }
 
-void waitForBuild (dm::SamplerEngine& engine)
-{
-    for (int i = 0; i < 5000 && engine.isLoading(); ++i)
-        juce::Thread::sleep (1);
+void waitForBuild(dm::SamplerEngine &engine) {
+  for (int i = 0; i < 5000 && engine.isLoading(); ++i)
+    juce::Thread::sleep(1);
 }
 
-float renderNote (dm::SamplerEngine& engine, int note)
-{
-    juce::AudioBuffer<float> out (1, 512);
-    juce::MidiBuffer midi;
-    midi.addEvent (juce::MidiMessage::noteOn (1, note, 1.0f), 0);
-    engine.processBlock (out, midi, nullptr);
-    return out.getSample (0, 200);
+float renderNote(dm::SamplerEngine &engine, int note) {
+  juce::AudioBuffer<float> out(1, 512);
+  juce::MidiBuffer midi;
+  midi.addEvent(juce::MidiMessage::noteOn(1, note, 1.0f), 0);
+  engine.processBlock(out, midi, nullptr);
+  return out.getSample(0, 200);
 }
 
 // Minimal host processor — just enough to own an APVTS in a console app.
-struct DummyProcessor : juce::AudioProcessor
-{
-    const juce::String getName() const override { return "dummy"; }
-    void prepareToPlay (double, int) override {}
-    void releaseResources() override {}
-    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
-    using juce::AudioProcessor::processBlock;
-    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
-    bool hasEditor() const override { return false; }
-    bool acceptsMidi() const override { return true; }
-    bool producesMidi() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
-    void changeProgramName (int, const juce::String&) override {}
-    void getStateInformation (juce::MemoryBlock&) override {}
-    void setStateInformation (const void*, int) override {}
+struct DummyProcessor : juce::AudioProcessor {
+  const juce::String getName() const override { return "dummy"; }
+  void prepareToPlay(double, int) override {}
+  void releaseResources() override {}
+  void processBlock(juce::AudioBuffer<float> &, juce::MidiBuffer &) override {}
+  using juce::AudioProcessor::processBlock;
+  juce::AudioProcessorEditor *createEditor() override { return nullptr; }
+  bool hasEditor() const override { return false; }
+  bool acceptsMidi() const override { return true; }
+  bool producesMidi() const override { return false; }
+  double getTailLengthSeconds() const override { return 0.0; }
+  int getNumPrograms() override { return 1; }
+  int getCurrentProgram() override { return 0; }
+  void setCurrentProgram(int) override {}
+  const juce::String getProgramName(int) override { return {}; }
+  void changeProgramName(int, const juce::String &) override {}
+  void getStateInformation(juce::MemoryBlock &) override {}
+  void setStateInformation(const void *, int) override {}
 };
 
-class CompiledModeTests : public juce::UnitTest
-{
+class CompiledModeTests : public juce::UnitTest {
 public:
-    CompiledModeTests() : juce::UnitTest ("CompiledMode", "engine") {}
+  CompiledModeTests() : juce::UnitTest("CompiledMode", "engine") {}
 
-    void runTest() override
-    {
-        beginTest ("CC binding drives its target control param (EDB mod-wheel chain)");
+  void runTest() override {
+    beginTest(
+        "CC binding drives its target control param (EDB mod-wheel chain)");
 
-        // EDB-like mode: invisible control -> vibrato modulator, CC1 -> that control.
-        auto parsed = dm::loadManifestFromJson (R"({
+    // EDB-like mode: invisible control -> vibrato modulator, CC1 -> that
+    // control.
+    auto parsed = dm::loadManifestFromJson(R"({
             "schema": 1,
             "modes": [
                 { "name": "Organ",
@@ -107,59 +108,60 @@ public:
                 }
             ]
         })");
-        expect (parsed.ok, "manifest should load");
-        expectEquals (parsed.library.modes.getReference (0).ccBindings.size(), 1);
+    expect(parsed.ok, "manifest should load");
+    expectEquals(parsed.library.modes.getReference(0).ccBindings.size(), 1);
 
-        DummyProcessor proc;
-        juce::AudioProcessorValueTreeState apvts (
-            proc, nullptr, "PARAMS", dm::params::createLayout (parsed.library));
+    DummyProcessor proc;
+    juce::AudioProcessorValueTreeState apvts(
+        proc, nullptr, "PARAMS", dm::params::createLayout(parsed.library));
 
-        // The invisible control must still own an automatable param.
-        auto* raw = apvts.getRawParameterValue ("ctl_vibctl");
-        expect (raw != nullptr, "invisible engine-driving control should have a param");
-        if (raw == nullptr)
-            return;
-        expectWithinAbsoluteError (raw->load(), 0.0f, 1.0e-6f);
+    // The invisible control must still own an automatable param.
+    auto *raw = apvts.getRawParameterValue("ctl_vibctl");
+    expect(raw != nullptr,
+           "invisible engine-driving control should have a param");
+    if (raw == nullptr)
+      return;
+    expectWithinAbsoluteError(raw->load(), 0.0f, 1.0e-6f);
 
-        const auto& mode = parsed.library.modes.getReference (0);
-        dm::params::CompiledMode cm (mode, apvts);
+    const auto &mode = parsed.library.modes.getReference(0);
+    dm::params::CompiledMode cm(mode, apvts);
 
-        // Mod wheel to max: CC1 = 127 at the plan level.
-        juce::MidiBuffer midi;
-        midi.addEvent (juce::MidiMessage::controllerEvent (1, 1, 127), 0);
-        cm.applyCc (midi);
-        expectWithinAbsoluteError (raw->load(), 1.0f, 1.0e-4f);
+    // Mod wheel to max: CC1 = 127 at the plan level.
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::controllerEvent(1, 1, 127), 0);
+    cm.applyCc(midi);
+    expectWithinAbsoluteError(raw->load(), 1.0f, 1.0e-4f);
 
-        // Half-way wheel.
-        juce::MidiBuffer midi2;
-        midi2.addEvent (juce::MidiMessage::controllerEvent (1, 1, 64), 0);
-        cm.applyCc (midi2);
-        expectWithinAbsoluteError (raw->load(), 64.0f / 127.0f, 1.0e-4f);
+    // Half-way wheel.
+    juce::MidiBuffer midi2;
+    midi2.addEvent(juce::MidiMessage::controllerEvent(1, 1, 64), 0);
+    cm.applyCc(midi2);
+    expectWithinAbsoluteError(raw->load(), 64.0f / 127.0f, 1.0e-4f);
 
-        // apply() must not crash routing the param to the engine's LFO slots (the
-        // engine has no mode built — setters store into override slots).
-        dm::SamplerEngine engine;
-        cm.apply (engine, nullptr);
-        expect (true, "apply with LFO routes should be safe");
+    // apply() must not crash routing the param to the engine's LFO slots (the
+    // engine has no mode built — setters store into override slots).
+    dm::SamplerEngine engine;
+    cm.apply(engine, nullptr);
+    expect(true, "apply with LFO routes should be safe");
 
-        testGroupEffectByIdRoute();
-    }
+    testGroupEffectByIdRoute();
+  }
 
-    // A group-effect binding addressed purely by the effect's id (no positional
-    // effectIndex) must route to the right slot inside the right group's chain. The
-    // group has a transparent lowpass in slot 0 and a gain in slot 1; a LEVEL binding
-    // that names the gain by id must attenuate the signal. If the id failed to resolve,
-    // the fallback slot (0, the lowpass) ignores LEVEL and the signal stays untouched —
-    // so an attenuated result proves the id resolved to the gain in slot 1.
-    void testGroupEffectByIdRoute()
-    {
-        beginTest ("group-effect binding resolves the effect slot by id");
+  // A group-effect binding addressed purely by the effect's id (no positional
+  // effectIndex) must route to the right slot inside the right group's chain.
+  // The group has a transparent lowpass in slot 0 and a gain in slot 1; a LEVEL
+  // binding that names the gain by id must attenuate the signal. If the id
+  // failed to resolve, the fallback slot (0, the lowpass) ignores LEVEL and the
+  // signal stays untouched — so an attenuated result proves the id resolved to
+  // the gain in slot 1.
+  void testGroupEffectByIdRoute() {
+    beginTest("group-effect binding resolves the effect slot by id");
 
-        auto flac = dcFlac (0.50f, 4000);
-        dm::EmbeddedFlacSource source;
-        expect (source.addFlac ("flac:a", flac.getData(), flac.getSize()));
+    auto flac = dcFlac(0.50f, 4000);
+    dm::EmbeddedFlacSource source;
+    expect(source.addFlac("flac:a", flac.getData(), flac.getSize()));
 
-        auto parsed = dm::loadManifestFromJson (R"({
+    auto parsed = dm::loadManifestFromJson(R"({
             "schema": 1,
             "modes": [
                 { "name": "GrpFx",
@@ -180,53 +182,55 @@ public:
                 }
             ]
         })");
-        expect (parsed.ok, "group-effect manifest should load");
+    expect(parsed.ok, "group-effect manifest should load");
 
-        dm::SamplerEngine engine;
-        engine.prepare (kSR, 512, 1);
-        engine.setLibrary (parsed.library, source);
-        waitForBuild (engine);
+    dm::SamplerEngine engine;
+    engine.prepare(kSR, 512, 1);
+    engine.setLibrary(parsed.library, source);
+    waitForBuild(engine);
 
-        // Baseline: gain at 0 dB (unity), lowpass transparent to DC → sample passes.
-        expectWithinAbsoluteError (renderNote (engine, 60), 0.50f, 0.03f);
+    // Baseline: gain at 0 dB (unity), lowpass transparent to DC → sample
+    // passes.
+    expectWithinAbsoluteError(renderNote(engine, 60), 0.50f, 0.03f);
 
-        DummyProcessor proc;
-        juce::AudioProcessorValueTreeState apvts (
-            proc, nullptr, "PARAMS", dm::params::createLayout (parsed.library));
-        auto* knob = apvts.getParameter ("ctl_gaintrim");
-        expect (knob != nullptr, "group-effect knob should have a param");
-        if (knob == nullptr)
-            return;
+    DummyProcessor proc;
+    juce::AudioProcessorValueTreeState apvts(
+        proc, nullptr, "PARAMS", dm::params::createLayout(parsed.library));
+    auto *knob = apvts.getParameter("ctl_gaintrim");
+    expect(knob != nullptr, "group-effect knob should have a param");
+    if (knob == nullptr)
+      return;
 
-        const auto& mode = parsed.library.modes.getReference (0);
-        dm::params::CompiledMode cm (mode, apvts);
+    const auto &mode = parsed.library.modes.getReference(0);
+    dm::params::CompiledMode cm(mode, apvts);
 
-        // Knob to max → LEVEL binding drives the gain slot to -48 dB.
-        knob->setValueNotifyingHost (1.0f);
-        cm.apply (engine, nullptr);
-        expect (renderNote (engine, 60) < 0.05f,
-                "id-resolved group-effect LEVEL should attenuate the gain slot");
+    // Knob to max → LEVEL binding drives the gain slot to -48 dB.
+    knob->setValueNotifyingHost(1.0f);
+    cm.apply(engine, nullptr);
+    expect(renderNote(engine, 60) < 0.05f,
+           "id-resolved group-effect LEVEL should attenuate the gain slot");
 
-        testModulatorGroupEffectById();
-    }
+    testModulatorGroupEffectById();
+  }
 
-    // The engine's LFO path resolves group-effect modulator targets separately from the
-    // param plan (Elektrisk's tremulant swells a group's gain slot). With the manifest
-    // now id-based, that binding carries only the effect's id — no groupIndex/effectIndex
-    // — so the VoiceEngine must recover (group, slot) from the id. If it fails, no groupFx
-    // target is built and the output is constant; success means the LFO sweeps the gain,
-    // so the rendered level varies block to block.
-    void testModulatorGroupEffectById()
-    {
-        beginTest ("LFO modulator resolves a group-effect target by id");
+  // The engine's LFO path resolves group-effect modulator targets separately
+  // from the param plan (Elektrisk's tremulant swells a group's gain slot).
+  // With the manifest now id-based, that binding carries only the effect's id —
+  // no groupIndex/effectIndex — so the VoiceEngine must recover (group, slot)
+  // from the id. If it fails, no groupFx target is built and the output is
+  // constant; success means the LFO sweeps the gain, so the rendered level
+  // varies block to block.
+  void testModulatorGroupEffectById() {
+    beginTest("LFO modulator resolves a group-effect target by id");
 
-        auto flac = dcFlac (0.50f, 40000);
-        dm::EmbeddedFlacSource source;
-        expect (source.addFlac ("flac:a", flac.getData(), flac.getSize()));
+    auto flac = dcFlac(0.50f, 40000);
+    dm::EmbeddedFlacSource source;
+    expect(source.addFlac("flac:a", flac.getData(), flac.getSize()));
 
-        // One group with a transparent lowpass (slot 0) and a gain (slot 1). A sine LFO
-        // drives the gain LEVEL by id only — no positional indices in the binding.
-        auto parsed = dm::loadManifestFromJson (R"({
+    // One group with a transparent lowpass (slot 0) and a gain (slot 1). A sine
+    // LFO drives the gain LEVEL by id only — no positional indices in the
+    // binding.
+    auto parsed = dm::loadManifestFromJson(R"({
             "schema": 1,
             "modes": [
                 { "name": "Trem",
@@ -248,29 +252,29 @@ public:
                 }
             ]
         })");
-        expect (parsed.ok, "modulator manifest should load");
+    expect(parsed.ok, "modulator manifest should load");
 
-        dm::SamplerEngine engine;
-        engine.prepare (kSR, 512, 1);
-        engine.setLibrary (parsed.library, source);
-        waitForBuild (engine);
+    dm::SamplerEngine engine;
+    engine.prepare(kSR, 512, 1);
+    engine.setLibrary(parsed.library, source);
+    waitForBuild(engine);
 
-        juce::AudioBuffer<float> out (1, 512);
-        juce::MidiBuffer midi;
-        midi.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
-        engine.processBlock (out, midi, nullptr);   // note on
+    juce::AudioBuffer<float> out(1, 512);
+    juce::MidiBuffer midi;
+    midi.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), 0);
+    engine.processBlock(out, midi, nullptr); // note on
 
-        float lo = 1.0e9f, hi = -1.0e9f;
-        for (int blk = 0; blk < 30; ++blk)
-        {
-            juce::MidiBuffer empty;
-            engine.processBlock (out, empty, nullptr);
-            const float s = std::abs (out.getSample (0, 200));
-            lo = juce::jmin (lo, s);
-            hi = juce::jmax (hi, s);
-        }
-        expect (hi - lo > 0.05f, "LFO should sweep the id-resolved group gain slot (constant means it did not resolve)");
+    float lo = 1.0e9f, hi = -1.0e9f;
+    for (int blk = 0; blk < 30; ++blk) {
+      juce::MidiBuffer empty;
+      engine.processBlock(out, empty, nullptr);
+      const float s = std::abs(out.getSample(0, 200));
+      lo = juce::jmin(lo, s);
+      hi = juce::jmax(hi, s);
     }
+    expect(hi - lo > 0.05f, "LFO should sweep the id-resolved group gain slot "
+                            "(constant means it did not resolve)");
+  }
 };
 
 CompiledModeTests compiledModeTests;

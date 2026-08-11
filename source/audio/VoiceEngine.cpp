@@ -1,1344 +1,1434 @@
 #include "VoiceEngine.h"
 #include <cmath>
 
-namespace dm
-{
+namespace dm {
 
-namespace
-{
-constexpr int kMaxVoices = 128;  // headroom for heavy layering (the cassette organ stacks 9 drawbars
-                                 // × double-track per note); balanced against per-voice render CPU —
-                                 // 256 could overrun on big chords. skip-muted keeps the live count low.
-constexpr int kStealFadeVoices = 8;   // extra slots reserved for STOLEN voices: the victim's state is
-                                      // copied here to ramp out over the ~4 ms declick instead of the
-                                      // new note hard-cutting its waveform (audible click). Never
-                                      // allocated directly — allocateVoice scans only [0, kMaxVoices).
+namespace {
+constexpr int kMaxVoices =
+    128; // headroom for heavy layering (the cassette organ stacks 9 drawbars
+         // × double-track per note); balanced against per-voice render CPU —
+         // 256 could overrun on big chords. skip-muted keeps the live count
+         // low.
+constexpr int kStealFadeVoices =
+    8; // extra slots reserved for STOLEN voices: the victim's state is
+       // copied here to ramp out over the ~4 ms declick instead of the
+       // new note hard-cutting its waveform (audible click). Never
+       // allocated directly — allocateVoice scans only [0, kMaxVoices).
 
-// Modulator waveform shape name → index, and the shape's value at a phase (cycles) → -1..1.
-int lfoShapeFromString (const juce::String& s)
-{
-    if (s == "square")                 return 3;
-    if (s == "saw" || s == "sawtooth") return 2;
-    if (s == "triangle")               return 1;
-    return 0;   // sine (default)
+// Modulator waveform shape name → index, and the shape's value at a phase
+// (cycles) → -1..1.
+int lfoShapeFromString(const juce::String &s) {
+  if (s == "square")
+    return 3;
+  if (s == "saw" || s == "sawtooth")
+    return 2;
+  if (s == "triangle")
+    return 1;
+  return 0; // sine (default)
 }
 
-float lfoWave (int shape, double phaseCycles)
-{
-    const double ph = phaseCycles - std::floor (phaseCycles);   // 0..1
-    switch (shape)
-    {
-        case 1: return (float) (1.0 - 4.0 * std::abs (ph - 0.5));   // triangle
-        case 2: return (float) (2.0 * ph - 1.0);                    // saw (ramp up)
-        case 3: return ph < 0.5 ? 1.0f : -1.0f;                     // square
-        default: return (float) std::sin (juce::MathConstants<double>::twoPi * ph);
-    }
+float lfoWave(int shape, double phaseCycles) {
+  const double ph = phaseCycles - std::floor(phaseCycles); // 0..1
+  switch (shape) {
+  case 1:
+    return (float)(1.0 - 4.0 * std::abs(ph - 0.5)); // triangle
+  case 2:
+    return (float)(2.0 * ph - 1.0); // saw (ramp up)
+  case 3:
+    return ph < 0.5 ? 1.0f : -1.0f; // square
+  default:
+    return (float)std::sin(juce::MathConstants<double>::twoPi * ph);
+  }
 }
 
-// Resolve the effective amp envelope for a group: mode defaults, with the group's
-// own overrides applied where present.
-CurvedAdsr::Parameters resolveAdsr (const AmpEnvelope& amp, const Group& g)
-{
-    CurvedAdsr::Parameters p;
-    p.attack  = (float) (g.attack  ? *g.attack  : amp.attack);
-    p.decay   = (float) (g.decay   ? *g.decay   : amp.decay);
-    p.sustain = (float) (g.sustain ? *g.sustain : amp.sustain);
-    p.release = (float) (g.release ? *g.release : amp.release);
-    // Curve shape: manifest value if present, else DecentSampler defaults
-    // (CurvedAdsr::Parameters already defaults to attack -100, decay/release +100).
-    if (amp.attackCurve)  p.attackCurve  = (float) *amp.attackCurve;
-    if (amp.decayCurve)   p.decayCurve   = (float) *amp.decayCurve;
-    if (amp.releaseCurve) p.releaseCurve = (float) *amp.releaseCurve;
-    return p;
+// Resolve the effective amp envelope for a group: mode defaults, with the
+// group's own overrides applied where present.
+CurvedAdsr::Parameters resolveAdsr(const AmpEnvelope &amp, const Group &g) {
+  CurvedAdsr::Parameters p;
+  p.attack = (float)(g.attack ? *g.attack : amp.attack);
+  p.decay = (float)(g.decay ? *g.decay : amp.decay);
+  p.sustain = (float)(g.sustain ? *g.sustain : amp.sustain);
+  p.release = (float)(g.release ? *g.release : amp.release);
+  // Curve shape: manifest value if present, else DecentSampler defaults
+  // (CurvedAdsr::Parameters already defaults to attack -100, decay/release
+  // +100).
+  if (amp.attackCurve)
+    p.attackCurve = (float)*amp.attackCurve;
+  if (amp.decayCurve)
+    p.decayCurve = (float)*amp.decayCurve;
+  if (amp.releaseCurve)
+    p.releaseCurve = (float)*amp.releaseCurve;
+  return p;
 }
 
 // Windowed-sinc (Lanczos) fractional-position resampling. A precomputed kernel
-// table (kSincTaps taps × kSincPhases sub-sample phases) gives clean interpolation
-// for pitch-shifted / sample-rate-mismatched playback; at integer positions it
-// reduces to the exact sample (fast path), so 48k-in-48k playback is untouched.
-namespace
-{
-constexpr int kSincTaps   = 8;             // 4 taps either side
-constexpr int kSincHalf   = kSincTaps / 2;
-constexpr int kSincPhases = 512;           // sub-sample phase resolution
+// table (kSincTaps taps × kSincPhases sub-sample phases) gives clean
+// interpolation for pitch-shifted / sample-rate-mismatched playback; at integer
+// positions it reduces to the exact sample (fast path), so 48k-in-48k playback
+// is untouched.
+namespace {
+constexpr int kSincTaps = 8; // 4 taps either side
+constexpr int kSincHalf = kSincTaps / 2;
+constexpr int kSincPhases = 512; // sub-sample phase resolution
 
-struct SincTable
-{
-    float k[kSincPhases + 1][kSincTaps];
+struct SincTable {
+  float k[kSincPhases + 1][kSincTaps];
 
-    SincTable()
-    {
-        const double pi = juce::MathConstants<double>::pi;
-        auto sinc = [pi] (double x) { return juce::exactlyEqual (x, 0.0) ? 1.0 : std::sin (pi * x) / (pi * x); };
-        const double a = (double) kSincHalf;   // Lanczos window half-width
+  SincTable() {
+    const double pi = juce::MathConstants<double>::pi;
+    auto sinc = [pi](double x) {
+      return juce::exactlyEqual(x, 0.0) ? 1.0 : std::sin(pi * x) / (pi * x);
+    };
+    const double a = (double)kSincHalf; // Lanczos window half-width
 
-        for (int p = 0; p <= kSincPhases; ++p)
-        {
-            const double frac = (double) p / (double) kSincPhases;
-            double row[kSincTaps], sum = 0.0;
-            for (int t = 0; t < kSincTaps; ++t)
-            {
-                const double x = (double) (t - (kSincHalf - 1)) - frac;
-                const double w = std::abs (x) < a ? sinc (x) * sinc (x / a) : 0.0;
-                row[t] = w;
-                sum   += w;
-            }
-            for (int t = 0; t < kSincTaps; ++t)   // normalise for unity DC gain
-                k[p][t] = (float) (! juce::exactlyEqual (sum, 0.0) ? row[t] / sum : 0.0);
-        }
+    for (int p = 0; p <= kSincPhases; ++p) {
+      const double frac = (double)p / (double)kSincPhases;
+      double row[kSincTaps], sum = 0.0;
+      for (int t = 0; t < kSincTaps; ++t) {
+        const double x = (double)(t - (kSincHalf - 1)) - frac;
+        const double w = std::abs(x) < a ? sinc(x) * sinc(x / a) : 0.0;
+        row[t] = w;
+        sum += w;
+      }
+      for (int t = 0; t < kSincTaps; ++t) // normalise for unity DC gain
+        k[p][t] = (float)(!juce::exactlyEqual(sum, 0.0) ? row[t] / sum : 0.0);
     }
+  }
 };
 
-const SincTable& sincTable() { static const SincTable t; return t; }
+const SincTable &sincTable() {
+  static const SincTable t;
+  return t;
+}
 
-// `st` is passed in (fetched ONCE per chunk) rather than calling sincTable() here —
-// a function-local static costs a thread-safe-init guard check on every call, which
-// adds up at samples × voices × channels rate.
-float interpolate (const SincTable& st, const juce::AudioBuffer<float>& buf, int ch, double pos)
-{
-    const int n  = buf.getNumSamples();
-    const int i0 = (int) pos;
-    if (i0 < 0 || i0 >= n)
-        return 0.0f;
+// `st` is passed in (fetched ONCE per chunk) rather than calling sincTable()
+// here — a function-local static costs a thread-safe-init guard check on every
+// call, which adds up at samples × voices × channels rate.
+float interpolate(const SincTable &st, const juce::AudioBuffer<float> &buf,
+                  int ch, double pos) {
+  const int n = buf.getNumSamples();
+  const int i0 = (int)pos;
+  if (i0 < 0 || i0 >= n)
+    return 0.0f;
 
-    const double frac = pos - (double) i0;
-    const float* data = buf.getReadPointer (ch);
-    const int p = (int) (frac * (double) kSincPhases + 0.5);
-    if (p == 0)
-        return data[i0];   // integer position → exact sample (no interpolation)
+  const double frac = pos - (double)i0;
+  const float *data = buf.getReadPointer(ch);
+  const int p = (int)(frac * (double)kSincPhases + 0.5);
+  if (p == 0)
+    return data[i0]; // integer position → exact sample (no interpolation)
 
-    const auto* kr = st.k[p];
-    const int base = i0 - (kSincHalf - 1);
-    float sum = 0.0f;
-    if (base >= 0 && base + kSincTaps <= n)
-    {
-        // Interior (virtually every sample): branch-free, vectorisable.
-        for (int t = 0; t < kSincTaps; ++t)
-            sum += data[base + t] * kr[t];
+  const auto *kr = st.k[p];
+  const int base = i0 - (kSincHalf - 1);
+  float sum = 0.0f;
+  if (base >= 0 && base + kSincTaps <= n) {
+    // Interior (virtually every sample): branch-free, vectorisable.
+    for (int t = 0; t < kSincTaps; ++t)
+      sum += data[base + t] * kr[t];
+  } else {
+    // Buffer edges only: per-tap bounds check.
+    for (int t = 0; t < kSincTaps; ++t) {
+      const int idx = base + t;
+      if (idx >= 0 && idx < n)
+        sum += data[idx] * kr[t];
     }
-    else
-    {
-        // Buffer edges only: per-tap bounds check.
-        for (int t = 0; t < kSincTaps; ++t)
-        {
-            const int idx = base + t;
-            if (idx >= 0 && idx < n)
-                sum += data[idx] * kr[t];
-        }
-    }
-    return sum;
+  }
+  return sum;
 }
 
 // Loop read with an equal-gain crossfade across the last `xf` frames before
 // loopEnd: blends the approach-to-loopEnd with the matching material before
 // loopStart (pos - loopLen), so the wrap is seamless.
-float readLooped (const SincTable& st, const juce::AudioBuffer<float>& buf, int ch, double pos,
-                  double loopEnd, double loopLen, double xf)
-{
-    const float base = interpolate (st, buf, ch, pos);
-    if (xf > 0.0 && pos > loopEnd - xf)
-    {
-        const double t = (pos - (loopEnd - xf)) / xf;        // 0 → 1 across the fade
-        const float prev = interpolate (st, buf, ch, pos - loopLen);
-        return (float) ((1.0 - t) * base + t * prev);
-    }
-    return base;
+float readLooped(const SincTable &st, const juce::AudioBuffer<float> &buf,
+                 int ch, double pos, double loopEnd, double loopLen,
+                 double xf) {
+  const float base = interpolate(st, buf, ch, pos);
+  if (xf > 0.0 && pos > loopEnd - xf) {
+    const double t = (pos - (loopEnd - xf)) / xf; // 0 → 1 across the fade
+    const float prev = interpolate(st, buf, ch, pos - loopLen);
+    return (float)((1.0 - t) * base + t * prev);
+  }
+  return base;
 }
-} // namespace (sinc interpolation)
+} // namespace
 } // namespace
 
-VoiceEngine::VoiceEngine()
-{
-    voices.resize (kMaxVoices + kStealFadeVoices);   // tail slots = steal fade-outs only
-    if (voiceCap <= 0)
-        voiceCap = kMaxVoices;   // default: full pool (a settings cap survives re-prepare)
+VoiceEngine::VoiceEngine() {
+  voices.resize(kMaxVoices +
+                kStealFadeVoices); // tail slots = steal fade-outs only
+  if (voiceCap <= 0)
+    voiceCap =
+        kMaxVoices; // default: full pool (a settings cap survives re-prepare)
 }
 
-void VoiceEngine::prepare (double newSampleRate, int maxBlockSize, int numChannels)
-{
-    sincTable();   // build the interpolation kernel now (message thread), not on first audio callback
-    sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
-    maxBlock   = juce::jmax (1, maxBlockSize);
-    numChans   = juce::jmax (1, numChannels);
-    instTrem.assign ((size_t) maxBlock, 1.0f);
-    for (auto& v : voices)
-    {
-        v.active = false;
-        v.adsr.setSampleRate (sampleRate);
+void VoiceEngine::prepare(double newSampleRate, int maxBlockSize,
+                          int numChannels) {
+  sincTable(); // build the interpolation kernel now (message thread), not on
+               // first audio callback
+  sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
+  maxBlock = juce::jmax(1, maxBlockSize);
+  numChans = juce::jmax(1, numChannels);
+  instTrem.assign((size_t)maxBlock, 1.0f);
+  for (auto &v : voices) {
+    v.active = false;
+    v.adsr.setSampleRate(sampleRate);
+  }
+  for (auto &gc : groupChains)
+    if (gc)
+      gc->prepare(sampleRate, maxBlock, numChans);
+  for (auto &gb : groupBuffers)
+    gb.setSize(numChans, maxBlock, false, false, true);
+  airBuffer.setSize(numChans, maxBlock, false, false,
+                    true); // reed submix (no audio-thread alloc)
+}
+
+void VoiceEngine::releaseResources() { allNotesOff(); }
+
+void VoiceEngine::setMode(const Mode &mode, const SampleSource &source) {
+  allNotesOff();
+  zones.clearQuick();
+  hasDriftGateButton =
+      false; // set below if any sample carries a per-sample drift marker
+
+  const int numGroups = mode.groups.size();
+  rrCounter.clearQuick();
+  rrCounter.insertMultiple(0, 0, numGroups);
+  rrLast.clearQuick();
+  rrLast.insertMultiple(0, -1, numGroups);
+  rrRandom.setSeed(20240101); // fixed → reproducible variation across sessions
+  groupVolume.clearQuick();
+  groupVolume.insertMultiple(0, 1.0f, numGroups);
+  groupTagVolume.clearQuick();
+  groupTagVolume.insertMultiple(0, 1.0f, numGroups);
+  groupGain.clearQuick();
+  groupGain.insertMultiple(0, 1.0f, numGroups);
+  groupPan.clearQuick();
+  groupPan.insertMultiple(0, 0.0f, numGroups); // 0 = centred
+  groupEnabled.clearQuick();
+  groupEnabled.insertMultiple(0, true, numGroups);
+  groupReleaseTrigger.clearQuick();
+  groupReleaseTrigger.insertMultiple(0, false, numGroups);
+  groupCcLo.clearQuick();
+  groupCcLo.insertMultiple(0, -1, numGroups);
+  groupCcHi.clearQuick();
+  groupCcHi.insertMultiple(0, -1, numGroups);
+  groupAttack.clearQuick();
+  groupAttack.insertMultiple(0, -1.0f, numGroups);
+  groupDecay.clearQuick();
+  groupDecay.insertMultiple(0, -1.0f, numGroups);
+  groupSustain.clearQuick();
+  groupSustain.insertMultiple(0, -1.0f, numGroups);
+  groupRelease.clearQuick();
+  groupRelease.insertMultiple(0, -1.0f, numGroups);
+  groupTuningMul.clearQuick();
+  groupTuningMul.insertMultiple(0, 1.0, numGroups);
+  groupVelTrackOv.clearQuick();
+  groupVelTrackOv.insertMultiple(0, -1.0f, numGroups);
+
+  // AirSupply scope: which groups are the air-driven reeds (by tag). Key on/off
+  // noises etc. stay outside — they neither draw air nor sag.
+  airGroups.clearQuick();
+  anyAirGroup = false;
+  for (const auto &g : mode.groups) {
+    bool isAir = airCfg.tags.isEmpty();
+    for (const auto &t : g.tags)
+      if (airCfg.tags.contains(t)) {
+        isAir = true;
+        break;
+      }
+    airGroups.add(isAir);
+    anyAirGroup = anyAirGroup || isAir;
+  }
+  sustainValue = 0;
+  sustainActive = false;
+  for (auto &nv : noteOnVelocity)
+    nv = 0.8f; // fallback for a note-off with no prior note-on
+
+  // Tags with polyphony 1 make their groups monophonic. Reuse the choke
+  // mechanism: add such a group's own mono tags to its silencedByTags.
+  juce::StringArray monoTags;
+  for (const auto &t : mode.tags)
+    if (t.polyphony && *t.polyphony <= 1)
+      monoTags.add(t.name);
+
+  for (int gi = 0; gi < numGroups; ++gi) {
+    const auto &g = mode.groups.getReference(gi);
+
+    Zone proto;
+    proto.adsr = resolveAdsr(mode.amp, g);
+    // ampEnvEnabled=false → the amp envelope is bypassed and the sample rings
+    // to its natural end ignoring note-off (a one-shot, e.g. an
+    // un-damped/sustained group).
+    proto.ampEnv = g.ampEnvEnabled.value_or(mode.amp.enabled);
+    proto.releaseTrigger = (g.trigger == "release");
+    groupReleaseTrigger.set(gi, proto.releaseTrigger);
+    proto.gain = (float)(g.volume ? *g.volume : mode.amp.volume);
+    proto.velTrack = (float)(g.velTrack ? *g.velTrack : mode.amp.velTrack);
+    proto.groupIndex = gi;
+    if (g.velocity) {
+      proto.loVel = g.velocity->lo;
+      proto.hiVel = g.velocity->hi;
     }
-    for (auto& gc : groupChains)
-        if (gc) gc->prepare (sampleRate, maxBlock, numChans);
-    for (auto& gb : groupBuffers)
-        gb.setSize (numChans, maxBlock, false, false, true);
-    airBuffer.setSize (numChans, maxBlock, false, false, true);   // reed submix (no audio-thread alloc)
-}
-
-void VoiceEngine::releaseResources()
-{
-    allNotesOff();
-}
-
-void VoiceEngine::setMode (const Mode& mode, const SampleSource& source)
-{
-    allNotesOff();
-    zones.clearQuick();
-    hasDriftGateButton = false;   // set below if any sample carries a per-sample drift marker
-
-    const int numGroups = mode.groups.size();
-    rrCounter.clearQuick(); rrCounter.insertMultiple (0, 0, numGroups);
-    rrLast.clearQuick();    rrLast.insertMultiple (0, -1, numGroups);
-    rrRandom.setSeed (20240101);   // fixed → reproducible variation across sessions
-    groupVolume.clearQuick();    groupVolume.insertMultiple (0, 1.0f, numGroups);
-    groupTagVolume.clearQuick(); groupTagVolume.insertMultiple (0, 1.0f, numGroups);
-    groupGain.clearQuick();      groupGain.insertMultiple (0, 1.0f, numGroups);
-    groupPan.clearQuick();       groupPan.insertMultiple (0, 0.0f, numGroups);   // 0 = centred
-    groupEnabled.clearQuick();   groupEnabled.insertMultiple (0, true, numGroups);
-    groupReleaseTrigger.clearQuick(); groupReleaseTrigger.insertMultiple (0, false, numGroups);
-    groupCcLo.clearQuick();  groupCcLo.insertMultiple (0, -1, numGroups);
-    groupCcHi.clearQuick();  groupCcHi.insertMultiple (0, -1, numGroups);
-    groupAttack.clearQuick();  groupAttack.insertMultiple  (0, -1.0f, numGroups);
-    groupDecay.clearQuick();   groupDecay.insertMultiple   (0, -1.0f, numGroups);
-    groupSustain.clearQuick(); groupSustain.insertMultiple (0, -1.0f, numGroups);
-    groupRelease.clearQuick(); groupRelease.insertMultiple (0, -1.0f, numGroups);
-    groupTuningMul.clearQuick(); groupTuningMul.insertMultiple (0, 1.0, numGroups);
-    groupVelTrackOv.clearQuick(); groupVelTrackOv.insertMultiple (0, -1.0f, numGroups);
-
-    // AirSupply scope: which groups are the air-driven reeds (by tag). Key on/off
-    // noises etc. stay outside — they neither draw air nor sag.
-    airGroups.clearQuick();
-    anyAirGroup = false;
-    for (const auto& g : mode.groups)
-    {
-        bool isAir = airCfg.tags.isEmpty();
-        for (const auto& t : g.tags)
-            if (airCfg.tags.contains (t)) { isAir = true; break; }
-        airGroups.add (isAir);
-        anyAirGroup = anyAirGroup || isAir;
+    proto.tags = g.tags;
+    if (g.silencing)
+      proto.silencedByTags = g.silencing->byTags;
+    for (const auto &tg : g.tags) // tag-polyphony 1 → self-choke (mono)
+      if (monoTags.contains(tg) && !proto.silencedByTags.contains(tg))
+        proto.silencedByTags.add(tg);
+    if (g.roundRobin) {
+      proto.roundRobin = true;
+      proto.rrMode = g.roundRobin->mode;
     }
-    sustainValue = 0; sustainActive = false;
-    for (auto& nv : noteOnVelocity) nv = 0.8f;   // fallback for a note-off with no prior note-on
+    const bool groupPitchKeyTrack = g.pitchKeyTrack ? *g.pitchKeyTrack : false;
 
-    // Tags with polyphony 1 make their groups monophonic. Reuse the choke
-    // mechanism: add such a group's own mono tags to its silencedByTags.
-    juce::StringArray monoTags;
-    for (const auto& t : mode.tags)
-        if (t.polyphony && *t.polyphony <= 1)
-            monoTags.add (t.name);
+    for (const auto &s : g.samples) {
+      const auto *buffer = source.get(s.source);
+      if (buffer == nullptr || buffer->getNumFrames() <= 0)
+        continue; // unresolved/empty sample — skip rather than crash
 
-    for (int gi = 0; gi < numGroups; ++gi)
-    {
-        const auto& g = mode.groups.getReference (gi);
+      if (s.onLoCC64 &&
+          s.onHiCC64) // sustain-pedal-triggered group (damper noise)
+      {
+        groupCcLo.set(gi, *s.onLoCC64);
+        groupCcHi.set(gi, *s.onHiCC64);
+      }
 
-        Zone proto;
-        proto.adsr     = resolveAdsr (mode.amp, g);
-        // ampEnvEnabled=false → the amp envelope is bypassed and the sample rings to
-        // its natural end ignoring note-off (a one-shot, e.g. an un-damped/sustained group).
-        proto.ampEnv   = g.ampEnvEnabled.value_or (mode.amp.enabled);
-        proto.releaseTrigger = (g.trigger == "release");
-        groupReleaseTrigger.set (gi, proto.releaseTrigger);
-        proto.gain     = (float) (g.volume   ? *g.volume   : mode.amp.volume);
-        proto.velTrack = (float) (g.velTrack ? *g.velTrack : mode.amp.velTrack);
-        proto.groupIndex = gi;
-        if (g.velocity) { proto.loVel = g.velocity->lo; proto.hiVel = g.velocity->hi; }
-        proto.tags = g.tags;
-        if (g.silencing)
-            proto.silencedByTags = g.silencing->byTags;
-        for (const auto& tg : g.tags)               // tag-polyphony 1 → self-choke (mono)
-            if (monoTags.contains (tg) && ! proto.silencedByTags.contains (tg))
-                proto.silencedByTags.add (tg);
-        if (g.roundRobin)
-        {
-            proto.roundRobin = true;
-            proto.rrMode = g.roundRobin->mode;
+      Zone z = proto;
+      z.loNote = s.loNote;
+      z.hiNote = s.hiNote;
+      z.rootNote = s.rootNote;
+      z.buffer = buffer;
+      z.pitchKeyTrack = s.pitchKeyTrack || groupPitchKeyTrack;
+
+      // A per-sample drift marker (fractional pitchKeyTrack in the DS source,
+      // e.g. Strykebrett) means this library authored per-sample wow — our
+      // per-voice drift wheels replace it. It is only the FIRST signal for a
+      // Drift gate: the gate also needs a BUTTON driving a GLOBAL_TUNING
+      // modulator's MOD_AMOUNT (see the driftGateMod scan below); without one,
+      // drift stays always-on (wheel = 0 disables) and any GLOBAL_TUNING
+      // modulator keeps working as real vibrato.
+      if (s.pitchDrift)
+        hasDriftGateButton = true;
+
+      // Loop, validated against the actual decoded length — out-of-range
+      // points (e.g. authored against a stale .dspreset length) fall back to
+      // one-shot rather than reading past the buffer.
+      if (s.loop.enabled && s.loop.start && s.loop.end) {
+        const int frames = buffer->getNumFrames();
+        const int st = *s.loop.start;
+        const int en = *s.loop.end;
+        if (st >= 0 && en > st && en <= frames) {
+          z.loopEnabled = true;
+          z.loopStart = st;
+          z.loopEnd = en;
+          z.loopLen = en - st;
+          z.loopXf = juce::jlimit(0, juce::jmin(z.loopLen, st),
+                                  s.loop.crossfade.value_or(0));
         }
-        const bool groupPitchKeyTrack = g.pitchKeyTrack ? *g.pitchKeyTrack : false;
+      }
 
-        for (const auto& s : g.samples)
-        {
-            const auto* buffer = source.get (s.source);
-            if (buffer == nullptr || buffer->getNumFrames() <= 0)
-                continue; // unresolved/empty sample — skip rather than crash
-
-            if (s.onLoCC64 && s.onHiCC64)   // sustain-pedal-triggered group (damper noise)
-            {
-                groupCcLo.set (gi, *s.onLoCC64);
-                groupCcHi.set (gi, *s.onHiCC64);
-            }
-
-            Zone z = proto;
-            z.loNote = s.loNote;
-            z.hiNote = s.hiNote;
-            z.rootNote = s.rootNote;
-            z.buffer = buffer;
-            z.pitchKeyTrack = s.pitchKeyTrack || groupPitchKeyTrack;
-
-            // A per-sample drift marker (fractional pitchKeyTrack in the DS source, e.g.
-            // Strykebrett) means this library authored per-sample wow — our per-voice drift
-            // wheels replace it. It is only the FIRST signal for a Drift gate: the gate also
-            // needs a BUTTON driving a GLOBAL_TUNING modulator's MOD_AMOUNT (see the
-            // driftGateMod scan below); without one, drift stays always-on (wheel = 0
-            // disables) and any GLOBAL_TUNING modulator keeps working as real vibrato.
-            if (s.pitchDrift)
-                hasDriftGateButton = true;
-
-            // Loop, validated against the actual decoded length — out-of-range
-            // points (e.g. authored against a stale .dspreset length) fall back to
-            // one-shot rather than reading past the buffer.
-            if (s.loop.enabled && s.loop.start && s.loop.end)
-            {
-                const int frames = buffer->getNumFrames();
-                const int st = *s.loop.start;
-                const int en = *s.loop.end;
-                if (st >= 0 && en > st && en <= frames)
-                {
-                    z.loopEnabled = true;
-                    z.loopStart = st;
-                    z.loopEnd   = en;
-                    z.loopLen   = en - st;
-                    z.loopXf    = juce::jlimit (0, juce::jmin (z.loopLen, st),
-                                                s.loop.crossfade.value_or (0));
-                }
-            }
-
-            zones.add (z);
-        }
+      zones.add(z);
     }
+  }
 
-    // Index zones by group so note-on only scans a group's own zones (this organ has
-    // ~1830 zones across 30 groups — an all-zones scan per group per note-on was a huge
-    // audio-thread spike when playing chords).
-    zonesByGroup.assign ((size_t) juce::jmax (0, numGroups), {});
-    for (int i = 0; i < zones.size(); ++i)
-    {
-        const int g = zones.getReference (i).groupIndex;
-        if (g >= 0 && g < numGroups)
-            zonesByGroup[(size_t) g].push_back (i);
-    }
+  // Index zones by group so note-on only scans a group's own zones (this organ
+  // has ~1830 zones across 30 groups — an all-zones scan per group per note-on
+  // was a huge audio-thread spike when playing chords).
+  zonesByGroup.assign((size_t)juce::jmax(0, numGroups), {});
+  for (int i = 0; i < zones.size(); ++i) {
+    const int g = zones.getReference(i).groupIndex;
+    if (g >= 0 && g < numGroups)
+      zonesByGroup[(size_t)g].push_back(i);
+  }
 
-    // Per-group insert FX chains (e.g. organ swell filter + loudness). Built once
-    // per group that declares effects; rendered per-group in processBlock.
-    groupChains.clear();
-    groupBuffers.clear();
-    groupChains.resize ((size_t) numGroups);
-    anyGroupFx = false;
-    for (int gi = 0; gi < numGroups; ++gi)
-    {
-        const auto& g = mode.groups.getReference (gi);
-        if (g.effects.isEmpty())
-            continue;
-        auto chain = std::make_unique<FxChain>();
-        chain->prepare (sampleRate, maxBlock, numChans);
-        chain->setEffects (g.effects, source);
-        groupChains[(size_t) gi] = std::move (chain);
-        anyGroupFx = true;
-    }
-    if (anyGroupFx)
-    {
-        groupBuffers.resize ((size_t) numGroups);
-        for (auto& gb : groupBuffers)
-            gb.setSize (numChans, maxBlock, false, false, true);
-    }
+  // Per-group insert FX chains (e.g. organ swell filter + loudness). Built once
+  // per group that declares effects; rendered per-group in processBlock.
+  groupChains.clear();
+  groupBuffers.clear();
+  groupChains.resize((size_t)numGroups);
+  anyGroupFx = false;
+  for (int gi = 0; gi < numGroups; ++gi) {
+    const auto &g = mode.groups.getReference(gi);
+    if (g.effects.isEmpty())
+      continue;
+    auto chain = std::make_unique<FxChain>();
+    chain->prepare(sampleRate, maxBlock, numChans);
+    chain->setEffects(g.effects, source);
+    groupChains[(size_t)gi] = std::move(chain);
+    anyGroupFx = true;
+  }
+  if (anyGroupFx) {
+    groupBuffers.resize((size_t)numGroups);
+    for (auto &gb : groupBuffers)
+      gb.setSize(numChans, maxBlock, false, false, true);
+  }
 
-    // LFO (first modulator). Two kinds of target are supported:
-    //  - AMP_VOLUME on a group → smooth per-sample amplitude tremolo (Wurli).
-    //  - effect params / GLOBAL_TUNING → applied per block in applyLfoBlock (elektrisk
-    //    tremulant: gain + filter sweep + slight pitch vibrato).
-    // Depth = MOD_AMOUNT control, rate = FREQUENCY control (both override the defaults).
-    // Build every modulator (not just the first). Each one's depth starts at its
-    // manifest modAmount and can be overridden per-position by a MOD_AMOUNT control.
-    mods.clear();
-    hasInstMod = false;
-    globalTuningMul = 1.0;
-    groupHasTrem.clearQuick();
-    groupHasTrem.insertMultiple (0, false, numGroups);
-    groupTuningModMul.clearQuick();
-    groupTuningModMul.insertMultiple (0, 1.0, numGroups);
+  // LFO (first modulator). Two kinds of target are supported:
+  //  - AMP_VOLUME on a group → smooth per-sample amplitude tremolo (Wurli).
+  //  - effect params / GLOBAL_TUNING → applied per block in applyLfoBlock
+  //  (elektrisk
+  //    tremulant: gain + filter sweep + slight pitch vibrato).
+  // Depth = MOD_AMOUNT control, rate = FREQUENCY control (both override the
+  // defaults). Build every modulator (not just the first). Each one's depth
+  // starts at its manifest modAmount and can be overridden per-position by a
+  // MOD_AMOUNT control.
+  mods.clear();
+  hasInstMod = false;
+  globalTuningMul = 1.0;
+  groupHasTrem.clearQuick();
+  groupHasTrem.insertMultiple(0, false, numGroups);
+  groupTuningModMul.clearQuick();
+  groupTuningModMul.insertMultiple(0, 1.0, numGroups);
 
-    // Which modulator (if any) is the Drift BUTTON's gate. Requires BOTH signals:
-    //  1. the library authored per-sample wow (pitchDrift markers → hasDriftGateButton),
-    //     meaning its GLOBAL_TUNING "wow" was replaced by the per-voice drift wheels; and
-    //  2. THAT modulator's MOD_AMOUNT is set from a BUTTON state (the Drift/lo-fi switch).
-    // A mod-wheel vibrato is also "GLOBAL_TUNING + MOD_AMOUNT-driven", but from a CONTROL
-    // — gating on any GLOBAL_TUNING modulator silently ate EDB-Orgel's vibrato (its
-    // samples carry drift markers but its wheel-driven mod_9 is not a gate). And a
-    // library WITHOUT markers (4-track hi-fi/lo-fi wow switches) must never gate.
-    int driftGateMod = -1;
-    if (hasDriftGateButton && ! mode.ui.tabs.isEmpty())
-        for (const auto& btn : mode.ui.tabs.getReference (0).buttons)
-            for (const auto& st : btn.states)
-                for (const auto& b : st.bindings)
-                    if (b.parameter == "MOD_AMOUNT")
-                    {
-                        int mi = -1;
-                        if (b.targetId.isNotEmpty())
-                            for (int k = 0; k < mode.modulators.size(); ++k)
-                                if (mode.modulators.getReference (k).id == b.targetId) { mi = k; break; }
-                        if (mi < 0)
-                            mi = b.position.value_or (-1);
-                        if (mi >= 0 && mi < mode.modulators.size())
-                            for (const auto& mb : mode.modulators.getReference (mi).bindings)
-                                if (mb.parameter == "GLOBAL_TUNING")
-                                    driftGateMod = mi;
-                    }
-    hasDriftGateButton = driftGateMod >= 0;   // markers without a gate button → wheels always-on
-
-    int modIdx = -1;
-    for (const auto& lfo : mode.modulators)
-    {
-        ++modIdx;
-        Modulator m;
-        m.freqHz   = lfo.frequency;
-        m.depth    = (float) lfo.modAmount;
-        m.shape    = lfoShapeFromString (lfo.shape);
-
-        // Resolve id-based targets → indices ONCE here, so the audio thread
-        // (applyLfoBlock) reads plain group + effect indices. targetId names either a
-        // group (uid) or an effect inside a group (group-effect binding, e.g. a
-        // tremulant swelling a stop's gain slot); recover the group and, for the latter,
-        // the slot within its chain. Falls back to the binding's own indices when absent.
-        juce::Array<Binding> bindings = lfo.bindings;
-        for (auto& b : bindings)
+  // Which modulator (if any) is the Drift BUTTON's gate. Requires BOTH signals:
+  //  1. the library authored per-sample wow (pitchDrift markers →
+  //  hasDriftGateButton),
+  //     meaning its GLOBAL_TUNING "wow" was replaced by the per-voice drift
+  //     wheels; and
+  //  2. THAT modulator's MOD_AMOUNT is set from a BUTTON state (the Drift/lo-fi
+  //  switch).
+  // A mod-wheel vibrato is also "GLOBAL_TUNING + MOD_AMOUNT-driven", but from a
+  // CONTROL — gating on any GLOBAL_TUNING modulator silently ate EDB-Orgel's
+  // vibrato (its samples carry drift markers but its wheel-driven mod_9 is not
+  // a gate). And a library WITHOUT markers (4-track hi-fi/lo-fi wow switches)
+  // must never gate.
+  int driftGateMod = -1;
+  if (hasDriftGateButton && !mode.ui.tabs.isEmpty())
+    for (const auto &btn : mode.ui.tabs.getReference(0).buttons)
+      for (const auto &st : btn.states)
+        for (const auto &b : st.bindings)
+          if (b.parameter == "MOD_AMOUNT") {
+            int mi = -1;
             if (b.targetId.isNotEmpty())
-                for (int gi = 0; gi < mode.groups.size(); ++gi)
-                {
-                    if (mode.groups.getReference (gi).uid == b.targetId) { b.groupIndex = gi; break; }
-                    const auto& fx = mode.groups.getReference (gi).effects;
-                    bool found = false;
-                    for (int si = 0; si < fx.size(); ++si)
-                        if (fx.getReference (si).id == b.targetId)
-                            { b.groupIndex = gi; b.effectIndex = si; found = true; break; }
-                    if (found) break;
+              for (int k = 0; k < mode.modulators.size(); ++k)
+                if (mode.modulators.getReference(k).id == b.targetId) {
+                  mi = k;
+                  break;
                 }
+            if (mi < 0)
+              mi = b.position.value_or(-1);
+            if (mi >= 0 && mi < mode.modulators.size())
+              for (const auto &mb : mode.modulators.getReference(mi).bindings)
+                if (mb.parameter == "GLOBAL_TUNING")
+                  driftGateMod = mi;
+          }
+  hasDriftGateButton =
+      driftGateMod >= 0; // markers without a gate button → wheels always-on
 
-        for (const auto& b : bindings)
-        {
-            if (b.parameter == "AMP_VOLUME")
-            {
-                if (b.groupIndex)
-                {
-                    const int gi = *b.groupIndex;
-                    if (gi >= 0 && gi < numGroups)
-                    {
-                        m.ampGroups.addIfNotAlreadyThere (gi);
-                        groupHasTrem.set (gi, true);
-                    }
-                }
-                else
-                {
-                    m.ampInstrument = true;
-                    hasInstMod = true;
-                }
-                continue;
+  int modIdx = -1;
+  for (const auto &lfo : mode.modulators) {
+    ++modIdx;
+    Modulator m;
+    m.freqHz = lfo.frequency;
+    m.depth = (float)lfo.modAmount;
+    m.shape = lfoShapeFromString(lfo.shape);
+
+    // Resolve id-based targets → indices ONCE here, so the audio thread
+    // (applyLfoBlock) reads plain group + effect indices. targetId names either
+    // a group (uid) or an effect inside a group (group-effect binding, e.g. a
+    // tremulant swelling a stop's gain slot); recover the group and, for the
+    // latter, the slot within its chain. Falls back to the binding's own
+    // indices when absent.
+    juce::Array<Binding> bindings = lfo.bindings;
+    for (auto &b : bindings)
+      if (b.targetId.isNotEmpty())
+        for (int gi = 0; gi < mode.groups.size(); ++gi) {
+          if (mode.groups.getReference(gi).uid == b.targetId) {
+            b.groupIndex = gi;
+            break;
+          }
+          const auto &fx = mode.groups.getReference(gi).effects;
+          bool found = false;
+          for (int si = 0; si < fx.size(); ++si)
+            if (fx.getReference(si).id == b.targetId) {
+              b.groupIndex = gi;
+              b.effectIndex = si;
+              found = true;
+              break;
             }
-
-            // Compile the non-amp targets (pitch / drift gate / per-group FX sweeps) to
-            // enum + indices so applyLfoBlock does no string compares per block. Only THE
-            // gate modulator (button-driven, see driftGateMod above) becomes a gate.
-            Modulator::Target t;
-            t.hasRange = b.translationOutputMin.has_value() || b.translationOutputMax.has_value();
-            t.outMin   = b.translationOutputMin.value_or (0.0);
-            t.outMax   = b.translationOutputMax.value_or (1.0);
-            if (b.parameter == "GLOBAL_TUNING" && modIdx == driftGateMod)
-                t.kind = Modulator::Target::Kind::driftGate;
-            else if (b.parameter == "GLOBAL_TUNING")
-                t.kind = Modulator::Target::Kind::globalTuning;
-            else if (b.parameter == "GROUP_TUNING" && b.groupIndex)
-            {
-                t.kind  = Modulator::Target::Kind::groupTuning;
-                t.group = *b.groupIndex;
-            }
-            else if (b.groupIndex && b.effectIndex
-                     && (b.parameter == "FX_FILTER_FREQUENCY" || b.parameter == "LEVEL" || b.parameter == "FX_MIX"))
-            {
-                t.kind      = Modulator::Target::Kind::groupFx;
-                t.group     = *b.groupIndex;
-                t.effect    = *b.effectIndex;
-                t.fxParam   = b.parameter == "FX_FILTER_FREQUENCY" ? FxChain::FxParam::filterFrequency
-                            : b.parameter == "LEVEL"               ? FxChain::FxParam::level
-                                                                   : FxChain::FxParam::mix;
-                t.deepSwing = b.parameter == "LEVEL";
-            }
-            else
-                continue;   // not an engine LFO target
-            m.targets.push_back (t);
+          if (found)
+            break;
         }
-        mods.push_back (std::move (m));
-    }
-    // Per-group tremolo scratch (each sized to a block; only trem groups are filled/read).
-    groupTrem.assign ((size_t) numGroups, std::vector<float> ((size_t) maxBlock, 1.0f));
-}
 
-const VoiceEngine::Zone* VoiceEngine::pickZoneInGroup (int group, int note, int velocity)
-{
-    if (group < 0 || group >= (int) zonesByGroup.size())
-        return nullptr;
-
-    // Scan ONLY this group's zones (indexed at setLibrary) and gather covering candidates
-    // into a fixed stack buffer — no audio-thread heap allocation, no all-zones scan.
-    constexpr int kMaxCandidates = 32;
-    int candidates[kMaxCandidates];
-    int nCand = 0;
-    bool roundRobin = false;
-    const juce::String* rrMode = nullptr;
-    for (int zi : zonesByGroup[(size_t) group])
-    {
-        const auto& z = zones.getReference (zi);
-        if (note >= z.loNote && note <= z.hiNote && velocity >= z.loVel && velocity <= z.hiVel)
-        {
-            if (nCand < kMaxCandidates)
-                candidates[nCand++] = zi;
-            roundRobin = z.roundRobin;
-            rrMode     = &z.rrMode;
+    for (const auto &b : bindings) {
+      if (b.parameter == "AMP_VOLUME") {
+        if (b.groupIndex) {
+          const int gi = *b.groupIndex;
+          if (gi >= 0 && gi < numGroups) {
+            m.ampGroups.addIfNotAlreadyThere(gi);
+            groupHasTrem.set(gi, true);
+          }
+        } else {
+          m.ampInstrument = true;
+          hasInstMod = true;
         }
-    }
-    if (nCand == 0)
-        return nullptr;
-    if (nCand == 1 || ! roundRobin)
-        return &zones.getReference (candidates[0]);
+        continue;
+      }
 
-    int pick = 0;
-    if (rrMode != nullptr && (*rrMode == "round_robin" || *rrMode == "round-robin"))
-    {
-        const int c = (group < rrCounter.size()) ? rrCounter[group] : 0;
-        pick = c % nCand;
-        if (group < rrCounter.size())
-            rrCounter.set (group, c + 1);
+      // Compile the non-amp targets (pitch / drift gate / per-group FX sweeps)
+      // to enum + indices so applyLfoBlock does no string compares per block.
+      // Only THE gate modulator (button-driven, see driftGateMod above) becomes
+      // a gate.
+      Modulator::Target t;
+      t.hasRange = b.translationOutputMin.has_value() ||
+                   b.translationOutputMax.has_value();
+      t.outMin = b.translationOutputMin.value_or(0.0);
+      t.outMax = b.translationOutputMax.value_or(1.0);
+      if (b.parameter == "GLOBAL_TUNING" && modIdx == driftGateMod)
+        t.kind = Modulator::Target::Kind::driftGate;
+      else if (b.parameter == "GLOBAL_TUNING")
+        t.kind = Modulator::Target::Kind::globalTuning;
+      else if (b.parameter == "GROUP_TUNING" && b.groupIndex) {
+        t.kind = Modulator::Target::Kind::groupTuning;
+        t.group = *b.groupIndex;
+      } else if (b.groupIndex && b.effectIndex &&
+                 (b.parameter == "FX_FILTER_FREQUENCY" ||
+                  b.parameter == "LEVEL" || b.parameter == "FX_MIX")) {
+        t.kind = Modulator::Target::Kind::groupFx;
+        t.group = *b.groupIndex;
+        t.effect = *b.effectIndex;
+        t.fxParam = b.parameter == "FX_FILTER_FREQUENCY"
+                        ? FxChain::FxParam::filterFrequency
+                    : b.parameter == "LEVEL" ? FxChain::FxParam::level
+                                             : FxChain::FxParam::mix;
+        t.deepSwing = b.parameter == "LEVEL";
+      } else
+        continue; // not an engine LFO target
+      m.targets.push_back(t);
     }
-    else // "random" (and any unknown mode)
-    {
-        pick = rrRandom.nextInt (nCand);
-        if (group < rrLast.size() && pick == rrLast[group])
-            pick = (pick + 1) % nCand;   // avoid immediate repeat
-    }
-
-    if (group < rrLast.size())
-        rrLast.set (group, pick);
-
-    return &zones.getReference (candidates[pick]);
+    mods.push_back(std::move(m));
+  }
+  // Per-group tremolo scratch (each sized to a block; only trem groups are
+  // filled/read).
+  groupTrem.assign((size_t)numGroups,
+                   std::vector<float>((size_t)maxBlock, 1.0f));
 }
 
-VoiceEngine::Voice* VoiceEngine::allocateVoice()
-{
-    // Regular slots only, within the runtime polyphony cap — the tail slots are
-    // reserved for steal fade-outs below.
-    const int cap = juce::jlimit (1, kMaxVoices, voiceCap > 0 ? voiceCap : kMaxVoices);
-    for (int i = 0; i < cap; ++i)
-        if (! voices[(size_t) i].active)
-            return &voices[(size_t) i];
+const VoiceEngine::Zone *VoiceEngine::pickZoneInGroup(int group, int note,
+                                                      int velocity) {
+  if (group < 0 || group >= (int)zonesByGroup.size())
+    return nullptr;
 
-    // All busy: steal the oldest. Overwriting it in place would hard-cut its waveform
-    // at a non-zero value (audible click), so first COPY its playing state into a
-    // reserved fade slot, where it ramps to silence over the ~4 ms declick, then hand
-    // the original slot to the new note. Voice holds no heap-owning members (buffers/
-    // tags are pointers into stable storage), so the copy is allocation-free.
-    Voice* oldest = &voices.front();
-    for (int i = 1; i < cap; ++i)
-        if (voices[(size_t) i].startOrder < oldest->startOrder)
-            oldest = &voices[(size_t) i];
-
-    Voice* fade = nullptr;
-    for (int i = kMaxVoices; i < (int) voices.size(); ++i)
-        if (! voices[(size_t) i].active)
-            { fade = &voices[(size_t) i]; break; }
-    if (fade == nullptr)   // every fade slot busy — reuse the quietest (nearest silence, least clicky)
-        for (int i = kMaxVoices; i < (int) voices.size(); ++i)
-            if (fade == nullptr || voices[(size_t) i].declickGain < fade->declickGain)
-                fade = &voices[(size_t) i];
-
-    if (fade != nullptr)
-    {
-        *fade = *oldest;
-        fade->fadingOut = true;
-        fade->declickDelta = -1.0f / (float) juce::jmax (1, (int) (sampleRate * 0.004));
-        oldest->active = false;   // slot is now free for the new note
+  // Scan ONLY this group's zones (indexed at setLibrary) and gather covering
+  // candidates into a fixed stack buffer — no audio-thread heap allocation, no
+  // all-zones scan.
+  constexpr int kMaxCandidates = 32;
+  int candidates[kMaxCandidates];
+  int nCand = 0;
+  bool roundRobin = false;
+  const juce::String *rrMode = nullptr;
+  for (int zi : zonesByGroup[(size_t)group]) {
+    const auto &z = zones.getReference(zi);
+    if (note >= z.loNote && note <= z.hiNote && velocity >= z.loVel &&
+        velocity <= z.hiVel) {
+      if (nCand < kMaxCandidates)
+        candidates[nCand++] = zi;
+      roundRobin = z.roundRobin;
+      rrMode = &z.rrMode;
     }
-    return oldest;
+  }
+  if (nCand == 0)
+    return nullptr;
+  if (nCand == 1 || !roundRobin)
+    return &zones.getReference(candidates[0]);
+
+  int pick = 0;
+  if (rrMode != nullptr &&
+      (*rrMode == "round_robin" || *rrMode == "round-robin")) {
+    const int c = (group < rrCounter.size()) ? rrCounter[group] : 0;
+    pick = c % nCand;
+    if (group < rrCounter.size())
+      rrCounter.set(group, c + 1);
+  } else // "random" (and any unknown mode)
+  {
+    pick = rrRandom.nextInt(nCand);
+    if (group < rrLast.size() && pick == rrLast[group])
+      pick = (pick + 1) % nCand; // avoid immediate repeat
+  }
+
+  if (group < rrLast.size())
+    rrLast.set(group, pick);
+
+  return &zones.getReference(candidates[pick]);
 }
 
-void VoiceEngine::handleNoteOn (int note, float velocity)
-{
-    // Velocity response curve (settings): soft eases reaching full level, hard
-    // demands it. Shaped BEFORE layer selection so curves also reach the layers.
-    if (velocityCurve == 0)      velocity = std::sqrt (velocity);
-    else if (velocityCurve == 2) velocity = velocity * velocity;
+VoiceEngine::Voice *VoiceEngine::allocateVoice() {
+  // Regular slots only, within the runtime polyphony cap — the tail slots are
+  // reserved for steal fade-outs below.
+  const int cap =
+      juce::jlimit(1, kMaxVoices, voiceCap > 0 ? voiceCap : kMaxVoices);
+  for (int i = 0; i < cap; ++i)
+    if (!voices[(size_t)i].active)
+      return &voices[(size_t)i];
 
-    const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
-    if (note >= 0 && note < 128)
-        noteOnVelocity[note] = velocity;   // remembered for the release-trigger groups
+  // All busy: steal the oldest. Overwriting it in place would hard-cut its
+  // waveform at a non-zero value (audible click), so first COPY its playing
+  // state into a reserved fade slot, where it ramps to silence over the ~4 ms
+  // declick, then hand the original slot to the new note. Voice holds no
+  // heap-owning members (buffers/ tags are pointers into stable storage), so
+  // the copy is allocation-free.
+  Voice *oldest = &voices.front();
+  for (int i = 1; i < cap; ++i)
+    if (voices[(size_t)i].startOrder < oldest->startOrder)
+      oldest = &voices[(size_t)i];
 
-    // Start a voice for EVERY enabled attack group covering this note+velocity —
-    // drums layer several groups on one note (and velocity layers are separate
-    // groups); round-robin picks within each group. Release groups fire on note-off.
-    const int numGroups = groupEnabled.size();
-    for (int g = 0; g < numGroups; ++g)
-    {
-        if (! groupEnabled[g] || groupReleaseTrigger[g])
-            continue;
-        // Skip groups muted to true silence — e.g. a drawbar pulled fully down. There's
-        // no point spawning a voice that contributes nothing, and it frees polyphony for
-        // the drawbars that ARE up (a big win on this organ's 9 drawbars × double-track).
-        // Only skip at ~zero, so a barely-open drawbar still sounds. User-toggleable: with
-        // the skip off, every group triggers (so raising a drawbar mid-note brings it in).
-        if (skipMutedGroups && groupVolume[g] * groupTagVolume[g] * groupGain[g] <= 1.0e-6f)
-            continue;
-        if (const auto* zone = pickZoneInGroup (g, note, velMidi))
-            startVoice (*zone, note, velocity);
+  Voice *fade = nullptr;
+  for (int i = kMaxVoices; i < (int)voices.size(); ++i)
+    if (!voices[(size_t)i].active) {
+      fade = &voices[(size_t)i];
+      break;
     }
+  if (fade == nullptr) // every fade slot busy — reuse the quietest (nearest
+                       // silence, least clicky)
+    for (int i = kMaxVoices; i < (int)voices.size(); ++i)
+      if (fade == nullptr || voices[(size_t)i].declickGain < fade->declickGain)
+        fade = &voices[(size_t)i];
+
+  if (fade != nullptr) {
+    *fade = *oldest;
+    fade->fadingOut = true;
+    fade->declickDelta =
+        -1.0f / (float)juce::jmax(1, (int)(sampleRate * 0.004));
+    oldest->active = false; // slot is now free for the new note
+  }
+  return oldest;
 }
 
-void VoiceEngine::startVoice (const Zone& zone, int note, float velocity)
-{
-    const int fadeOutSamples = juce::jmax (1, (int) (sampleRate * 0.004)); // ~4 ms declick
+void VoiceEngine::handleNoteOn(int note, float velocity) {
+  // Velocity response curve (settings): soft eases reaching full level, hard
+  // demands it. Shaped BEFORE layer selection so curves also reach the layers.
+  if (velocityCurve == 0)
+    velocity = std::sqrt(velocity);
+  else if (velocityCurve == 2)
+    velocity = velocity * velocity;
 
-    // Tag choke: fade out (don't hard-cut) any active voice this voice silences,
-    // so a fast mono retrigger doesn't click. The choked voice keeps rendering in
-    // its own slot until the ramp reaches zero.
-    if (! zone.tags.isEmpty())
-    {
-        for (auto& v : voices)
-        {
-            if (! v.active || v.fadingOut)
-                continue;
-            if (v.silencedByTags != nullptr)
-                for (const auto& t : zone.tags)
-                    if (v.silencedByTags->contains (t))
-                    {
-                        v.fadingOut = true;
-                        v.declickDelta = -1.0f / (float) fadeOutSamples;
-                        break;
-                    }
-        }
-    }
+  const int velMidi = juce::jlimit(0, 127, juce::roundToInt(velocity * 127.0f));
+  if (note >= 0 && note < 128)
+    noteOnVelocity[note] =
+        velocity; // remembered for the release-trigger groups
 
-    // One voice per key within a group (settings "Retrigger mute"): retriggering the
-    // same note fades out its previous voice in the SAME group, so a long release or a
-    // one-shot does not build up on repeated hits. The tag choke above handles mono
-    // GROUPS; this de-duplicates per NOTE. note < 0 (damper/one-shot noise) is exempt —
-    // those never correspond to a key and should be free to overlap.
-    if (retriggerMute && note >= 0)
-    {
-        for (auto& v : voices)
-        {
-            if (! v.active || v.fadingOut)
-                continue;
-            if (v.note == note && v.groupIndex == zone.groupIndex)
-            {
-                v.fadingOut = true;
-                v.declickDelta = -1.0f / (float) fadeOutSamples;
-            }
-        }
-    }
-
-    Voice* v = allocateVoice();
-    v->active = true;
-    v->buffer = zone.buffer;
-    v->position = 0.0;
-    v->note = note;
-    v->isRelease = zone.releaseTrigger;
-    v->groupIndex = zone.groupIndex;
-    v->silencedByTags = &zone.silencedByTags;   // pointer into the stable zone (no per-note alloc)
-    // Independent per-voice drift: random depth (0.4..1) + random phase for both the pitch
-    // and volume drift LFOs, so every note wanders on its own.
-    v->pitchDriftDepth = 0.4f + 0.6f * driftRandom.nextFloat();
-    v->volDriftDepth   = 0.4f + 0.6f * driftRandom.nextFloat();
-    v->driftPhase      = driftRandom.nextDouble() * juce::MathConstants<double>::twoPi;
-    v->volDriftPhase   = driftRandom.nextDouble() * juce::MathConstants<double>::twoPi;
-
-    double rate = zone.buffer->sampleRate / sampleRate;
-    if (zone.pitchKeyTrack)
-        rate *= std::pow (2.0, (note - zone.rootNote) / 12.0);
-    if (zone.groupIndex >= 0 && zone.groupIndex < groupTuningMul.size())
-        rate *= groupTuningMul[zone.groupIndex];   // GROUP_TUNING
-    v->rate = rate;
-
-    v->loopEnabled = zone.loopEnabled;
-    v->loopEnd = (double) zone.loopEnd;
-    v->loopLen = (double) zone.loopLen;
-    v->loopXf  = (double) zone.loopXf;
-
-    // Velocity sensitivity: per-group override → global override → the group's own.
-    const float gvt = (zone.groupIndex >= 0 && zone.groupIndex < groupVelTrackOv.size())
-                          ? groupVelTrackOv[zone.groupIndex] : -1.0f;
-    const float vt = gvt >= 0.0f ? gvt
-                                 : (ovVelTrack >= 0.0f) ? ovVelTrack : zone.velTrack;
-    const float velGain = 1.0f - vt + vt * velocity;
-    v->gain = zone.gain * velGain;
-
-    v->ampEnv = zone.ampEnv;
-    v->baseAdsr = zone.adsr;
-    v->adsr.setSampleRate (sampleRate);
-    auto adsrParams = effectiveAdsr (v->baseAdsr, zone.groupIndex);
-    if (groupIsAir (zone.groupIndex))
-        adsrParams.attack *= airAttackMul;   // AirSupply: busy fan → new reeds speak slower (1.0 when off)
-    v->adsr.setParameters (adsrParams);
-    v->adsr.noteOn();
-    v->startOrder = ++orderCounter;
-
-    // No fade-in — the sample's own start handles the onset. The declick ramp is
-    // only used for the choke/steal fade-out below.
-    v->fadingOut = false;
-    v->declickGain = 1.0f;
-    v->declickDelta = 0.0f;
-    v->smoothStaticGain = -1.0f;   // first chunk starts at its target gain (no ramp-in)
+  // Start a voice for EVERY enabled attack group covering this note+velocity —
+  // drums layer several groups on one note (and velocity layers are separate
+  // groups); round-robin picks within each group. Release groups fire on
+  // note-off.
+  const int numGroups = groupEnabled.size();
+  for (int g = 0; g < numGroups; ++g) {
+    if (!groupEnabled[g] || groupReleaseTrigger[g])
+      continue;
+    // Skip groups muted to true silence — e.g. a drawbar pulled fully down.
+    // There's no point spawning a voice that contributes nothing, and it frees
+    // polyphony for the drawbars that ARE up (a big win on this organ's 9
+    // drawbars × double-track). Only skip at ~zero, so a barely-open drawbar
+    // still sounds. User-toggleable: with the skip off, every group triggers
+    // (so raising a drawbar mid-note brings it in).
+    if (skipMutedGroups &&
+        groupVolume[g] * groupTagVolume[g] * groupGain[g] <= 1.0e-6f)
+      continue;
+    if (const auto *zone = pickZoneInGroup(g, note, velMidi))
+      startVoice(*zone, note, velocity);
+  }
 }
 
-void VoiceEngine::morphNote (int fromNote, int toNote)
-{
-    if (fromNote == toNote)
-        return;
+void VoiceEngine::startVoice(const Zone &zone, int note, float velocity) {
+  const int fadeOutSamples =
+      juce::jmax(1, (int)(sampleRate * 0.004)); // ~4 ms declick
 
-    const int fadeSamples = juce::jmax (1, (int) (sampleRate * 0.004));   // same ~4 ms as choke
-
-    // Scan only the main slots (tail slots are steal/choke fade-outs already dying).
-    for (int i = 0; i < kMaxVoices; ++i)
-    {
-        Voice& v = voices[(size_t) i];
-        if (! v.active || v.fadingOut || v.isRelease || v.note != fromNote)
-            continue;
-
-        const Zone* z = pickZoneInGroup (v.groupIndex, toNote, 100);
-        auto fadeOutOld = [&]
-        {
+  // Tag choke: fade out (don't hard-cut) any active voice this voice silences,
+  // so a fast mono retrigger doesn't click. The choked voice keeps rendering in
+  // its own slot until the ramp reaches zero.
+  if (!zone.tags.isEmpty()) {
+    for (auto &v : voices) {
+      if (!v.active || v.fadingOut)
+        continue;
+      if (v.silencedByTags != nullptr)
+        for (const auto &t : zone.tags)
+          if (v.silencedByTags->contains(t)) {
             v.fadingOut = true;
-            v.declickDelta = -1.0f / (float) fadeSamples;
-        };
-        if (z == nullptr || z->buffer == nullptr)
-        {
-            fadeOutOld();   // new chord has no sample here → just let the old note go
-            continue;
-        }
-
-        Voice* nv = allocateVoice();
-        if (nv == &v)   // pathological full-pool case: the steal picked our own slot
-            continue;
-
-        *nv = v;   // carries envelope STATE, gain, drift phases, age, note-off status
-        nv->buffer = z->buffer;
-        nv->note = toNote;
-        nv->groupIndex = z->groupIndex;
-        nv->silencedByTags = &z->silencedByTags;
-
-        // Same elapsed TIME into the new sample: position/rate is elapsed output time,
-        // so scale the source position by the rate ratio (handles differing sample
-        // rates / pitchKeyTrack roots).
-        double rate = z->buffer->sampleRate / sampleRate;
-        if (z->pitchKeyTrack)
-            rate *= std::pow (2.0, (toNote - z->rootNote) / 12.0);
-        if (z->groupIndex >= 0 && z->groupIndex < groupTuningMul.size())
-            rate *= groupTuningMul[z->groupIndex];
-        nv->position = v.rate > 0.0 ? v.position * (rate / v.rate) : 0.0;
-        nv->rate = rate;
-
-        nv->loopEnabled = z->loopEnabled;
-        nv->loopEnd = (double) z->loopEnd;
-        nv->loopLen = (double) z->loopLen;
-        nv->loopXf  = (double) z->loopXf;
-
-        if (! nv->loopEnabled && nv->position >= (double) z->buffer->getNumFrames())
-        {
-            nv->active = false;   // new sample is shorter than the elapsed time — nothing to play
-            fadeOutOld();
-            continue;
-        }
-
-        // Equal-length crossfade: new voice ramps in from silence, old ramps out.
-        nv->fadingOut = false;
-        nv->declickGain = 0.0f;
-        nv->declickDelta = 1.0f / (float) fadeSamples;
-        fadeOutOld();
+            v.declickDelta = -1.0f / (float)fadeOutSamples;
+            break;
+          }
     }
+  }
+
+  // One voice per key within a group (settings "Retrigger mute"): retriggering
+  // the same note fades out its previous voice in the SAME group, so a long
+  // release or a one-shot does not build up on repeated hits. The tag choke
+  // above handles mono GROUPS; this de-duplicates per NOTE. note < 0
+  // (damper/one-shot noise) is exempt — those never correspond to a key and
+  // should be free to overlap.
+  if (retriggerMute && note >= 0) {
+    for (auto &v : voices) {
+      if (!v.active || v.fadingOut)
+        continue;
+      if (v.note == note && v.groupIndex == zone.groupIndex) {
+        v.fadingOut = true;
+        v.declickDelta = -1.0f / (float)fadeOutSamples;
+      }
+    }
+  }
+
+  Voice *v = allocateVoice();
+  v->active = true;
+  v->buffer = zone.buffer;
+  v->position = 0.0;
+  v->note = note;
+  v->isRelease = zone.releaseTrigger;
+  v->groupIndex = zone.groupIndex;
+  v->silencedByTags =
+      &zone.silencedByTags; // pointer into the stable zone (no per-note alloc)
+  // Independent per-voice drift: random depth (0.4..1) + random phase for both
+  // the pitch and volume drift LFOs, so every note wanders on its own.
+  v->pitchDriftDepth = 0.4f + 0.6f * driftRandom.nextFloat();
+  v->volDriftDepth = 0.4f + 0.6f * driftRandom.nextFloat();
+  v->driftPhase = driftRandom.nextDouble() * juce::MathConstants<double>::twoPi;
+  v->volDriftPhase =
+      driftRandom.nextDouble() * juce::MathConstants<double>::twoPi;
+
+  double rate = zone.buffer->sampleRate / sampleRate;
+  if (zone.pitchKeyTrack)
+    rate *= std::pow(2.0, (note - zone.rootNote) / 12.0);
+  if (zone.groupIndex >= 0 && zone.groupIndex < groupTuningMul.size())
+    rate *= groupTuningMul[zone.groupIndex]; // GROUP_TUNING
+  v->rate = rate;
+
+  v->loopEnabled = zone.loopEnabled;
+  v->loopEnd = (double)zone.loopEnd;
+  v->loopLen = (double)zone.loopLen;
+  v->loopXf = (double)zone.loopXf;
+
+  // Velocity sensitivity: per-group override → global override → the group's
+  // own.
+  const float gvt =
+      (zone.groupIndex >= 0 && zone.groupIndex < groupVelTrackOv.size())
+          ? groupVelTrackOv[zone.groupIndex]
+          : -1.0f;
+  const float vt = gvt >= 0.0f            ? gvt
+                   : (ovVelTrack >= 0.0f) ? ovVelTrack
+                                          : zone.velTrack;
+  const float velGain = 1.0f - vt + vt * velocity;
+  v->gain = zone.gain * velGain;
+
+  v->ampEnv = zone.ampEnv;
+  v->baseAdsr = zone.adsr;
+  v->adsr.setSampleRate(sampleRate);
+  auto adsrParams = effectiveAdsr(v->baseAdsr, zone.groupIndex);
+  if (groupIsAir(zone.groupIndex))
+    adsrParams.attack *= airAttackMul; // AirSupply: busy fan → new reeds speak
+                                       // slower (1.0 when off)
+  v->adsr.setParameters(adsrParams);
+  v->adsr.noteOn();
+  v->startOrder = ++orderCounter;
+
+  // No fade-in — the sample's own start handles the onset. The declick ramp is
+  // only used for the choke/steal fade-out below.
+  v->fadingOut = false;
+  v->declickGain = 1.0f;
+  v->declickDelta = 0.0f;
+  v->smoothStaticGain =
+      -1.0f; // first chunk starts at its target gain (no ramp-in)
 }
 
-void VoiceEngine::handleNoteOff (int note)
-{
-    // Release held (attack) voices — unless the sustain pedal is down, in which case
-    // mark them held so they keep ringing until the pedal lifts. Release-trigger
-    // (key-off) voices are one-shots that ignore note-off and play out.
-    for (auto& v : voices)
-        if (v.active && v.note == note && ! v.isRelease && v.ampEnv)   // one-shots (ampEnv=false) ignore note-off
-        {
-            if (sustainActive) v.pedalHeld = true;
-            else               v.adsr.noteOff();
-        }
+void VoiceEngine::morphNote(int fromNote, int toNote) {
+  if (fromNote == toNote)
+    return;
 
-    // Fire release-trigger groups for this note, at the velocity it was played.
-    const float velocity = (note >= 0 && note < 128) ? noteOnVelocity[note] : 0.8f;
-    const int velMidi = juce::jlimit (0, 127, juce::roundToInt (velocity * 127.0f));
-    const int numGroups = groupReleaseTrigger.size();
-    for (int g = 0; g < numGroups; ++g)
+  const int fadeSamples =
+      juce::jmax(1, (int)(sampleRate * 0.004)); // same ~4 ms as choke
+
+  // Scan only the main slots (tail slots are steal/choke fade-outs already
+  // dying).
+  for (int i = 0; i < kMaxVoices; ++i) {
+    Voice &v = voices[(size_t)i];
+    if (!v.active || v.fadingOut || v.isRelease || v.note != fromNote)
+      continue;
+
+    const Zone *z = pickZoneInGroup(v.groupIndex, toNote, 100);
+    auto fadeOutOld = [&] {
+      v.fadingOut = true;
+      v.declickDelta = -1.0f / (float)fadeSamples;
+    };
+    if (z == nullptr || z->buffer == nullptr) {
+      fadeOutOld(); // new chord has no sample here → just let the old note go
+      continue;
+    }
+
+    Voice *nv = allocateVoice();
+    if (nv == &v) // pathological full-pool case: the steal picked our own slot
+      continue;
+
+    *nv = v; // carries envelope STATE, gain, drift phases, age, note-off status
+    nv->buffer = z->buffer;
+    nv->note = toNote;
+    nv->groupIndex = z->groupIndex;
+    nv->silencedByTags = &z->silencedByTags;
+
+    // Same elapsed TIME into the new sample: position/rate is elapsed output
+    // time, so scale the source position by the rate ratio (handles differing
+    // sample rates / pitchKeyTrack roots).
+    double rate = z->buffer->sampleRate / sampleRate;
+    if (z->pitchKeyTrack)
+      rate *= std::pow(2.0, (toNote - z->rootNote) / 12.0);
+    if (z->groupIndex >= 0 && z->groupIndex < groupTuningMul.size())
+      rate *= groupTuningMul[z->groupIndex];
+    nv->position = v.rate > 0.0 ? v.position * (rate / v.rate) : 0.0;
+    nv->rate = rate;
+
+    nv->loopEnabled = z->loopEnabled;
+    nv->loopEnd = (double)z->loopEnd;
+    nv->loopLen = (double)z->loopLen;
+    nv->loopXf = (double)z->loopXf;
+
+    if (!nv->loopEnabled && nv->position >= (double)z->buffer->getNumFrames()) {
+      nv->active = false; // new sample is shorter than the elapsed time —
+                          // nothing to play
+      fadeOutOld();
+      continue;
+    }
+
+    // Equal-length crossfade: new voice ramps in from silence, old ramps out.
+    nv->fadingOut = false;
+    nv->declickGain = 0.0f;
+    nv->declickDelta = 1.0f / (float)fadeSamples;
+    fadeOutOld();
+  }
+}
+
+void VoiceEngine::handleNoteOff(int note) {
+  // Release held (attack) voices — unless the sustain pedal is down, in which
+  // case mark them held so they keep ringing until the pedal lifts.
+  // Release-trigger (key-off) voices are one-shots that ignore note-off and
+  // play out.
+  for (auto &v : voices)
+    if (v.active && v.note == note && !v.isRelease &&
+        v.ampEnv) // one-shots (ampEnv=false) ignore note-off
     {
-        if (! groupEnabled[g] || ! groupReleaseTrigger[g])
-            continue;
-        if (const auto* zone = pickZoneInGroup (g, note, velMidi))
-            startVoice (*zone, note, velocity);
-    }
-}
-
-void VoiceEngine::handleSustain (int value)
-{
-    // Damper noise: fire any pedal-triggered group whose CC range the pedal just
-    // entered (e.g. damper-lift on press, damper-drop on release). These groups have
-    // loNote=-1, so pickZoneInGroup(-1) selects/round-robins among their samples; the
-    // voice plays out as a one-shot (note=-1 → never matched by a key note-off), and
-    // damper-drop chokes damper-lift via the normal tag silencing.
-    auto inRange = [] (int v, int lo, int hi) { return v >= lo && v <= hi; };
-    for (int g = 0; g < groupCcLo.size(); ++g)
-    {
-        if (groupCcLo[g] < 0 || ! groupEnabled[g])
-            continue;
-        const bool was = inRange (sustainValue, groupCcLo[g], groupCcHi[g]);
-        const bool now = inRange (value,        groupCcLo[g], groupCcHi[g]);
-        if (now && ! was)
-            if (const auto* zone = pickZoneInGroup (g, -1, 127))
-                startVoice (*zone, -1, 1.0f);
+      if (sustainActive)
+        v.pedalHeld = true;
+      else
+        v.adsr.noteOff();
     }
 
-    // Sustain hold: pedal up releases everything held while it was down.
-    const bool down = value >= 64;
-    if (sustainActive && ! down)
-        for (auto& v : voices)
-            if (v.active && v.pedalHeld)
-            {
-                v.adsr.noteOff();
-                v.pedalHeld = false;
-            }
-    sustainActive = down;
-    sustainValue  = value;
+  // Fire release-trigger groups for this note, at the velocity it was played.
+  const float velocity =
+      (note >= 0 && note < 128) ? noteOnVelocity[note] : 0.8f;
+  const int velMidi = juce::jlimit(0, 127, juce::roundToInt(velocity * 127.0f));
+  const int numGroups = groupReleaseTrigger.size();
+  for (int g = 0; g < numGroups; ++g) {
+    if (!groupEnabled[g] || !groupReleaseTrigger[g])
+      continue;
+    if (const auto *zone = pickZoneInGroup(g, note, velMidi))
+      startVoice(*zone, note, velocity);
+  }
 }
 
-void VoiceEngine::handlePitchWheel (int wheelValue)
-{
-    // Centre (8192) → no bend → multiplier 1.0. Up and down ranges are configured
-    // separately (settings menu), so a whole-tone lift can sit next to a fifth drop.
-    const double frac  = (wheelValue - 8192) / 8192.0;
-    const double semis = frac * (frac >= 0.0 ? bendUpSemitones : bendDownSemitones);
-    pitchBendMul = std::pow (2.0, semis / 12.0);
+void VoiceEngine::handleSustain(int value) {
+  // Damper noise: fire any pedal-triggered group whose CC range the pedal just
+  // entered (e.g. damper-lift on press, damper-drop on release). These groups
+  // have loNote=-1, so pickZoneInGroup(-1) selects/round-robins among their
+  // samples; the voice plays out as a one-shot (note=-1 → never matched by a
+  // key note-off), and damper-drop chokes damper-lift via the normal tag
+  // silencing.
+  auto inRange = [](int v, int lo, int hi) { return v >= lo && v <= hi; };
+  for (int g = 0; g < groupCcLo.size(); ++g) {
+    if (groupCcLo[g] < 0 || !groupEnabled[g])
+      continue;
+    const bool was = inRange(sustainValue, groupCcLo[g], groupCcHi[g]);
+    const bool now = inRange(value, groupCcLo[g], groupCcHi[g]);
+    if (now && !was)
+      if (const auto *zone = pickZoneInGroup(g, -1, 127))
+        startVoice(*zone, -1, 1.0f);
+  }
+
+  // Sustain hold: pedal up releases everything held while it was down.
+  const bool down = value >= 64;
+  if (sustainActive && !down)
+    for (auto &v : voices)
+      if (v.active && v.pedalHeld) {
+        v.adsr.noteOff();
+        v.pedalHeld = false;
+      }
+  sustainActive = down;
+  sustainValue = value;
 }
 
-void VoiceEngine::renderChunk (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
-{
-    if (numSamples <= 0)
-        return;
-
-    constexpr int kMaxOutChannels = 16;   // stack-array bound for hoisted write pointers
-    const int outChannels = juce::jmin (buffer.getNumChannels(), kMaxOutChannels);
-    const auto& st = sincTable();   // fetch once per chunk (static-init guard is per call)
-
-    // Amplitude tremolo + pitch modulation are computed once per block in
-    // applyLfoBlock and indexed here by absolute block position (startSample + i):
-    // instTrem = instrument-level tremolo (all voices), groupTrem[g] = per-group.
-    const bool instTremActive = hasInstMod && (int) instTrem.size() >= startSample + numSamples;
-
-    for (auto& v : voices)
-    {
-        if (! v.active)
-            continue;
-
-        const int srcChannels = v.buffer->getNumChannels();
-        const int frames = v.buffer->getNumFrames();
-        const bool groupTremActive = v.groupIndex >= 0 && v.groupIndex < groupHasTrem.size()
-                                  && groupHasTrem[v.groupIndex]
-                                  && (int) groupTrem[(size_t) v.groupIndex].size() >= startSample + numSamples;
-        // Combined pitch multiplier for this voice: global vibrato × its group's vibrato.
-        double tuneMul = globalTuningMul * masterTuneMul;
-        if (v.groupIndex >= 0 && v.groupIndex < groupTuningModMul.size())
-            tuneMul *= groupTuningModMul[v.groupIndex];
-
-        // Independent per-voice drift (all plugins), block-rate (drift is <1 Hz). Each voice
-        // has a random depth + phase (see startVoice), so held notes wander on their own.
-        // The two right-side wheels set the amounts. kMax* are the swing at wheel=1, depth=1.
-        const auto twoPi = juce::MathConstants<double>::twoPi;
-        if (const float pDriftAmt = driftGateOpen ? pitchDriftAmount.load() : 0.0f; pDriftAmt > 0.0f)
-        {
-            constexpr double kMaxDriftSemis = 0.15;   // ± semitones (reduced)
-            const double driftSemis = std::sin (v.driftPhase) * (double) pDriftAmt * (double) v.pitchDriftDepth * kMaxDriftSemis;
-            tuneMul *= std::pow (2.0, driftSemis / 12.0);
-            v.driftPhase += twoPi * driftRateHz * (double) numSamples / sampleRate;
-            if (v.driftPhase >= twoPi) v.driftPhase = std::fmod (v.driftPhase, twoPi);
-        }
-
-        // Volume drift → a per-block gain multiplier folded into `g` in the sample loop.
-        float volDriftMul = 1.0f;
-        if (const float vDriftAmt = driftGateOpen ? volumeDriftAmount.load() : 0.0f; vDriftAmt > 0.0f)
-        {
-            constexpr float kMaxVolDrift = 0.2f;   // ±20% gain at wheel=1, depth=1
-            volDriftMul = 1.0f + (float) std::sin (v.volDriftPhase) * vDriftAmt * v.volDriftDepth * kMaxVolDrift;
-            v.volDriftPhase += twoPi * volDriftRateHz * (double) numSamples / sampleRate;
-            if (v.volDriftPhase >= twoPi) v.volDriftPhase = std::fmod (v.volDriftPhase, twoPi);
-        }
-
-        // Voices in a group with its own FX chain render into that group's scratch
-        // buffer (filtered + gained as a group post-loop); air-driven reeds render
-        // into the reed submix (lowpassed as one bank — they share the blower);
-        // everything else goes straight out.
-        juce::AudioBuffer<float>* target = &buffer;
-        if (anyGroupFx && v.groupIndex >= 0 && (size_t) v.groupIndex < groupChains.size()
-            && groupChains[(size_t) v.groupIndex] != nullptr)
-            target = &groupBuffers[(size_t) v.groupIndex];
-        else if (airLpActive && groupIsAir (v.groupIndex))
-            target = &airBuffer;
-
-        // Per-group stereo balance (double-track "Stereo"): centre = unity both sides,
-        // so a mono source panned hard-left keeps full level on L and silences R.
-        float panL = 1.0f, panR = 1.0f;
-        if (v.groupIndex >= 0 && v.groupIndex < groupPan.size())
-        {
-            const float pan = groupPan[v.groupIndex];
-            if      (pan < 0.0f) panR = 1.0f + pan;   // toward left  → attenuate R
-            else if (pan > 0.0f) panL = 1.0f - pan;   // toward right → attenuate L
-        }
-
-        // ── Hoist everything block-invariant out of the per-sample loop ────────────
-        // Group volumes / gain / rate multipliers / row pointers / write pointers only
-        // change between blocks, and were previously re-read (juce::Array indexing +
-        // asserting addSample) per SAMPLE per voice.
-        const bool hasGroup = v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
-        const float staticGain = v.gain * volDriftMul
-                               * (groupIsAir (v.groupIndex) ? airGainSm : 1.0f)
-                               * (hasGroup ? groupVolume[v.groupIndex]
-                                             * groupTagVolume[v.groupIndex]
-                                             * groupGain[v.groupIndex]
-                                           : 1.0f);
-        // De-zipper: the static gain's inputs (group/tag volumes, drift) step once per
-        // block — a fast control sweep (e.g. a mod-wheel blend of tag volumes) jumping
-        // the whole chunk's gain at the block edge crackles. Ramp across the chunk.
-        if (v.smoothStaticGain < 0.0f)
-            v.smoothStaticGain = staticGain;
-        const float gainInc = (staticGain - v.smoothStaticGain) / (float) numSamples;
-        float sGain = v.smoothStaticGain;
-        v.smoothStaticGain = staticGain;   // next chunk ramps onward from this target
-        const float* itRow = instTremActive  ? instTrem.data() + startSample : nullptr;
-        const float* gtRow = groupTremActive ? groupTrem[(size_t) v.groupIndex].data() + startSample
-                                             : nullptr;
-        const double step = v.rate * pitchBendMul * tuneMul;
-        const bool monoSrc = srcChannels == 1;
-        const auto& srcBuf = v.buffer->audio;
-        float* out[kMaxOutChannels];
-        for (int ch = 0; ch < outChannels; ++ch)
-            out[ch] = target->getWritePointer (ch) + startSample;
-
-        for (int i = 0; i < numSamples; ++i)
-        {
-            if (! v.loopEnabled && v.position >= (double) frames)   // one-shot end
-            {
-                v.active = false;
-                break;
-            }
-
-            // One-shot voices (ampEnv=false) play at full gain — the envelope is bypassed.
-            const float env = v.ampEnv ? v.adsr.getNextSample() : 1.0f;
-            float trem = 1.0f;
-            if (itRow != nullptr) trem *= itRow[i];
-            if (gtRow != nullptr) trem *= gtRow[i];
-            sGain += gainInc;   // de-zippered static gain (see above)
-            const float g = env * v.declickGain * sGain * trem;
-
-            if (monoSrc)
-            {
-                // Mono source (most libraries): interpolate ONCE and fan out — the
-                // per-channel form below would run the identical 8-tap sinc twice.
-                const float s = (v.loopEnabled
-                                   ? readLooped (st, srcBuf, 0, v.position,
-                                                 v.loopEnd, v.loopLen, v.loopXf)
-                                   : interpolate (st, srcBuf, 0, v.position)) * g;
-                if (outChannels >= 2)
-                {
-                    out[0][i] += s * panL;
-                    out[1][i] += s * panR;
-                    for (int ch = 2; ch < outChannels; ++ch)
-                        out[ch][i] += s;
-                }
-                else
-                    out[0][i] += s;
-            }
-            else
-            {
-                for (int ch = 0; ch < outChannels; ++ch)
-                {
-                    const int srcCh = juce::jmin (ch, srcChannels - 1);
-                    const float s = v.loopEnabled
-                                      ? readLooped (st, srcBuf, srcCh, v.position,
-                                                    v.loopEnd, v.loopLen, v.loopXf)
-                                      : interpolate (st, srcBuf, srcCh, v.position);
-                    const float panMul = (outChannels >= 2) ? (ch == 0 ? panL : (ch == 1 ? panR : 1.0f)) : 1.0f;
-                    out[ch][i] += s * g * panMul;
-                }
-            }
-
-            v.position += step;
-            if (v.loopEnabled && v.position >= v.loopEnd)
-                v.position -= v.loopLen;
-
-            // Advance the anti-click ramp.
-            v.declickGain += v.declickDelta;
-            if (v.declickDelta > 0.0f && v.declickGain >= 1.0f)
-            {
-                v.declickGain = 1.0f;
-                v.declickDelta = 0.0f;
-            }
-
-            if (v.fadingOut && v.declickGain <= 0.0f)   // choke/steal fade complete
-            {
-                v.active = false;
-                break;
-            }
-
-            if (v.ampEnv && ! v.adsr.isActive())  // release finished (one-shots end at sample end instead)
-            {
-                v.active = false;
-                break;
-            }
-        }
-    }
+void VoiceEngine::handlePitchWheel(int wheelValue) {
+  // Centre (8192) → no bend → multiplier 1.0. Up and down ranges are configured
+  // separately (settings menu), so a whole-tone lift can sit next to a fifth
+  // drop.
+  const double frac = (wheelValue - 8192) / 8192.0;
+  const double semis =
+      frac * (frac >= 0.0 ? bendUpSemitones : bendDownSemitones);
+  pitchBendMul = std::pow(2.0, semis / 12.0);
 }
 
-void VoiceEngine::setLfoDepth (int position, float depth)
-{
-    if (position >= 0 && position < (int) mods.size())
-        mods[(size_t) position].depth = depth;
-}
+void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
+                              int numSamples) {
+  if (numSamples <= 0)
+    return;
 
-void VoiceEngine::setLfoRate (int position, float hz)
-{
-    if (hz > 0.0f && position >= 0 && position < (int) mods.size())
-        mods[(size_t) position].freqHz = hz;
-}
+  constexpr int kMaxOutChannels =
+      16; // stack-array bound for hoisted write pointers
+  const int outChannels = juce::jmin(buffer.getNumChannels(), kMaxOutChannels);
+  const auto &st =
+      sincTable(); // fetch once per chunk (static-init guard is per call)
 
-void VoiceEngine::applyLfoBlock (int numSamples)
-{
-    if (numSamples <= 0 || mods.empty())
-        return;
+  // Amplitude tremolo + pitch modulation are computed once per block in
+  // applyLfoBlock and indexed here by absolute block position (startSample +
+  // i): instTrem = instrument-level tremolo (all voices), groupTrem[g] =
+  // per-group.
+  const bool instTremActive =
+      hasInstMod && (int)instTrem.size() >= startSample + numSamples;
 
-    // Reset this block's outputs. Only groups that actually have a tremolo modulator
-    // (and the instrument buffer, if any) are cleared+read; the rest stay at unity.
-    if (hasInstMod)
-        for (int i = 0; i < numSamples; ++i) instTrem[(size_t) i] = 1.0f;
-    for (int gi = 0; gi < groupHasTrem.size(); ++gi)
-        if (groupHasTrem[gi])
-        {
-            auto& gt = groupTrem[(size_t) gi];
-            for (int i = 0; i < numSamples; ++i) gt[(size_t) i] = 1.0f;
-        }
-    globalTuningMul = 1.0;
-    for (auto& g : groupTuningModMul) g = 1.0;
-    // Drift gate: for a library with a dedicated Drift button (hasDriftGateButton), the
-    // wheels only take effect while that button's GLOBAL_TUNING modulator is engaged
-    // (depth > 0). Libraries without such a button leave the gate open (wheel controls).
-    driftGateOpen = ! hasDriftGateButton;
+  for (auto &v : voices) {
+    if (!v.active)
+      continue;
 
-    // Tuning of the tremulant relative to the preset's binding ranges: the amplitude
-    // (gain) swing on a per-group LEVEL effect is deepened a little, and pitch vibrato
-    // is eased back a touch. (Matches the previous single-LFO behaviour.)
-    constexpr double kGainSwing = 6.0;   // > 1 = more amplitude tremolo (LEVEL-target)
-    constexpr double kTuneScale = 0.7;   // < 1 = less pitch vibrato (ranged tuning, e.g. tremulant)
-    constexpr double kWowSemis  = 1.0;   // semitone span for a rangeless tuning wow (± modAmount*this)
+    const int srcChannels = v.buffer->getNumChannels();
+    const int frames = v.buffer->getNumFrames();
+    const bool groupTremActive =
+        v.groupIndex >= 0 && v.groupIndex < groupHasTrem.size() &&
+        groupHasTrem[v.groupIndex] &&
+        (int)groupTrem[(size_t)v.groupIndex].size() >= startSample + numSamples;
+    // Combined pitch multiplier for this voice: global vibrato × its group's
+    // vibrato.
+    double tuneMul = globalTuningMul * masterTuneMul;
+    if (v.groupIndex >= 0 && v.groupIndex < groupTuningModMul.size())
+      tuneMul *= groupTuningModMul[v.groupIndex];
 
-    for (auto& m : mods)
-    {
-        if (m.freqHz <= 0.0)
-            continue;
-        const double inc = m.freqHz / sampleRate;
-
-        // Per-sample amplitude tremolo (unipolar, downward: peak at unity, trough at
-        // 1-depth). Multiple modulators on the same group multiply.
-        if (m.depth > 0.0f && (m.ampInstrument || ! m.ampGroups.isEmpty()))
-            for (int i = 0; i < numSamples; ++i)
-            {
-                const float w = lfoWave (m.shape, m.phase + inc * i);
-                const float trem = 1.0f - m.depth * (0.5f - 0.5f * w);
-                if (m.ampInstrument) instTrem[(size_t) i] *= trem;
-                for (int gi : m.ampGroups) groupTrem[(size_t) gi][(size_t) i] *= trem;
-            }
-
-        // Control-rate targets (mid-block value). `waveMid` is the raw wave (-1..1);
-        // `u` is its unipolar 0..depth form mapped through each binding's output range.
-        const double waveMid = (double) lfoWave (m.shape, m.phase + inc * (numSamples * 0.5));
-        const double u = (waveMid + 1.0) * 0.5 * (double) m.depth;
-        for (const auto& t : m.targets)   // compiled at setMode — no string work here
-        {
-            const double val = t.outMin + u * (t.outMax - t.outMin);
-            switch (t.kind)
-            {
-                case Modulator::Target::Kind::driftGate:
-                    // This library's Drift button rides GLOBAL_TUNING: use its depth purely
-                    // as the on/off gate for the drift wheels (no global wow of its own).
-                    if (m.depth > 1.0e-4f)
-                        driftGateOpen = true;
-                    break;
-
-                case Modulator::Target::Kind::globalTuning:
-                case Modulator::Target::Kind::groupTuning:
-                {
-                    // Pitch modulation (vibrato / wow). A binding with an explicit output
-                    // range uses it as-is — a small unipolar vibrato, e.g. the tremulant.
-                    // Without a range, `modAmount` alone is near-zero, so treat it as a
-                    // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible gentle
-                    // wander that centres on the true pitch.
-                    const double semis = t.hasRange ? val * kTuneScale
-                                                    : waveMid * (double) m.depth * kWowSemis;
-                    const double mul = std::pow (2.0, semis / 12.0);
-                    if (t.kind == Modulator::Target::Kind::globalTuning)
-                        globalTuningMul *= mul;
-                    else if (t.group >= 0 && t.group < groupTuningModMul.size())
-                        groupTuningModMul.set (t.group, groupTuningModMul[t.group] * mul);
-                    break;
-                }
-
-                case Modulator::Target::Kind::groupFx:
-                {
-                    const double v = t.deepSwing
-                                       ? t.outMin + u * (t.outMax - t.outMin) * kGainSwing   // deeper amplitude swing
-                                       : val;
-                    setGroupEffectParam (t.group, t.effect, t.fxParam, (float) v);
-                    break;
-                }
-            }
-        }
-
-        m.phase += inc * numSamples;
-        m.phase -= std::floor (m.phase);
-    }
-}
-
-void VoiceEngine::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
-{
-    buffer.clear();
-
-    // Advance + apply the LFO once for the whole block (amplitude tremolo, per-group
-    // filter/gain sweep, pitch vibrato).
-    applyLfoBlock (buffer.getNumSamples());
-
-    updateAirSupply (buffer.getNumSamples());
-    airLpActive = airCutoffSm < 19000.0f && anyAirGroup;
-    if (airLpActive)
-    {
-        airBuffer.setSize (numChans, buffer.getNumSamples(), false, false, true);
-        airBuffer.clear();
+    // Independent per-voice drift (all plugins), block-rate (drift is <1 Hz).
+    // Each voice has a random depth + phase (see startVoice), so held notes
+    // wander on their own. The two right-side wheels set the amounts. kMax* are
+    // the swing at wheel=1, depth=1.
+    const auto twoPi = juce::MathConstants<double>::twoPi;
+    if (const float pDriftAmt = driftGateOpen ? pitchDriftAmount.load() : 0.0f;
+        pDriftAmt > 0.0f) {
+      constexpr double kMaxDriftSemis = 0.15; // ± semitones (reduced)
+      const double driftSemis = std::sin(v.driftPhase) * (double)pDriftAmt *
+                                (double)v.pitchDriftDepth * kMaxDriftSemis;
+      tuneMul *= std::pow(2.0, driftSemis / 12.0);
+      v.driftPhase += twoPi * driftRateHz * (double)numSamples / sampleRate;
+      if (v.driftPhase >= twoPi)
+        v.driftPhase = std::fmod(v.driftPhase, twoPi);
     }
 
-    // Per-group FX: voices render into per-group scratch buffers this block; clear
-    // them to the block length first (no realloc — sized to maxBlock in prepare).
-    const int numSamples = buffer.getNumSamples();
-    if (anyGroupFx)
-        for (size_t g = 0; g < groupBuffers.size(); ++g)
-            if (groupChains[g] != nullptr)
-            {
-                groupBuffers[g].setSize (numChans, numSamples, false, false, true);
-                groupBuffers[g].clear();
-            }
-
-    int pos = 0;
-    for (const auto meta : midi)
-    {
-        const int eventPos = juce::jlimit (0, numSamples, meta.samplePosition);
-        renderChunk (buffer, pos, eventPos - pos);
-        pos = eventPos;
-
-        const auto msg = meta.getMessage();
-        if (msg.isNoteOn())
-            handleNoteOn (msg.getNoteNumber(), msg.getFloatVelocity());
-        else if (msg.isNoteOff())
-            handleNoteOff (msg.getNoteNumber());
-        else if (msg.isPitchWheel())
-            handlePitchWheel (msg.getPitchWheelValue());
-        else if (msg.isController() && msg.getControllerNumber() == 64)
-            handleSustain (msg.getControllerValue());
-        else if (msg.isAllNotesOff() || msg.isAllSoundOff())
-            allNotesOff();
+    // Volume drift → a per-block gain multiplier folded into `g` in the sample
+    // loop.
+    float volDriftMul = 1.0f;
+    if (const float vDriftAmt = driftGateOpen ? volumeDriftAmount.load() : 0.0f;
+        vDriftAmt > 0.0f) {
+      constexpr float kMaxVolDrift = 0.2f; // ±20% gain at wheel=1, depth=1
+      volDriftMul = 1.0f + (float)std::sin(v.volDriftPhase) * vDriftAmt *
+                               v.volDriftDepth * kMaxVolDrift;
+      v.volDriftPhase +=
+          twoPi * volDriftRateHz * (double)numSamples / sampleRate;
+      if (v.volDriftPhase >= twoPi)
+        v.volDriftPhase = std::fmod(v.volDriftPhase, twoPi);
     }
 
-    renderChunk (buffer, pos, numSamples - pos);
+    // Voices in a group with its own FX chain render into that group's scratch
+    // buffer (filtered + gained as a group post-loop); air-driven reeds render
+    // into the reed submix (lowpassed as one bank — they share the blower);
+    // everything else goes straight out.
+    juce::AudioBuffer<float> *target = &buffer;
+    if (anyGroupFx && v.groupIndex >= 0 &&
+        (size_t)v.groupIndex < groupChains.size() &&
+        groupChains[(size_t)v.groupIndex] != nullptr)
+      target = &groupBuffers[(size_t)v.groupIndex];
+    else if (airLpActive && groupIsAir(v.groupIndex))
+      target = &airBuffer;
 
-    // Run each group's FX chain over its scratch buffer, then sum into the output.
-    if (anyGroupFx)
-        for (size_t g = 0; g < groupBuffers.size(); ++g)
-            if (groupChains[g] != nullptr)
-            {
-                groupChains[g]->process (groupBuffers[g]);
-                auto& dest = (airLpActive && groupIsAir ((int) g)) ? airBuffer : buffer;
-                for (int ch = 0; ch < dest.getNumChannels(); ++ch)
-                    dest.addFrom (ch, 0, groupBuffers[g],
-                                  juce::jmin (ch, groupBuffers[g].getNumChannels() - 1), 0, numSamples);
-            }
-
-    // AirSupply top-end darkening: one gentle one-pole lowpass over the REED submix
-    // only (the reeds share the blower; key noises etc. pass by untouched), then
-    // sum it into the output.
-    if (airLpActive)
-    {
-        const float a = 1.0f - std::exp (-juce::MathConstants<float>::twoPi
-                                         * airCutoffSm / (float) sampleRate);
-        const int chans = juce::jmin (airBuffer.getNumChannels(), 16);
-        for (int ch = 0; ch < chans; ++ch)
-        {
-            float* d = airBuffer.getWritePointer (ch);
-            float z = airLpState[ch];
-            for (int i = 0; i < numSamples; ++i)
-            {
-                z += a * (d[i] - z);
-                d[i] = z;
-            }
-            airLpState[ch] = z;
-        }
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            buffer.addFrom (ch, 0, airBuffer,
-                            juce::jmin (ch, airBuffer.getNumChannels() - 1), 0, numSamples);
+    // Per-group stereo balance (double-track "Stereo"): centre = unity both
+    // sides, so a mono source panned hard-left keeps full level on L and
+    // silences R.
+    float panL = 1.0f, panR = 1.0f;
+    if (v.groupIndex >= 0 && v.groupIndex < groupPan.size()) {
+      const float pan = groupPan[v.groupIndex];
+      if (pan < 0.0f)
+        panR = 1.0f + pan; // toward left  → attenuate R
+      else if (pan > 0.0f)
+        panL = 1.0f - pan; // toward right → attenuate L
     }
-}
 
-void VoiceEngine::updateAirSupply (int numSamples)
-{
-    // Sounding notes = distinct notes with a held (non-releasing) voice: a released
-    // reed's valve is closed and draws no air. Release-trigger voices are noises,
-    // not reeds.
-    int n = 0;
-    if (airEnabled)
-    {
-        bool seen[128] {};
-        for (const auto& v : voices)
-            if (v.active && ! v.fadingOut && ! v.isRelease && ! v.adsr.isReleasing()
-                && groupIsAir (v.groupIndex)
-                && v.note >= 0 && v.note < 128 && ! seen[(size_t) v.note])
-            {
-                seen[(size_t) v.note] = true;
-                ++n;
-            }
-    }
-    const double notes = (double) juce::jmax (1, n);
+    // ── Hoist everything block-invariant out of the per-sample loop
+    // ──────────── Group volumes / gain / rate multipliers / row pointers /
+    // write pointers only change between blocks, and were previously re-read
+    // (juce::Array indexing + asserting addSample) per SAMPLE per voice.
+    const bool hasGroup =
+        v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
+    const float staticGain =
+        v.gain * volDriftMul * (groupIsAir(v.groupIndex) ? airGainSm : 1.0f) *
+        (hasGroup ? groupVolume[v.groupIndex] * groupTagVolume[v.groupIndex] *
+                        groupGain[v.groupIndex]
+                  : 1.0f);
+    // De-zipper: the static gain's inputs (group/tag volumes, drift) step once
+    // per block — a fast control sweep (e.g. a mod-wheel blend of tag volumes)
+    // jumping the whole chunk's gain at the block edge crackles. Ramp across
+    // the chunk.
+    if (v.smoothStaticGain < 0.0f)
+      v.smoothStaticGain = staticGain;
+    const float gainInc = (staticGain - v.smoothStaticGain) / (float)numSamples;
+    float sGain = v.smoothStaticGain;
+    v.smoothStaticGain = staticGain; // next chunk ramps onward from this target
+    const float *itRow =
+        instTremActive ? instTrem.data() + startSample : nullptr;
+    const float *gtRow =
+        groupTremActive ? groupTrem[(size_t)v.groupIndex].data() + startSample
+                        : nullptr;
+    const double step = v.rate * pitchBendMul * tuneMul;
+    const bool monoSrc = srcChannels == 1;
+    const auto &srcBuf = v.buffer->audio;
+    float *out[kMaxOutChannels];
+    for (int ch = 0; ch < outChannels; ++ch)
+      out[ch] = target->getWritePointer(ch) + startSample;
 
-    // Targets (disabled → neutral): per-note gain n^-volume, cutoff darkening,
-    // attack stretch n^attack. The fan can't change pressure instantly — smooth
-    // gain and cutoff with an ~80 ms lag (this also gives the audible "sag" when
-    // a big chord lands). New notes speak at the CURRENT pressure: attack stretch
-    // applies unsmoothed at trigger time.
-    const float gainT   = airEnabled ? (float) std::pow (notes, -airCfg.volume) : 1.0f;
-    const float cutoffT = airEnabled ? juce::jlimit (2500.0f, 20000.0f,
-                                                     18000.0f * (float) std::pow (notes, -airCfg.brightness))
-                                     : 20000.0f;
-    airAttackMul = airEnabled ? (float) std::pow (notes, airCfg.attack) : 1.0f;
-
-    // Asymmetric lag: pressure recovers fast once reeds close (the fan is still
-    // blowing) but sags with more inertia when load lands. Fast enough recovery to
-    // follow quick ornaments around a held note, slow enough not to pop.
-    const float tauG = gainT   > airGainSm   ? 0.02f : 0.08f;
-    const float tauC = cutoffT > airCutoffSm ? 0.02f : 0.08f;
-    airGainSm   += (gainT   - airGainSm)   * (1.0f - std::exp ((float) -numSamples / ((float) sampleRate * tauG)));
-    airCutoffSm += (cutoffT - airCutoffSm) * (1.0f - std::exp ((float) -numSamples / ((float) sampleRate * tauC)));
-}
-
-void VoiceEngine::allNotesOff()
-{
-    for (auto& v : voices)
+    for (int i = 0; i < numSamples; ++i) {
+      if (!v.loopEnabled && v.position >= (double)frames) // one-shot end
+      {
         v.active = false;
-}
+        break;
+      }
 
-int VoiceEngine::getActiveVoiceCount() const noexcept
-{
-    int n = 0;
-    for (const auto& v : voices)
-        if (v.active)
-            ++n;
-    return n;
-}
+      // One-shot voices (ampEnv=false) play at full gain — the envelope is
+      // bypassed.
+      const float env = v.ampEnv ? v.adsr.getNextSample() : 1.0f;
+      float trem = 1.0f;
+      if (itRow != nullptr)
+        trem *= itRow[i];
+      if (gtRow != nullptr)
+        trem *= gtRow[i];
+      sGain += gainInc; // de-zippered static gain (see above)
+      const float g = env * v.declickGain * sGain * trem;
 
-CurvedAdsr::Parameters VoiceEngine::effectiveAdsr (const CurvedAdsr::Parameters& base, int groupIndex) const
-{
-    auto p = base;
-    if (ovAttack  >= 0.0f) p.attack  = ovAttack;
-    if (ovDecay   >= 0.0f) p.decay   = ovDecay;
-    if (ovSustain >= 0.0f) p.sustain = ovSustain;
-    if (ovRelease >= 0.0f) p.release = ovRelease;
-    if (ovAttackCurve  > kNoCurve) p.attackCurve  = ovAttackCurve;
-    if (ovDecayCurve   > kNoCurve) p.decayCurve   = ovDecayCurve;
-    if (ovReleaseCurve > kNoCurve) p.releaseCurve = ovReleaseCurve;
-    // Per-group overrides take precedence over the global ones.
-    if (groupIndex >= 0 && groupIndex < groupAttack.size())
-    {
-        if (groupAttack [groupIndex] >= 0.0f) p.attack  = groupAttack [groupIndex];
-        if (groupDecay  [groupIndex] >= 0.0f) p.decay   = groupDecay  [groupIndex];
-        if (groupSustain[groupIndex] >= 0.0f) p.sustain = groupSustain[groupIndex];
-        if (groupRelease[groupIndex] >= 0.0f) p.release = groupRelease[groupIndex];
+      if (monoSrc) {
+        // Mono source (most libraries): interpolate ONCE and fan out — the
+        // per-channel form below would run the identical 8-tap sinc twice.
+        const float s =
+            (v.loopEnabled ? readLooped(st, srcBuf, 0, v.position, v.loopEnd,
+                                        v.loopLen, v.loopXf)
+                           : interpolate(st, srcBuf, 0, v.position)) *
+            g;
+        if (outChannels >= 2) {
+          out[0][i] += s * panL;
+          out[1][i] += s * panR;
+          for (int ch = 2; ch < outChannels; ++ch)
+            out[ch][i] += s;
+        } else
+          out[0][i] += s;
+      } else {
+        for (int ch = 0; ch < outChannels; ++ch) {
+          const int srcCh = juce::jmin(ch, srcChannels - 1);
+          const float s = v.loopEnabled
+                              ? readLooped(st, srcBuf, srcCh, v.position,
+                                           v.loopEnd, v.loopLen, v.loopXf)
+                              : interpolate(st, srcBuf, srcCh, v.position);
+          const float panMul = (outChannels >= 2)
+                                   ? (ch == 0 ? panL : (ch == 1 ? panR : 1.0f))
+                                   : 1.0f;
+          out[ch][i] += s * g * panMul;
+        }
+      }
+
+      v.position += step;
+      if (v.loopEnabled && v.position >= v.loopEnd)
+        v.position -= v.loopLen;
+
+      // Advance the anti-click ramp.
+      v.declickGain += v.declickDelta;
+      if (v.declickDelta > 0.0f && v.declickGain >= 1.0f) {
+        v.declickGain = 1.0f;
+        v.declickDelta = 0.0f;
+      }
+
+      if (v.fadingOut && v.declickGain <= 0.0f) // choke/steal fade complete
+      {
+        v.active = false;
+        break;
+      }
+
+      if (v.ampEnv && !v.adsr.isActive()) // release finished (one-shots end at
+                                          // sample end instead)
+      {
+        v.active = false;
+        break;
+      }
     }
-    return p;
+  }
+}
+
+void VoiceEngine::setLfoDepth(int position, float depth) {
+  if (position >= 0 && position < (int)mods.size())
+    mods[(size_t)position].depth = depth;
+}
+
+void VoiceEngine::setLfoRate(int position, float hz) {
+  if (hz > 0.0f && position >= 0 && position < (int)mods.size())
+    mods[(size_t)position].freqHz = hz;
+}
+
+void VoiceEngine::applyLfoBlock(int numSamples) {
+  if (numSamples <= 0 || mods.empty())
+    return;
+
+  // Reset this block's outputs. Only groups that actually have a tremolo
+  // modulator (and the instrument buffer, if any) are cleared+read; the rest
+  // stay at unity.
+  if (hasInstMod)
+    for (int i = 0; i < numSamples; ++i)
+      instTrem[(size_t)i] = 1.0f;
+  for (int gi = 0; gi < groupHasTrem.size(); ++gi)
+    if (groupHasTrem[gi]) {
+      auto &gt = groupTrem[(size_t)gi];
+      for (int i = 0; i < numSamples; ++i)
+        gt[(size_t)i] = 1.0f;
+    }
+  globalTuningMul = 1.0;
+  for (auto &g : groupTuningModMul)
+    g = 1.0;
+  // Drift gate: for a library with a dedicated Drift button
+  // (hasDriftGateButton), the wheels only take effect while that button's
+  // GLOBAL_TUNING modulator is engaged (depth > 0). Libraries without such a
+  // button leave the gate open (wheel controls).
+  driftGateOpen = !hasDriftGateButton;
+
+  // Tuning of the tremulant relative to the preset's binding ranges: the
+  // amplitude (gain) swing on a per-group LEVEL effect is deepened a little,
+  // and pitch vibrato is eased back a touch. (Matches the previous single-LFO
+  // behaviour.)
+  constexpr double kGainSwing =
+      6.0; // > 1 = more amplitude tremolo (LEVEL-target)
+  constexpr double kTuneScale =
+      0.7; // < 1 = less pitch vibrato (ranged tuning, e.g. tremulant)
+  constexpr double kWowSemis =
+      1.0; // semitone span for a rangeless tuning wow (± modAmount*this)
+
+  for (auto &m : mods) {
+    if (m.freqHz <= 0.0)
+      continue;
+    const double inc = m.freqHz / sampleRate;
+
+    // Per-sample amplitude tremolo (unipolar, downward: peak at unity, trough
+    // at 1-depth). Multiple modulators on the same group multiply.
+    if (m.depth > 0.0f && (m.ampInstrument || !m.ampGroups.isEmpty()))
+      for (int i = 0; i < numSamples; ++i) {
+        const float w = lfoWave(m.shape, m.phase + inc * i);
+        const float trem = 1.0f - m.depth * (0.5f - 0.5f * w);
+        if (m.ampInstrument)
+          instTrem[(size_t)i] *= trem;
+        for (int gi : m.ampGroups)
+          groupTrem[(size_t)gi][(size_t)i] *= trem;
+      }
+
+    // Control-rate targets (mid-block value). `waveMid` is the raw wave
+    // (-1..1); `u` is its unipolar 0..depth form mapped through each binding's
+    // output range.
+    const double waveMid =
+        (double)lfoWave(m.shape, m.phase + inc * (numSamples * 0.5));
+    const double u = (waveMid + 1.0) * 0.5 * (double)m.depth;
+    for (const auto &t : m.targets) // compiled at setMode — no string work here
+    {
+      const double val = t.outMin + u * (t.outMax - t.outMin);
+      switch (t.kind) {
+      case Modulator::Target::Kind::driftGate:
+        // This library's Drift button rides GLOBAL_TUNING: use its depth purely
+        // as the on/off gate for the drift wheels (no global wow of its own).
+        if (m.depth > 1.0e-4f)
+          driftGateOpen = true;
+        break;
+
+      case Modulator::Target::Kind::globalTuning:
+      case Modulator::Target::Kind::groupTuning: {
+        // Pitch modulation (vibrato / wow). A binding with an explicit output
+        // range uses it as-is — a small unipolar vibrato, e.g. the tremulant.
+        // Without a range, `modAmount` alone is near-zero, so treat it as a
+        // BIPOLAR wow depth (± modAmount·kWowSemis semitones) — an audible
+        // gentle wander that centres on the true pitch.
+        const double semis = t.hasRange ? val * kTuneScale
+                                        : waveMid * (double)m.depth * kWowSemis;
+        const double mul = std::pow(2.0, semis / 12.0);
+        if (t.kind == Modulator::Target::Kind::globalTuning)
+          globalTuningMul *= mul;
+        else if (t.group >= 0 && t.group < groupTuningModMul.size())
+          groupTuningModMul.set(t.group, groupTuningModMul[t.group] * mul);
+        break;
+      }
+
+      case Modulator::Target::Kind::groupFx: {
+        const double v =
+            t.deepSwing ? t.outMin + u * (t.outMax - t.outMin) *
+                                         kGainSwing // deeper amplitude swing
+                        : val;
+        setGroupEffectParam(t.group, t.effect, t.fxParam, (float)v);
+        break;
+      }
+      }
+    }
+
+    m.phase += inc * numSamples;
+    m.phase -= std::floor(m.phase);
+  }
+}
+
+void VoiceEngine::processBlock(juce::AudioBuffer<float> &buffer,
+                               juce::MidiBuffer &midi) {
+  buffer.clear();
+
+  // Advance + apply the LFO once for the whole block (amplitude tremolo,
+  // per-group filter/gain sweep, pitch vibrato).
+  applyLfoBlock(buffer.getNumSamples());
+
+  updateAirSupply(buffer.getNumSamples());
+  airLpActive = airCutoffSm < 19000.0f && anyAirGroup;
+  if (airLpActive) {
+    airBuffer.setSize(numChans, buffer.getNumSamples(), false, false, true);
+    airBuffer.clear();
+  }
+
+  // Per-group FX: voices render into per-group scratch buffers this block;
+  // clear them to the block length first (no realloc — sized to maxBlock in
+  // prepare).
+  const int numSamples = buffer.getNumSamples();
+  if (anyGroupFx)
+    for (size_t g = 0; g < groupBuffers.size(); ++g)
+      if (groupChains[g] != nullptr) {
+        groupBuffers[g].setSize(numChans, numSamples, false, false, true);
+        groupBuffers[g].clear();
+      }
+
+  int pos = 0;
+  for (const auto meta : midi) {
+    const int eventPos = juce::jlimit(0, numSamples, meta.samplePosition);
+    renderChunk(buffer, pos, eventPos - pos);
+    pos = eventPos;
+
+    const auto msg = meta.getMessage();
+    if (msg.isNoteOn())
+      handleNoteOn(msg.getNoteNumber(), msg.getFloatVelocity());
+    else if (msg.isNoteOff())
+      handleNoteOff(msg.getNoteNumber());
+    else if (msg.isPitchWheel())
+      handlePitchWheel(msg.getPitchWheelValue());
+    else if (msg.isController() && msg.getControllerNumber() == 64)
+      handleSustain(msg.getControllerValue());
+    else if (msg.isAllNotesOff() || msg.isAllSoundOff())
+      allNotesOff();
+  }
+
+  renderChunk(buffer, pos, numSamples - pos);
+
+  // Run each group's FX chain over its scratch buffer, then sum into the
+  // output.
+  if (anyGroupFx)
+    for (size_t g = 0; g < groupBuffers.size(); ++g)
+      if (groupChains[g] != nullptr) {
+        groupChains[g]->process(groupBuffers[g]);
+        auto &dest = (airLpActive && groupIsAir((int)g)) ? airBuffer : buffer;
+        for (int ch = 0; ch < dest.getNumChannels(); ++ch)
+          dest.addFrom(ch, 0, groupBuffers[g],
+                       juce::jmin(ch, groupBuffers[g].getNumChannels() - 1), 0,
+                       numSamples);
+      }
+
+  // AirSupply top-end darkening: one gentle one-pole lowpass over the REED
+  // submix only (the reeds share the blower; key noises etc. pass by
+  // untouched), then sum it into the output.
+  if (airLpActive) {
+    const float a = 1.0f - std::exp(-juce::MathConstants<float>::twoPi *
+                                    airCutoffSm / (float)sampleRate);
+    const int chans = juce::jmin(airBuffer.getNumChannels(), 16);
+    for (int ch = 0; ch < chans; ++ch) {
+      float *d = airBuffer.getWritePointer(ch);
+      float z = airLpState[ch];
+      for (int i = 0; i < numSamples; ++i) {
+        z += a * (d[i] - z);
+        d[i] = z;
+      }
+      airLpState[ch] = z;
+    }
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+      buffer.addFrom(ch, 0, airBuffer,
+                     juce::jmin(ch, airBuffer.getNumChannels() - 1), 0,
+                     numSamples);
+  }
+}
+
+void VoiceEngine::updateAirSupply(int numSamples) {
+  // Sounding notes = distinct notes with a held (non-releasing) voice: a
+  // released reed's valve is closed and draws no air. Release-trigger voices
+  // are noises, not reeds.
+  int n = 0;
+  if (airEnabled) {
+    bool seen[128]{};
+    for (const auto &v : voices)
+      if (v.active && !v.fadingOut && !v.isRelease && !v.adsr.isReleasing() &&
+          groupIsAir(v.groupIndex) && v.note >= 0 && v.note < 128 &&
+          !seen[(size_t)v.note]) {
+        seen[(size_t)v.note] = true;
+        ++n;
+      }
+  }
+  const double notes = (double)juce::jmax(1, n);
+
+  // Targets (disabled → neutral): per-note gain n^-volume, cutoff darkening,
+  // attack stretch n^attack. The fan can't change pressure instantly — smooth
+  // gain and cutoff with an ~80 ms lag (this also gives the audible "sag" when
+  // a big chord lands). New notes speak at the CURRENT pressure: attack stretch
+  // applies unsmoothed at trigger time.
+  const float gainT =
+      airEnabled ? (float)std::pow(notes, -airCfg.volume) : 1.0f;
+  const float cutoffT =
+      airEnabled
+          ? juce::jlimit(2500.0f, 20000.0f,
+                         18000.0f * (float)std::pow(notes, -airCfg.brightness))
+          : 20000.0f;
+  airAttackMul = airEnabled ? (float)std::pow(notes, airCfg.attack) : 1.0f;
+
+  // Asymmetric lag: pressure recovers fast once reeds close (the fan is still
+  // blowing) but sags with more inertia when load lands. Fast enough recovery
+  // to follow quick ornaments around a held note, slow enough not to pop.
+  const float tauG = gainT > airGainSm ? 0.02f : 0.08f;
+  const float tauC = cutoffT > airCutoffSm ? 0.02f : 0.08f;
+  airGainSm +=
+      (gainT - airGainSm) *
+      (1.0f - std::exp((float)-numSamples / ((float)sampleRate * tauG)));
+  airCutoffSm +=
+      (cutoffT - airCutoffSm) *
+      (1.0f - std::exp((float)-numSamples / ((float)sampleRate * tauC)));
+}
+
+void VoiceEngine::allNotesOff() {
+  for (auto &v : voices)
+    v.active = false;
+}
+
+int VoiceEngine::getActiveVoiceCount() const noexcept {
+  int n = 0;
+  for (const auto &v : voices)
+    if (v.active)
+      ++n;
+  return n;
+}
+
+CurvedAdsr::Parameters
+VoiceEngine::effectiveAdsr(const CurvedAdsr::Parameters &base,
+                           int groupIndex) const {
+  auto p = base;
+  if (ovAttack >= 0.0f)
+    p.attack = ovAttack;
+  if (ovDecay >= 0.0f)
+    p.decay = ovDecay;
+  if (ovSustain >= 0.0f)
+    p.sustain = ovSustain;
+  if (ovRelease >= 0.0f)
+    p.release = ovRelease;
+  if (ovAttackCurve > kNoCurve)
+    p.attackCurve = ovAttackCurve;
+  if (ovDecayCurve > kNoCurve)
+    p.decayCurve = ovDecayCurve;
+  if (ovReleaseCurve > kNoCurve)
+    p.releaseCurve = ovReleaseCurve;
+  // Per-group overrides take precedence over the global ones.
+  if (groupIndex >= 0 && groupIndex < groupAttack.size()) {
+    if (groupAttack[groupIndex] >= 0.0f)
+      p.attack = groupAttack[groupIndex];
+    if (groupDecay[groupIndex] >= 0.0f)
+      p.decay = groupDecay[groupIndex];
+    if (groupSustain[groupIndex] >= 0.0f)
+      p.sustain = groupSustain[groupIndex];
+    if (groupRelease[groupIndex] >= 0.0f)
+      p.release = groupRelease[groupIndex];
+  }
+  return p;
 }
 
 // Amp overrides apply to NEW voices only — re-setting a sounding voice's ADSR
 // mid-note can cut it off, so held notes keep the envelope they started with.
-void VoiceEngine::setAmpAttack  (float s) { ovAttack  = s; }
-void VoiceEngine::setAmpDecay   (float s) { ovDecay   = s; }
-void VoiceEngine::setAmpSustain (float l) { ovSustain = l; }
-void VoiceEngine::setAmpRelease (float s) { ovRelease = s; }
+void VoiceEngine::setAmpAttack(float s) { ovAttack = s; }
+void VoiceEngine::setAmpDecay(float s) { ovDecay = s; }
+void VoiceEngine::setAmpSustain(float l) { ovSustain = l; }
+void VoiceEngine::setAmpRelease(float s) { ovRelease = s; }
 
-void VoiceEngine::setAmpAttackCurve  (float c) { ovAttackCurve  = c; }
-void VoiceEngine::setAmpDecayCurve   (float c) { ovDecayCurve   = c; }
-void VoiceEngine::setAmpReleaseCurve (float c) { ovReleaseCurve = c; }
+void VoiceEngine::setAmpAttackCurve(float c) { ovAttackCurve = c; }
+void VoiceEngine::setAmpDecayCurve(float c) { ovDecayCurve = c; }
+void VoiceEngine::setAmpReleaseCurve(float c) { ovReleaseCurve = c; }
 
-void VoiceEngine::setGroupPan (int g, float pan)
-{
-    if (g >= 0 && g < groupPan.size())
-        groupPan.set (g, juce::jlimit (-1.0f, 1.0f, pan));
+void VoiceEngine::setGroupPan(int g, float pan) {
+  if (g >= 0 && g < groupPan.size())
+    groupPan.set(g, juce::jlimit(-1.0f, 1.0f, pan));
 }
 
-void VoiceEngine::setGroupAmpAttack  (int g, float s) { if (g >= 0 && g < groupAttack.size())  groupAttack.set  (g, s); }
-void VoiceEngine::setGroupAmpDecay   (int g, float s) { if (g >= 0 && g < groupDecay.size())   groupDecay.set   (g, s); }
-void VoiceEngine::setGroupAmpSustain (int g, float l) { if (g >= 0 && g < groupSustain.size()) groupSustain.set (g, l); }
-void VoiceEngine::setGroupAmpRelease (int g, float s) { if (g >= 0 && g < groupRelease.size()) groupRelease.set (g, s); }
-
-void VoiceEngine::setGroupVolume (int groupIndex, float volume)
-{
-    if (groupIndex >= 0 && groupIndex < groupVolume.size())
-        groupVolume.set (groupIndex, volume);
+void VoiceEngine::setGroupAmpAttack(int g, float s) {
+  if (g >= 0 && g < groupAttack.size())
+    groupAttack.set(g, s);
+}
+void VoiceEngine::setGroupAmpDecay(int g, float s) {
+  if (g >= 0 && g < groupDecay.size())
+    groupDecay.set(g, s);
+}
+void VoiceEngine::setGroupAmpSustain(int g, float l) {
+  if (g >= 0 && g < groupSustain.size())
+    groupSustain.set(g, l);
+}
+void VoiceEngine::setGroupAmpRelease(int g, float s) {
+  if (g >= 0 && g < groupRelease.size())
+    groupRelease.set(g, s);
 }
 
-void VoiceEngine::setGroupTagVolume (int groupIndex, float volume)
-{
-    if (groupIndex >= 0 && groupIndex < groupTagVolume.size())
-        groupTagVolume.set (groupIndex, volume);
+void VoiceEngine::setGroupVolume(int groupIndex, float volume) {
+  if (groupIndex >= 0 && groupIndex < groupVolume.size())
+    groupVolume.set(groupIndex, volume);
 }
 
-void VoiceEngine::setGroupEnabled (int groupIndex, bool enabled)
-{
-    if (groupIndex >= 0 && groupIndex < groupEnabled.size())
-        groupEnabled.set (groupIndex, enabled);
+void VoiceEngine::setGroupTagVolume(int groupIndex, float volume) {
+  if (groupIndex >= 0 && groupIndex < groupTagVolume.size())
+    groupTagVolume.set(groupIndex, volume);
 }
 
-void VoiceEngine::setGroupTuning (int groupIndex, float semitones)
-{
-    if (groupIndex >= 0 && groupIndex < groupTuningMul.size())
-        groupTuningMul.set (groupIndex, std::pow (2.0, semitones / 12.0));
+void VoiceEngine::setGroupEnabled(int groupIndex, bool enabled) {
+  if (groupIndex >= 0 && groupIndex < groupEnabled.size())
+    groupEnabled.set(groupIndex, enabled);
 }
 
-void VoiceEngine::setMaxPolyphony (int numVoices)
-{
-    voiceCap = juce::jlimit (1, kMaxVoices, numVoices);
+void VoiceEngine::setGroupTuning(int groupIndex, float semitones) {
+  if (groupIndex >= 0 && groupIndex < groupTuningMul.size())
+    groupTuningMul.set(groupIndex, std::pow(2.0, semitones / 12.0));
 }
 
-void VoiceEngine::setGroupVelTrack (int groupIndex, float amount)
-{
-    if (groupIndex >= 0 && groupIndex < groupVelTrackOv.size())
-        groupVelTrackOv.set (groupIndex, amount);
+void VoiceEngine::setMaxPolyphony(int numVoices) {
+  voiceCap = juce::jlimit(1, kMaxVoices, numVoices);
 }
 
-void VoiceEngine::setGroupGain (int groupIndex, float db)
-{
-    if (groupIndex >= 0 && groupIndex < groupGain.size())
-        groupGain.set (groupIndex, juce::Decibels::decibelsToGain (db));
+void VoiceEngine::setGroupVelTrack(int groupIndex, float amount) {
+  if (groupIndex >= 0 && groupIndex < groupVelTrackOv.size())
+    groupVelTrackOv.set(groupIndex, amount);
 }
 
-void VoiceEngine::setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value)
-{
-    if (groupIndex >= 0 && (size_t) groupIndex < groupChains.size() && groupChains[(size_t) groupIndex])
-        groupChains[(size_t) groupIndex]->setEffectParam (effectIndex, parameter, value);
-    else if (parameter == "LEVEL")
-        setGroupGain (groupIndex, value);   // fallback: group with no chain (e.g. a single gain effect)
+void VoiceEngine::setGroupGain(int groupIndex, float db) {
+  if (groupIndex >= 0 && groupIndex < groupGain.size())
+    groupGain.set(groupIndex, juce::Decibels::decibelsToGain(db));
 }
 
-void VoiceEngine::setGroupEffectParam (int groupIndex, int effectIndex, FxChain::FxParam parameter, float value)
-{
-    if (groupIndex >= 0 && (size_t) groupIndex < groupChains.size() && groupChains[(size_t) groupIndex])
-        groupChains[(size_t) groupIndex]->setEffectParam (effectIndex, parameter, value);
-    else if (parameter == FxChain::FxParam::level)
-        setGroupGain (groupIndex, value);   // fallback: group with no chain (e.g. a single gain effect)
+void VoiceEngine::setGroupEffectParam(int groupIndex, int effectIndex,
+                                      const juce::String &parameter,
+                                      float value) {
+  if (groupIndex >= 0 && (size_t)groupIndex < groupChains.size() &&
+      groupChains[(size_t)groupIndex])
+    groupChains[(size_t)groupIndex]->setEffectParam(effectIndex, parameter,
+                                                    value);
+  else if (parameter == "LEVEL")
+    setGroupGain(
+        groupIndex,
+        value); // fallback: group with no chain (e.g. a single gain effect)
+}
+
+void VoiceEngine::setGroupEffectParam(int groupIndex, int effectIndex,
+                                      FxChain::FxParam parameter, float value) {
+  if (groupIndex >= 0 && (size_t)groupIndex < groupChains.size() &&
+      groupChains[(size_t)groupIndex])
+    groupChains[(size_t)groupIndex]->setEffectParam(effectIndex, parameter,
+                                                    value);
+  else if (parameter == FxChain::FxParam::level)
+    setGroupGain(
+        groupIndex,
+        value); // fallback: group with no chain (e.g. a single gain effect)
 }
 
 } // namespace dm

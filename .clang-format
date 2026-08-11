@@ -1,0 +1,3 @@
+# LLVM style, unmodified.
+# https://clang.llvm.org/docs/ClangFormatStyleOptions.html
+BasedOnStyle: LLVM

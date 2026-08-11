@@ -6,322 +6,384 @@
 //   M1 JSON manifest loader/model  ·  M2 voice engine + EmbeddedFlacSource
 //   M3 FX (lowpass + convolution)  ·  M5 mode switching  ·  M6 auto-strum
 //
-// M5: the engine holds the whole PresetLibrary and renders one active mode. Each
-// mode is a self-contained render unit (voices + FX) built on the message thread;
-// switching is a lock-free pointer swap adopted by the audio thread, with the
-// retired unit freed back on the message thread (no audio-thread allocation/locks).
+// M5: the engine holds the whole PresetLibrary and renders one active mode.
+// Each mode is a self-contained render unit (voices + FX) built on the message
+// thread; switching is a lock-free pointer swap adopted by the audio thread,
+// with the retired unit freed back on the message thread (no audio-thread
+// allocation/locks).
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 
-#include "audio/VoiceEngine.h"
 #include "audio/FxChain.h"
 #include "audio/NoteSequencer.h"
+#include "audio/VoiceEngine.h"
 
 #include <atomic>
 #include <thread>
 
-namespace dm
-{
+namespace dm {
 
-class SamplerEngine
-{
+class SamplerEngine {
 public:
-    SamplerEngine();
-    ~SamplerEngine();
+  SamplerEngine();
+  ~SamplerEngine();
 
-    /** Engine version string (handy for sanity-checking the build wiring). */
-    static juce::String getVersion();
+  /** Engine version string (handy for sanity-checking the build wiring). */
+  static juce::String getVersion();
 
-    /** Allocate for the given audio settings (message thread, audio stopped). */
-    void prepare (double sampleRate, int maximumBlockSize, int numChannels);
+  /** Allocate for the given audio settings (message thread, audio stopped). */
+  void prepare(double sampleRate, int maximumBlockSize, int numChannels);
 
-    /** Provide the manifest library + sample source (both kept alive by the
-        caller). Activates mode 0. Message thread, audio stopped. */
-    void setLibrary (const PresetLibrary& library, SampleSource& source);
+  /** Provide the manifest library + sample source (both kept alive by the
+      caller). Activates mode 0. Message thread, audio stopped. */
+  void setLibrary(const PresetLibrary &library, SampleSource &source);
 
-    int  getNumModes() const noexcept;
-    juce::StringArray getModeNames() const;
-    int  getActiveModeIndex() const noexcept { return activeModeIndex; }
+  int getNumModes() const noexcept;
+  juce::StringArray getModeNames() const;
+  int getActiveModeIndex() const noexcept { return activeModeIndex; }
 
-    /** Switch the active mode. Safe to call while audio is running — builds the
-        new mode off-thread and swaps it in lock-free. Message thread. Also clears
-        a deferred initial build (the mode-chooser's pick). */
-    void setActiveMode (int index);
+  /** Switch the active mode. Safe to call while audio is running — builds the
+      new mode off-thread and swaps it in lock-free. Message thread. Also clears
+      a deferred initial build (the mode-chooser's pick). */
+  void setActiveMode(int index);
 
-    /** Multi-mode plugins can DEFER the initial decode until the user picks a mode
-        (the editor's mode chooser) instead of eagerly loading mode 0. Set BEFORE
-        prepare()/setLibrary(); setActiveMode() clears it and builds. */
-    void setDeferInitialBuild (bool defer) { deferInitialBuild = defer; }
+  /** Multi-mode plugins can DEFER the initial decode until the user picks a
+     mode (the editor's mode chooser) instead of eagerly loading mode 0. Set
+     BEFORE prepare()/setLibrary(); setActiveMode() clears it and builds. */
+  void setDeferInitialBuild(bool defer) { deferInitialBuild = defer; }
 
-    /** True while an initial build was skipped because of setDeferInitialBuild —
-        i.e. no mode is loaded and the engine is waiting for a choice. */
-    bool awaitingModeChoice() const noexcept { return deferredPending; }
+  /** True while an initial build was skipped because of setDeferInitialBuild —
+      i.e. no mode is loaded and the engine is waiting for a choice. */
+  bool awaitingModeChoice() const noexcept { return deferredPending; }
 
-    /** Display text for the active mode's effective strum rate (see
-        NoteSequencer::rateText); empty when no mode is live. Message thread. */
-    juce::String strumRateText() const;
+  /** Display text for the active mode's effective strum rate (see
+      NoteSequencer::rateText); empty when no mode is live. Message thread. */
+  juce::String strumRateText() const;
 
-    /** True when the active mode's sequencer is tempo synced, so a StrumSpeed knob
-        should detent onto the discrete note values. Message thread. */
-    bool strumSynced() const;
+  /** True when the active mode's sequencer is tempo synced, so a StrumSpeed
+     knob should detent onto the discrete note values. Message thread. */
+  bool strumSynced() const;
 
-    /** Render one block (samples + amp ADSR + FX for the active mode). */
-    void processBlock (juce::AudioBuffer<float>& buffer,
-                       juce::MidiBuffer& midi,
-                       juce::AudioPlayHead* playHead);
+  /** Render one block (samples + amp ADSR + FX for the active mode). */
+  void processBlock(juce::AudioBuffer<float> &buffer, juce::MidiBuffer &midi,
+                    juce::AudioPlayHead *playHead);
 
-    void releaseResources();
+  void releaseResources();
 
-    int getActiveVoiceCount() const noexcept;   // approximate (audio-thread state)
+  int getActiveVoiceCount() const noexcept; // approximate (audio-thread state)
 
-    /** True while a mode is being built/decoded on the background load thread — the
-        editor shows a progress overlay and the engine renders silence until it's ready. */
-    bool  isLoading() const noexcept   { return loading.load(); }
-    float loadProgress() const noexcept { return loadProgressValue.load(); }   // 0..1
+  /** True while a mode is being built/decoded on the background load thread —
+     the editor shows a progress overlay and the engine renders silence until
+     it's ready. */
+  bool isLoading() const noexcept { return loading.load(); }
+  float loadProgress() const noexcept {
+    return loadProgressValue.load();
+  } // 0..1
 
-    /** Free a retired mode's decoded PCM back to the source. MESSAGE THREAD; call
-        periodically (e.g. from the editor timer) so a switched-away mode's RAM is
-        released promptly rather than lingering until the next build. */
-    void drainRetired();
+  /** Free a retired mode's decoded PCM back to the source. MESSAGE THREAD; call
+      periodically (e.g. from the editor timer) so a switched-away mode's RAM is
+      released promptly rather than lingering until the next build. */
+  void drainRetired();
 
-    // Temporary dev FX controls — mode-aware: applied each block to the active
-    // mode's first lowpass/convolution. Replaced by M4's data-driven UI + APVTS.
-    void setLowpassEnabled (bool enabled);
-    void setEffectEnabled (int index, bool enabled);   // enable/bypass any effect slot (lowpass, convolution, ...)
-    void setLowpassFrequency (float hz);
-    void setReverbMix (float amount);
-    void setReverbWetGainDb (float db);
-    void setGain (float db);                 // gain effect (LEVEL, dB) — first gain slot
-    void setWaveShaperDrive (float drive);   // wave_shaper FX_DRIVE — first wave_shaper slot
-    void setWaveShaperOutput (float level);  // wave_shaper FX_OUTPUT_LEVEL — first wave_shaper slot
+  // Temporary dev FX controls — mode-aware: applied each block to the active
+  // mode's first lowpass/convolution. Replaced by M4's data-driven UI + APVTS.
+  void setLowpassEnabled(bool enabled);
+  void setEffectEnabled(int index,
+                        bool enabled); // enable/bypass any effect slot
+                                       // (lowpass, convolution, ...)
+  void setLowpassFrequency(float hz);
+  void setReverbMix(float amount);
+  void setReverbWetGainDb(float db);
+  void setGain(float db); // gain effect (LEVEL, dB) — first gain slot
+  void setWaveShaperDrive(
+      float drive); // wave_shaper FX_DRIVE — first wave_shaper slot
+  void setWaveShaperOutput(
+      float level); // wave_shaper FX_OUTPUT_LEVEL — first wave_shaper slot
 
-    /** Set a parameter on a specific instrument effect by its index (FX_MIX,
-        FX_DRIVE, LEVEL, FX_OUTPUT_LEVEL). Lets several same-type effects (e.g. Echo
-        + Room convolutions) be addressed independently. */
-    void setEffectParam (int effectIndex, const juce::String& parameter, float value);
+  /** Set a parameter on a specific instrument effect by its index (FX_MIX,
+      FX_DRIVE, LEVEL, FX_OUTPUT_LEVEL). Lets several same-type effects (e.g.
+     Echo
+      + Room convolutions) be addressed independently. */
+  void setEffectParam(int effectIndex, const juce::String &parameter,
+                      float value);
 
-    /** Enum-addressed variant for the audio thread / compiled binding plans —
-        no string work. The string overload delegates here. */
-    void setEffectParam (int effectIndex, FxChain::FxParam parameter, float value) noexcept;
+  /** Enum-addressed variant for the audio thread / compiled binding plans —
+      no string work. The string overload delegates here. */
+  void setEffectParam(int effectIndex, FxChain::FxParam parameter,
+                      float value) noexcept;
 
-    /** Reload a convolution effect's IR (cabinet selector). MESSAGE THREAD only. */
-    void setEffectIr (int effectIndex, const juce::String& irId);
+  /** Reload a convolution effect's IR (cabinet selector). MESSAGE THREAD only.
+   */
+  void setEffectIr(int effectIndex, const juce::String &irId);
 
-    /** Per-group output gain in dB (group-level `gain` effect). */
-    void setGroupGain (int groupIndex, float db);
+  /** Per-group output gain in dB (group-level `gain` effect). */
+  void setGroupGain(int groupIndex, float db);
 
-    /** Per-group stereo pan (-1 left … 0 centre … +1 right). Double-track "Stereo" mode. */
-    void setGroupPan (int groupIndex, float pan);
+  /** Per-group stereo pan (-1 left … 0 centre … +1 right). Double-track
+   * "Stereo" mode. */
+  void setGroupPan(int groupIndex, float pan);
 
-    /** Set modulator `position`'s depth 0..1 (MOD_AMOUNT) / rate in Hz (FREQUENCY).
-        A mode can have several modulators; `position` selects which (from the binding). */
-    void setLfoDepth (int position, float depth);
-    void setLfoRate  (int position, float hz);
+  /** Set modulator `position`'s depth 0..1 (MOD_AMOUNT) / rate in Hz
+     (FREQUENCY). A mode can have several modulators; `position` selects which
+     (from the binding). */
+  void setLfoDepth(int position, float depth);
+  void setLfoRate(int position, float hz);
 
-    /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
-        each trigger's own rate. (The future StrumSpeed control.) */
-    void setSequencerRate (double stepsPerSecond);
-    void setSequencerRateNorm (double norm);   // knob position 0..1 (tempo-synced note-value sweep)
+  /** Override sequence playback rate (steps/sec) for the active mode; <= 0 uses
+      each trigger's own rate. (The future StrumSpeed control.) */
+  void setSequencerRate(double stepsPerSecond);
+  void setSequencerRateNorm(
+      double norm); // knob position 0..1 (tempo-synced note-value sweep)
 
-    /** Runtime SEQ_INDEX offset for the active mode (e.g. the chord-ordering menu). */
-    void setSequencerIndexOffset (int offset);
+  /** Runtime SEQ_INDEX offset for the active mode (e.g. the chord-ordering
+   * menu). */
+  void setSequencerIndexOffset(int offset);
 
-    /** Sequencer tempo sync (settings menu): when on, steps are 16th notes at the
-        given BPM (host tempo or the manual field — the processor decides which). */
-    void setSequencerTempoSync (bool on) { seqTempoSync.store (on); }
-    void setSequencerBpm (double bpm)    { seqBpm.store (bpm); }
-    void setSequencerNoteValue (double beatsPerStep) { seqBeatsPerStep.store (beatsPerStep); }
+  /** Sequencer tempo sync (settings menu): when on, steps are 16th notes at the
+      given BPM (host tempo or the manual field — the processor decides which).
+   */
+  void setSequencerTempoSync(bool on) { seqTempoSync.store(on); }
+  void setSequencerBpm(double bpm) { seqBpm.store(bpm); }
+  void setSequencerNoteValue(double beatsPerStep) {
+    seqBeatsPerStep.store(beatsPerStep);
+  }
 
-    // Amp envelope + per-group volume overrides for the active mode (ENV_*, AMP_VOLUME).
-    void setAmpAttack (float seconds);
-    void setAmpDecay (float seconds);
-    void setAmpSustain (float level);
-    void setAmpRelease (float seconds);
-    void setAmpAttackCurve  (float curve);   // ENV_ATTACK_CURVE  (-100 log … +100 exp)
-    void setAmpDecayCurve   (float curve);   // ENV_DECAY_CURVE
-    void setAmpReleaseCurve (float curve);   // ENV_RELEASE_CURVE
-    void setAmpVelTrack (float amount);   // global AMP_VEL_TRACK (velocity → volume)
-    void setMasterVolume (float volume);                     // instrument-level AMP_VOLUME
-    void setGroupVolume (int groupIndex, float volume);
-    void setGroupTagVolume (int groupIndex, float volume);   // TAG_VOLUME mixer knobs
-    void setGroupEnabled (int groupIndex, bool enabled);
-    void setGroupTuning (int groupIndex, float semitones);   // GROUP_TUNING
-    void setGroupEffectParam (int groupIndex, int effectIndex, const juce::String& parameter, float value);
-    void setGroupEffectParam (int groupIndex, int effectIndex, FxChain::FxParam parameter, float value);   // enum variant (compiled plans)
-    void setGroupAmp (int groupIndex, const juce::String& parameter, float value);   // per-group ENV_*
-    // Explicit per-stage variants (compiled plans; avoid the string dispatch).
-    void setGroupAmpAttack  (int groupIndex, float seconds);
-    void setGroupAmpDecay   (int groupIndex, float seconds);
-    void setGroupAmpSustain (int groupIndex, float level);
-    void setGroupAmpRelease (int groupIndex, float seconds);
+  // Amp envelope + per-group volume overrides for the active mode (ENV_*,
+  // AMP_VOLUME).
+  void setAmpAttack(float seconds);
+  void setAmpDecay(float seconds);
+  void setAmpSustain(float level);
+  void setAmpRelease(float seconds);
+  void
+  setAmpAttackCurve(float curve);     // ENV_ATTACK_CURVE  (-100 log … +100 exp)
+  void setAmpDecayCurve(float curve); // ENV_DECAY_CURVE
+  void setAmpReleaseCurve(float curve); // ENV_RELEASE_CURVE
+  void setAmpVelTrack(float amount); // global AMP_VEL_TRACK (velocity → volume)
+  void setMasterVolume(float volume); // instrument-level AMP_VOLUME
+  void setGroupVolume(int groupIndex, float volume);
+  void setGroupTagVolume(int groupIndex,
+                         float volume); // TAG_VOLUME mixer knobs
+  void setGroupEnabled(int groupIndex, bool enabled);
+  void setGroupTuning(int groupIndex, float semitones); // GROUP_TUNING
+  void setGroupEffectParam(int groupIndex, int effectIndex,
+                           const juce::String &parameter, float value);
+  void setGroupEffectParam(int groupIndex, int effectIndex,
+                           FxChain::FxParam parameter,
+                           float value); // enum variant (compiled plans)
+  void setGroupAmp(int groupIndex, const juce::String &parameter,
+                   float value); // per-group ENV_*
+  // Explicit per-stage variants (compiled plans; avoid the string dispatch).
+  void setGroupAmpAttack(int groupIndex, float seconds);
+  void setGroupAmpDecay(int groupIndex, float seconds);
+  void setGroupAmpSustain(int groupIndex, float level);
+  void setGroupAmpRelease(int groupIndex, float seconds);
 
-    /** Per-group AMP_VEL_TRACK (group-level binding). Wins over the global
-        setAmpVelTrack for that group; survives mode rebuilds like other overrides. */
-    void setGroupAmpVelTrack (int groupIndex, float amount);
+  /** Per-group AMP_VEL_TRACK (group-level binding). Wins over the global
+      setAmpVelTrack for that group; survives mode rebuilds like other
+     overrides. */
+  void setGroupAmpVelTrack(int groupIndex, float amount);
 
-    /** Pitch-wheel bend range (semitones) for the active mode; applied per block. */
-    void setPitchBendRange (float upSemitones, float downSemitones)
-    {
-        pitchBendUp.store (upSemitones);
-        pitchBendDown.store (downSemitones);
-    }
-    void setPitchDriftAmount  (float a) { pitchDriftAmount.store (a); }   // pitch-drift wheel (0..1)
-    void setVolumeDriftAmount (float a) { volumeDriftAmount.store (a); }  // volume-drift wheel (0..1)
+  /** Pitch-wheel bend range (semitones) for the active mode; applied per block.
+   */
+  void setPitchBendRange(float upSemitones, float downSemitones) {
+    pitchBendUp.store(upSemitones);
+    pitchBendDown.store(downSemitones);
+  }
+  void setPitchDriftAmount(float a) {
+    pitchDriftAmount.store(a);
+  } // pitch-drift wheel (0..1)
+  void setVolumeDriftAmount(float a) {
+    volumeDriftAmount.store(a);
+  } // volume-drift wheel (0..1)
 
-    /** AirSupply toggle (settings; only offered when the library declares it). */
-    void setAirSupplyEnabled (bool enabled) { airSupplyEnabled.store (enabled); }
-    bool hasAirSupply() const noexcept { return library != nullptr && library->airSupply.has_value(); }
+  /** AirSupply toggle (settings; only offered when the library declares it). */
+  void setAirSupplyEnabled(bool enabled) { airSupplyEnabled.store(enabled); }
+  bool hasAirSupply() const noexcept {
+    return library != nullptr && library->airSupply.has_value();
+  }
 
-    /** Runtime polyphony cap (settings menu); 0 = engine maximum. Applied per block. */
-    void setMaxPolyphony (int numVoices) { maxPolyphony.store (numVoices); }
+  /** Runtime polyphony cap (settings menu); 0 = engine maximum. Applied per
+   * block. */
+  void setMaxPolyphony(int numVoices) { maxPolyphony.store(numVoices); }
 
-    /** Master tuning in cents (settings menu). Applied per block, live. */
-    void setMasterTune (float cents) { masterTuneCents.store (cents); }
+  /** Master tuning in cents (settings menu). Applied per block, live. */
+  void setMasterTune(float cents) { masterTuneCents.store(cents); }
 
-    /** Velocity response curve: 0 soft · 1 linear · 2 hard (settings menu). */
-    void setVelocityCurve (int curve) { velocityCurve.store (curve); }
+  /** Velocity response curve: 0 soft · 1 linear · 2 hard (settings menu). */
+  void setVelocityCurve(int curve) { velocityCurve.store(curve); }
 
-    /** Skip triggering groups muted to silence (drawbar fully down). Default on — a big
-        polyphony saving; off = every group triggers so mid-note drawbar changes sound. */
-    void setSkipMutedGroups (bool skip) { skipMutedGroups.store (skip); }
+  /** Skip triggering groups muted to silence (drawbar fully down). Default on —
+     a big polyphony saving; off = every group triggers so mid-note drawbar
+     changes sound. */
+  void setSkipMutedGroups(bool skip) { skipMutedGroups.store(skip); }
 
-    /** One voice per key within a group (default on): retriggering a note fades the
-        previous voice in the same group instead of stacking, so long releases and
-        one-shots do not pile up. Notes in different groups still layer on one key. */
-    void setRetriggerMute (bool on) { retriggerMute.store (on); }
+  /** One voice per key within a group (default on): retriggering a note fades
+     the previous voice in the same group instead of stacking, so long releases
+     and one-shots do not pile up. Notes in different groups still layer on one
+     key. */
+  void setRetriggerMute(bool on) { retriggerMute.store(on); }
 
-    /** User master output gain (linear), applied AFTER everything else — independent
-        of the preset's AMP_VOLUME master. Set per block from the plugin's Master fader. */
-    void setMasterOutputGain (float gainLinear) noexcept { uiMasterGain = gainLinear; }
+  /** User master output gain (linear), applied AFTER everything else —
+     independent of the preset's AMP_VOLUME master. Set per block from the
+     plugin's Master fader. */
+  void setMasterOutputGain(float gainLinear) noexcept {
+    uiMasterGain = gainLinear;
+  }
 
 private:
-    struct ModeRender
-    {
-        NoteSequencer sequencer;
-        VoiceEngine   voices;
-        FxChain       fx;
+  struct ModeRender {
+    NoteSequencer sequencer;
+    VoiceEngine voices;
+    FxChain fx;
 
-        // Sample/IR asset ids this mode acquired from the source (decoded PCM). The
-        // source frees an id's PCM once no live ModeRender holds it — so RAM tracks
-        // the active mode(s), not the whole library. Released on destruction (message
-        // thread, after this mode is retired), keeping the audio thread's reads valid.
-        SampleSource* src = nullptr;
-        juce::StringArray held;
-        ~ModeRender() { if (src != nullptr) for (const auto& id : held) src->release (id); }
+    // Sample/IR asset ids this mode acquired from the source (decoded PCM). The
+    // source frees an id's PCM once no live ModeRender holds it — so RAM tracks
+    // the active mode(s), not the whole library. Released on destruction
+    // (message thread, after this mode is retired), keeping the audio thread's
+    // reads valid.
+    SampleSource *src = nullptr;
+    juce::StringArray held;
+    ~ModeRender() {
+      if (src != nullptr)
+        for (const auto &id : held)
+          src->release(id);
+    }
 
-        // Intrusive link for the retired list: the audio thread pushes swapped-out
-        // modes onto a lock-free stack (see processBlock); the message thread drains
-        // it. A single slot would LEAK a mode (and its held PCM) if two swaps happen
-        // between drains — e.g. fast mode switches, or a host running with no editor
-        // open (nothing pumping drainRetired).
-        ModeRender* nextRetired = nullptr;
-    };
+    // Intrusive link for the retired list: the audio thread pushes swapped-out
+    // modes onto a lock-free stack (see processBlock); the message thread
+    // drains it. A single slot would LEAK a mode (and its held PCM) if two
+    // swaps happen between drains — e.g. fast mode switches, or a host running
+    // with no editor open (nothing pumping drainRetired).
+    ModeRender *nextRetired = nullptr;
+  };
 
-    // Build a mode (decode its samples/IRs, wire voices+fx). Runs on the background load
-    // thread; reports 0..1 into *progress and bails early (returning a partial unit to
-    // delete) if *abort flips. Both may be null for a plain synchronous build.
-    ModeRender* buildMode (int index, std::atomic<float>* progress = nullptr,
-                           std::atomic<bool>* abort = nullptr) const;
-    void beginAsyncBuild (int index);           // message thread: (re)start the load thread
-    void joinBuildThread();                     // message thread: abort + join any running build
-    void applyFxOverrides (ModeRender& mr);     // audio thread
-    void resetOverrides();                      // clear per-mode UI overrides
+  // Build a mode (decode its samples/IRs, wire voices+fx). Runs on the
+  // background load thread; reports 0..1 into *progress and bails early
+  // (returning a partial unit to delete) if *abort flips. Both may be null for
+  // a plain synchronous build.
+  ModeRender *buildMode(int index, std::atomic<float> *progress = nullptr,
+                        std::atomic<bool> *abort = nullptr) const;
+  void beginAsyncBuild(int index); // message thread: (re)start the load thread
+  void joinBuildThread(); // message thread: abort + join any running build
+  void applyFxOverrides(ModeRender &mr); // audio thread
+  void resetOverrides();                 // clear per-mode UI overrides
 
-    const PresetLibrary* library { nullptr };
-    SampleSource*        source  { nullptr };   // non-const: acquire/release decode/free PCM
+  const PresetLibrary *library{nullptr};
+  SampleSource *source{nullptr}; // non-const: acquire/release decode/free PCM
 
-    double sampleRate { 0.0 };
-    int    maxBlockSize { 0 };
-    int    numChannels { 2 };
-    int    activeModeIndex { 0 };
+  double sampleRate{0.0};
+  int maxBlockSize{0};
+  int numChannels{2};
+  int activeModeIndex{0};
 
-    // `current` is written by the audio thread (adopting a published mode) and read by
-    // message-thread accessors (voice count, IR swaps, group setters) — atomic so those
-    // reads are well-defined. `retired` is the head of an intrusive lock-free stack
-    // (chained via ModeRender::nextRetired) so no swap is ever lost between drains.
-    std::atomic<ModeRender*> current { nullptr };    // audio-thread owned (atomic for x-thread reads)
-    std::atomic<ModeRender*> pending { nullptr };    // build → audio
-    std::atomic<ModeRender*> retired { nullptr };    // audio → message (deferred free), intrusive stack
+  // `current` is written by the audio thread (adopting a published mode) and
+  // read by message-thread accessors (voice count, IR swaps, group setters) —
+  // atomic so those reads are well-defined. `retired` is the head of an
+  // intrusive lock-free stack (chained via ModeRender::nextRetired) so no swap
+  // is ever lost between drains.
+  std::atomic<ModeRender *> current{
+      nullptr}; // audio-thread owned (atomic for x-thread reads)
+  std::atomic<ModeRender *> pending{nullptr}; // build → audio
+  std::atomic<ModeRender *> retired{
+      nullptr}; // audio → message (deferred free), intrusive stack
 
-    // Background mode-building: buildMode (decode) runs off the message thread so the
-    // editor stays live (full-size window + progress overlay) during the heavy decode.
-    std::thread        buildThread;
-    std::atomic<bool>  abortBuild { false };
-    std::atomic<bool>  loading { false };
-    std::atomic<float> loadProgressValue { 0.0f };
+  // Background mode-building: buildMode (decode) runs off the message thread so
+  // the editor stays live (full-size window + progress overlay) during the
+  // heavy decode.
+  std::thread buildThread;
+  std::atomic<bool> abortBuild{false};
+  std::atomic<bool> loading{false};
+  std::atomic<float> loadProgressValue{0.0f};
 
-    // FX UI overrides: applied only once "touched", so untouched controls keep the
-    // manifest defaults (and survive mode switches).
-    struct FxOverride { std::atomic<bool> touched { false }; std::atomic<float> value { 0.0f }; };
-    FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
-    FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol;
-    static constexpr int kMaxMods = 16;          // per-modulator MOD_AMOUNT / FREQUENCY overrides
-    FxOverride ovLfoDepth[kMaxMods];
-    FxOverride ovLfoRate[kMaxMods];
-    FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
-    FxOverride ovAmpAttackCurve, ovAmpDecayCurve, ovAmpReleaseCurve;   // ENV_*_CURVE knobs
-    static constexpr int kMaxGroupVol = 64;   // per-group override slots (drum libs have many groups)
-    FxOverride ovGroupVol[kMaxGroupVol];
-    FxOverride ovGroupTagVol[kMaxGroupVol];   // TAG_VOLUME mixer knobs
-    FxOverride ovGroupGain[kMaxGroupVol];     // group-level gain effect (dB)
-    FxOverride ovGroupEnabled[kMaxGroupVol];
-    FxOverride ovGroupTuning[kMaxGroupVol];
-    FxOverride ovGroupPan[kMaxGroupVol];      // per-group stereo pan (double-track "Stereo")
-    FxOverride ovGroupVelTrack[kMaxGroupVol]; // per-group AMP_VEL_TRACK (group-level binding)
-    static constexpr int kMaxEffects = 8;
-    FxOverride ovEffectEnabled[kMaxEffects];
-    // Per-effect-index params, so several same-type instrument effects are independent
-    // (e.g. a separate lowpass + highpass, each with its own runtime cutoff).
-    FxOverride ovEffectMix[kMaxEffects];
-    FxOverride ovEffectDrive[kMaxEffects];
-    FxOverride ovEffectLevel[kMaxEffects];
-    FxOverride ovEffectOutput[kMaxEffects];
-    FxOverride ovEffectFreq[kMaxEffects];   // FX_FILTER_FREQUENCY per effect index
-    FxOverride ovEffectReso[kMaxEffects];   // FX_FILTER_RESONANCE
-    FxOverride ovEffectModRate[kMaxEffects];   // FX_MOD_RATE  (chorus/phaser rate)
-    FxOverride ovEffectModDepth[kMaxEffects];  // FX_MOD_DEPTH (chorus/phaser depth)
-    FxOverride ovEffectFeedback[kMaxEffects];  // FX_FEEDBACK  (phaser feedback / chorus)
-    // Selected convolution IR per effect (cabinet menu); message-thread only.
-    // Re-applied when a mode is (re)built so the selection survives mode switches.
-    juce::String desiredIr[kMaxEffects];
+  // FX UI overrides: applied only once "touched", so untouched controls keep
+  // the manifest defaults (and survive mode switches).
+  struct FxOverride {
+    std::atomic<bool> touched{false};
+    std::atomic<float> value{0.0f};
+  };
+  FxOverride ovLowpassEnabled, ovLowpassFreq, ovReverbMix, ovReverbGain;
+  FxOverride ovGain, ovWaveDrive, ovWaveOutput, ovMasterVol;
+  static constexpr int kMaxMods =
+      16; // per-modulator MOD_AMOUNT / FREQUENCY overrides
+  FxOverride ovLfoDepth[kMaxMods];
+  FxOverride ovLfoRate[kMaxMods];
+  FxOverride ovAmpAttack, ovAmpDecay, ovAmpSustain, ovAmpRelease, ovAmpVelTrack;
+  FxOverride ovAmpAttackCurve, ovAmpDecayCurve,
+      ovAmpReleaseCurve; // ENV_*_CURVE knobs
+  static constexpr int kMaxGroupVol =
+      64; // per-group override slots (drum libs have many groups)
+  FxOverride ovGroupVol[kMaxGroupVol];
+  FxOverride ovGroupTagVol[kMaxGroupVol]; // TAG_VOLUME mixer knobs
+  FxOverride ovGroupGain[kMaxGroupVol];   // group-level gain effect (dB)
+  FxOverride ovGroupEnabled[kMaxGroupVol];
+  FxOverride ovGroupTuning[kMaxGroupVol];
+  FxOverride
+      ovGroupPan[kMaxGroupVol]; // per-group stereo pan (double-track "Stereo")
+  FxOverride ovGroupVelTrack[kMaxGroupVol]; // per-group AMP_VEL_TRACK
+                                            // (group-level binding)
+  static constexpr int kMaxEffects = 8;
+  FxOverride ovEffectEnabled[kMaxEffects];
+  // Per-effect-index params, so several same-type instrument effects are
+  // independent (e.g. a separate lowpass + highpass, each with its own runtime
+  // cutoff).
+  FxOverride ovEffectMix[kMaxEffects];
+  FxOverride ovEffectDrive[kMaxEffects];
+  FxOverride ovEffectLevel[kMaxEffects];
+  FxOverride ovEffectOutput[kMaxEffects];
+  FxOverride ovEffectFreq[kMaxEffects]; // FX_FILTER_FREQUENCY per effect index
+  FxOverride ovEffectReso[kMaxEffects]; // FX_FILTER_RESONANCE
+  FxOverride ovEffectModRate[kMaxEffects]; // FX_MOD_RATE  (chorus/phaser rate)
+  FxOverride
+      ovEffectModDepth[kMaxEffects]; // FX_MOD_DEPTH (chorus/phaser depth)
+  FxOverride
+      ovEffectFeedback[kMaxEffects]; // FX_FEEDBACK  (phaser feedback / chorus)
+  // Selected convolution IR per effect (cabinet menu); message-thread only.
+  // Re-applied when a mode is (re)built so the selection survives mode
+  // switches.
+  juce::String desiredIr[kMaxEffects];
 
-    std::atomic<bool>  ovSequencerRateTouched { false };
-    std::atomic<double> ovSequencerRate { 0.0 };
-    std::atomic<bool>  ovSequencerRateNormTouched { false };
-    std::atomic<double> ovSequencerRateNorm { -1.0 };
-    std::atomic<bool>  ovSequencerIndexTouched { false };
-    std::atomic<int>    ovSequencerIndex { 0 };
+  std::atomic<bool> ovSequencerRateTouched{false};
+  std::atomic<double> ovSequencerRate{0.0};
+  std::atomic<bool> ovSequencerRateNormTouched{false};
+  std::atomic<double> ovSequencerRateNorm{-1.0};
+  std::atomic<bool> ovSequencerIndexTouched{false};
+  std::atomic<int> ovSequencerIndex{0};
 
-    std::atomic<float> pitchBendUp { 2.0f }, pitchBendDown { 2.0f };   // semitones; applied per block
-    std::atomic<int>   maxPolyphony { 0 };   // runtime voice cap; 0 = engine maximum
-    std::atomic<bool>   seqTempoSync { false };   // sequencer: 16th-note steps at seqBpm
-    std::atomic<double> seqBpm { 120.0 };
-    std::atomic<double> seqBeatsPerStep { 0.25 };
-    std::atomic<float>  masterTuneCents { 0.0f }; // settings master tuning
-    bool deferInitialBuild = false;   // message thread (see setDeferInitialBuild)
-    bool deferredPending   = false;   // an initial build was skipped, awaiting a pick
-    std::atomic<int>    velocityCurve { 1 };      // 0 soft · 1 linear · 2 hard
-    std::atomic<bool>   airSupplyEnabled { false };
-    std::atomic<float> pitchDriftAmount  { 0.0f };  // pitch-drift wheel (0..1); applied to voices per block
-    std::atomic<float> volumeDriftAmount { 0.0f };  // volume-drift wheel (0..1)
-    std::atomic<bool>  skipMutedGroups   { true };  // note-on: skip silent groups (drawbar fully down)
-    std::atomic<bool>  retriggerMute     { true };  // note-on: one voice per key within a group
+  std::atomic<float> pitchBendUp{2.0f},
+      pitchBendDown{2.0f};          // semitones; applied per block
+  std::atomic<int> maxPolyphony{0}; // runtime voice cap; 0 = engine maximum
+  std::atomic<bool> seqTempoSync{false}; // sequencer: 16th-note steps at seqBpm
+  std::atomic<double> seqBpm{120.0};
+  std::atomic<double> seqBeatsPerStep{0.25};
+  std::atomic<float> masterTuneCents{0.0f}; // settings master tuning
+  bool deferInitialBuild = false; // message thread (see setDeferInitialBuild)
+  bool deferredPending = false; // an initial build was skipped, awaiting a pick
+  std::atomic<int> velocityCurve{1}; // 0 soft · 1 linear · 2 hard
+  std::atomic<bool> airSupplyEnabled{false};
+  std::atomic<float> pitchDriftAmount{
+      0.0f}; // pitch-drift wheel (0..1); applied to voices per block
+  std::atomic<float> volumeDriftAmount{0.0f}; // volume-drift wheel (0..1)
+  std::atomic<bool> skipMutedGroups{
+      true}; // note-on: skip silent groups (drawbar fully down)
+  std::atomic<bool> retriggerMute{
+      true}; // note-on: one voice per key within a group
 
-    // Gain stages in processBlock (audio thread): the per-library trim (--gain) applied
-    // BEFORE the FX (DecentSampler reduces level ahead of its effects, so the level-
-    // dependent wave_shaper sees DS's moderate signal), and the master volume (instrument
-    // AMP_VOLUME — an output control) applied AFTER the FX.
-    float libraryGain { 1.0f };
-    float masterGain { 1.0f };
-    float uiMasterGain { 1.0f };   // user master output fader (post-everything)
+  // Gain stages in processBlock (audio thread): the per-library trim (--gain)
+  // applied BEFORE the FX (DecentSampler reduces level ahead of its effects, so
+  // the level- dependent wave_shaper sees DS's moderate signal), and the master
+  // volume (instrument AMP_VOLUME — an output control) applied AFTER the FX.
+  float libraryGain{1.0f};
+  float masterGain{1.0f};
+  float uiMasterGain{1.0f}; // user master output fader (post-everything)
 
-    juce::MidiBuffer sequencedMidi;   // scratch: sequencer output → voices
-    juce::Array<NoteSequencer::NoteMorph> morphScratch;   // select+strum chord-change morphs
-                                                          // (preallocated in prepare — audio thread)
+  juce::MidiBuffer sequencedMidi; // scratch: sequencer output → voices
+  juce::Array<NoteSequencer::NoteMorph>
+      morphScratch; // select+strum chord-change morphs
+                    // (preallocated in prepare — audio thread)
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SamplerEngine)
+  JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SamplerEngine)
 };
 
 } // namespace dm
