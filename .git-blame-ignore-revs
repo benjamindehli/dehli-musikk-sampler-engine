@@ -1,0 +1,6 @@
+# Commits to skip when running git blame — whole-file reformats, no logic changes.
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Adopt LLVM style via clang-format
+52a6dd7e155fd26f0b4ed75125d9d43b84fa56f9
