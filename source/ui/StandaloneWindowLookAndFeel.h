@@ -40,9 +40,15 @@ public:
     g.fillAll(juce::Colour(kBackground));
     g.setColour(juce::Colour(kForeground));
     g.setFont(juce::Font(juce::FontOptions().withHeight((float)h * 0.5f)));
-    g.drawText(window.getName(), titleSpaceX, 0, titleSpaceW, h,
+    // Centre on the whole bar, not on the space beside the buttons (which sit
+    // on one side and would push the title off-centre). The text box is the
+    // widest one symmetric about the middle that still clears the buttons.
+    const int centre = w / 2;
+    const int halfW =
+        juce::jmax(0, juce::jmin(centre - titleSpaceX,
+                                 titleSpaceX + titleSpaceW - centre));
+    g.drawText(window.getName(), centre - halfW, 0, halfW * 2, h,
                juce::Justification::centred, true);
-    juce::ignoreUnused(w);
   }
 
 private:
