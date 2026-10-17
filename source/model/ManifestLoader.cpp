@@ -783,10 +783,12 @@ ManifestParseResult loadManifest(const var &root) {
   }
   if (const auto kp = get(root, "keyPressure"); kp.isObject()) {
     checkKeys(kp, "keyPressure",
-              {"threshold", "levelDbBass", "levelDbTreble", "levelCurve",
-               "pitchCents", "brightness", "smoothingMs", "tags"});
+              {"threshold", "travelCurve", "levelDbBass", "levelDbTreble",
+               "levelCurve", "pitchCents", "brightness", "smoothingMs",
+               "tags"});
     KeyPressure k;
     k.threshold = optD(kp, "threshold").value_or(k.threshold);
+    k.travelCurve = optD(kp, "travelCurve").value_or(k.travelCurve);
     k.levelDbBass = optD(kp, "levelDbBass").value_or(k.levelDbBass);
     k.levelDbTreble = optD(kp, "levelDbTreble").value_or(k.levelDbTreble);
     k.levelCurve = optD(kp, "levelCurve").value_or(k.levelCurve);

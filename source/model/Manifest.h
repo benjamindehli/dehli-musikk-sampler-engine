@@ -504,14 +504,17 @@ struct AirSupply {
   juce::StringArray tags;
 };
 
-/** Per-key air from key pressure (MPE channel pressure / polyphonic
-    aftertouch): a partly pressed reed-organ key opens its valve only partly,
-    so the reed gets less air — quieter, darker and slightly flat, silent below
-    the speaking threshold. Fitted from slow key-press recordings of the
-    Elektrisk Salmesykkel (2026-10). A note with no pressure data plays at full
-    air, exactly as recorded. */
+/** Per-key air from MPE pressure: a partly pressed reed-organ key opens its
+    valve only partly, so the reed gets less air — quieter, darker and slightly
+    flat, silent below the speaking threshold. Fitted from slow key-press
+    recordings of the Elektrisk Salmesykkel (2026-10). Non-MPE notes play at
+    full air, exactly as recorded. */
 struct KeyPressure {
   double threshold = 0.05; // pressure (0..1) below which the reed is silent
+  // Where in the key travel the change happens: travel t becomes
+  // 1-(1-t)^travelCurve before the curves below. 1 = as fitted from the slow
+  // presses; higher = more of the effect at the very start of the press.
+  double travelCurve = 3.0;
   // Level just above the threshold, below full (dB), interpolated between
   // note 36 (bass) and note 84 (treble): the recordings speak at about -36 dB
   // in the bass, -25 dB in the middle and -19 dB in the treble.

@@ -566,6 +566,7 @@ var manifestToVar(const PresetLibrary &library) {
     const auto &k = *library.keyPressure;
     Obj kp;
     kp.set("threshold", k.threshold);
+    kp.set("travelCurve", k.travelCurve);
     kp.set("levelDbBass", k.levelDbBass);
     kp.set("levelDbTreble", k.levelDbTreble);
     kp.set("levelCurve", k.levelCurve);

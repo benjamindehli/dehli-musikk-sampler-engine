@@ -121,9 +121,9 @@ public:
     if (hasKeyPressure) {
       initLabel(keyPressureLabel, "Key pressure");
       keyPressureToggle.setTooltip(
-          "MPE pressure or polyphonic aftertouch opens each key's valve: "
-          "a lightly pressed key gives its reed less air - softer, darker "
-          "and slightly flat. Keyboards without pressure play at full air.");
+          "MPE pressure opens each key's valve: a lightly pressed key gives "
+          "its reed less air - softer, darker and slightly flat. Non-MPE "
+          "keyboards play at full air.");
       addAndMakeVisible(keyPressureToggle);
       keyPressureAttachment = std::make_unique<
           juce::AudioProcessorValueTreeState::ButtonAttachment>(

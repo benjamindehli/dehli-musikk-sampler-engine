@@ -19,15 +19,13 @@
 
 namespace dm {
 
-/** MIDI expression state that must outlive a mode switch: MPE zones (an MPE
-    Configuration Message is often sent only once, when the controller
-    connects) and whether this instance has seen polyphonic aftertouch. Owned
-    by SamplerEngine and shared into each mode's VoiceEngine; a standalone
-    VoiceEngine (tests) uses its own. Audio thread only. */
+/** MIDI expression state that must outlive a mode switch: the MPE zones (an
+    MPE Configuration Message is often sent only once, when the controller
+    connects). Owned by SamplerEngine and shared into each mode's VoiceEngine;
+    a standalone VoiceEngine (tests) uses its own. Audio thread only. */
 struct MidiExpressionState {
   juce::MPEZoneLayout mpe; // from MCM / RPN 0, or the auto-detected lower zone
   juce::uint16 channelsSeen = 0; // note-on channels 2..15 (auto-detect bits)
-  bool polyLatched = false; // poly aftertouch seen → new notes start unpressed
 };
 
 class VoiceEngine {
@@ -168,7 +166,7 @@ public:
   }
   void setKeyPressureEnabled(bool enabled) { kpEnabled = enabled; }
 
-  /** Share MPE zones + the aftertouch latch across mode switches (see
+  /** Share the MPE zones across mode switches (see
      MidiExpressionState). Null = use this engine's own. */
   void setExpressionState(MidiExpressionState *shared) { sharedExpr = shared; }
   bool isMpeActive() const noexcept { return expression().mpe.isActive(); }
@@ -383,9 +381,8 @@ private:
   AirShape shapeAir(float air, int note) const;
   MidiExpressionState ownExpr;
   MidiExpressionState *sharedExpr{nullptr};
-  double memberBendMul[17];  // per MIDI channel (1..16), MPE member bend
-  float chanPressure[17]{};  // per MIDI channel, last channel pressure 0..1
-  float polyPressure[128]{}; // per key, last polyphonic aftertouch 0..1
+  double memberBendMul[17]; // per MIDI channel (1..16), MPE member bend
+  float chanPressure[17]{}; // per MIDI channel, last channel pressure 0..1
   KeyPressure kpCfg;
   bool hasKpCfg{false};
   bool kpEnabled{false};

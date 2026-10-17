@@ -97,8 +97,8 @@ public:
         })";
 
   void testKeyPressure() {
-    beginTest("key pressure: poly aftertouch sets each reed's air; no "
-              "pressure = full air");
+    beginTest("key pressure: MPE pressure sets each reed's air; non-MPE notes "
+              "play at full air");
 
     auto a = encodeFlac(makeDc(0.5f, 480000), kSR);
     auto b = encodeFlac(makeDc(0.25f, 480000), kSR);
@@ -133,38 +133,47 @@ public:
       return mb;
     };
 
-    // A keyboard that never sends pressure plays exactly as recorded.
+    // A non-MPE keyboard plays exactly as recorded, and polyphonic aftertouch
+    // (bottom-of-key pressure, not key travel) is ignored.
     expectWithinAbsoluteError(
         settle(msg(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100))), 0.5f,
         0.01f);
-
-    // Pressure 0 → below the speaking threshold → silent.
     expectWithinAbsoluteError(
-        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 0))), 0.0f,
-        1.0e-4f);
+        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 0))), 0.5f,
+        0.01f);
 
-    // Half pressure: speaking, but well below full.
+    // An MPE controller announces its zone (MCM). Its note with pressure 0 is
+    // below the speaking threshold → silent.
+    auto mb = juce::MPEMessages::setLowerZone(15);
+    mb.addEvent(juce::MidiMessage::channelPressureChange(2, 0), 0);
+    mb.addEvent(juce::MidiMessage::noteOn(2, 62, (juce::uint8)100), 1);
+    expectWithinAbsoluteError(settle(mb), 0.5f, 1.0e-3f);
+
+    // Most of the change happens early in the key travel: a quarter press is
+    // clearly audible but still quiet, half a press is nearly full.
+    const float quarter =
+        settle(msg(juce::MidiMessage::channelPressureChange(2, 32))) - 0.5f;
+    expect(quarter > 0.05f && quarter < 0.2f,
+           "quarter press should be audible but quiet, got " +
+               juce::String(quarter));
     const float half =
-        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 64)));
-    expect(half > 0.05f && half < 0.45f,
-           "half pressure should be quieter but audible, got " +
+        settle(msg(juce::MidiMessage::channelPressureChange(2, 64))) - 0.5f;
+    expect(half > 0.21f && half < 0.25f,
+           "half press should be within ~1.5 dB of full, got " +
                juce::String(half));
 
     // Full pressure: back to the recorded level.
     expectWithinAbsoluteError(
-        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 127))), 0.5f,
+        settle(msg(juce::MidiMessage::channelPressureChange(2, 127))), 0.75f,
         0.01f);
 
-    // Once aftertouch has been seen, a new key starts unpressed (silent) and
-    // the noise group (not a reed) ignores pressure entirely.
+    // The noise group (not a reed) ignores pressure entirely.
     expectWithinAbsoluteError(
-        settle(msg(juce::MidiMessage::noteOn(1, 62, (juce::uint8)100))), 0.5f,
-        0.01f); // 0.5 (60, full) + 0 (62, unpressed)
-    expectWithinAbsoluteError(
-        settle(msg(juce::MidiMessage::noteOn(1, 64, (juce::uint8)100))), 1.0f,
-        0.01f); // + noise 0.5 at full level
+        settle(msg(juce::MidiMessage::noteOn(1, 64, (juce::uint8)100))), 1.25f,
+        0.01f);
 
-    // Toggle off: every reed glides back to full air.
+    // Toggle off: a released key's reed glides back to full air.
+    settle(msg(juce::MidiMessage::channelPressureChange(2, 0)));
     ve.setKeyPressureEnabled(false);
     expectWithinAbsoluteError(settle({}), 1.25f, 0.01f);
   }

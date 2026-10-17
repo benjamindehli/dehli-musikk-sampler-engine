@@ -616,11 +616,9 @@ void VoiceEngine::handleNoteOn(int note, float velocity, int channel) {
     velocity = velocity * velocity;
 
   const int velMidi = juce::jlimit(0, 127, juce::roundToInt(velocity * 127.0f));
-  if (note >= 0 && note < 128) {
+  if (note >= 0 && note < 128)
     noteOnVelocity[note] =
-        velocity;              // remembered for the release-trigger groups
-    polyPressure[note] = 0.0f; // a fresh key press starts unpressed
-  }
+        velocity; // remembered for the release-trigger groups
 
   // Start a voice for EVERY enabled attack group covering this note+velocity —
   // drums layer several groups on one note (and velocity layers are separate
@@ -969,21 +967,16 @@ void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
         v.volDriftPhase = std::fmod(v.volDriftPhase, twoPi);
     }
 
-    // Key pressure: the key's pressure is this reed's air. MPE member notes
-    // read their channel's pressure; other notes follow polyphonic aftertouch
-    // once any has arrived; otherwise full air, exactly as recorded. Turning
-    // the toggle off glides back to full air through the same smoothing.
+    // Key pressure: an MPE note's pressure is its reed's air (on a controller
+    // like the Osmose, that is the key travel). Every other note plays at full
+    // air, exactly as recorded. Turning the toggle off glides back to full air
+    // through the same smoothing.
     const bool kpVoice = groupIsKp(v.groupIndex) && v.note >= 0 && v.note < 128;
     const bool member = isMpeMember(v.channel);
     AirShape air;
     if (kpVoice) {
-      float target = 1.0f;
-      if (kpEnabled) {
-        if (member)
-          target = chanPressure[v.channel];
-        else if (expression().polyLatched)
-          target = polyPressure[v.note];
-      }
+      const float target =
+          (kpEnabled && member) ? chanPressure[v.channel] : 1.0f;
       if (v.airSm < 0.0f)
         v.airSm = target;
       else
@@ -1289,12 +1282,7 @@ void VoiceEngine::processBlock(juce::AudioBuffer<float> &buffer,
       // that may first reveal them), but only MPE member notes read it — plain
       // channel aftertouch would squeeze every note at once.
       chanPressure[ch] = (float)msg.getChannelPressureValue() / 127.0f;
-    else if (msg.isAftertouch()) {
-      const int n = msg.getNoteNumber();
-      if (n >= 0 && n < 128)
-        polyPressure[n] = (float)msg.getAfterTouchValue() / 127.0f;
-      expression().polyLatched = true;
-    } else if (msg.isController() && msg.getControllerNumber() == 64)
+    else if (msg.isController() && msg.getControllerNumber() == 64)
       handleSustain(msg.getControllerValue());
     else if (msg.isAllNotesOff() || msg.isAllSoundOff())
       allNotesOff();
@@ -1405,12 +1393,15 @@ void VoiceEngine::noteMpeChannel(int channel) {
 }
 
 VoiceEngine::AirShape VoiceEngine::shapeAir(float air, int note) const {
-  // u = how far above the speaking threshold, 0..1. Below it the reed is
-  // silent; just above it speaks at -levelDb (deeper in the bass), rising to
-  // full with most of the rise early.
+  // Key travel above the speaking threshold, 0..1. Below it the reed is
+  // silent; just above it speaks at -levelDb (deeper in the bass). travelCurve
+  // bends the travel so most of the change happens at the very start of the
+  // press, as on the real instrument; the fitted curves below then run on u.
   const auto &k = kpCfg;
   const double thr = juce::jlimit(0.0, 0.99, k.threshold);
-  const double u = juce::jlimit(0.0, 1.0, ((double)air - thr) / (1.0 - thr));
+  const double travel =
+      juce::jlimit(0.0, 1.0, ((double)air - thr) / (1.0 - thr));
+  const double u = 1.0 - std::pow(1.0 - travel, juce::jmax(0.1, k.travelCurve));
   const double t = juce::jlimit(0.0, 1.0, (note - 36) / 48.0);
   const double levelDb = k.levelDbBass + (k.levelDbTreble - k.levelDbBass) * t;
 

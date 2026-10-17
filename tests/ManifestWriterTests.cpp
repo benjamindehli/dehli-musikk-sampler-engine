@@ -35,7 +35,7 @@ public:
 
     auto m1 = dm::loadManifestFromJson(R"({
             "schema":1,
-            "keyPressure":{ "threshold":0.1, "levelDbBass":30, "levelDbTreble":15,
+            "keyPressure":{ "threshold":0.1, "travelCurve":2.5, "levelDbBass":30, "levelDbTreble":15,
                             "levelCurve":2, "pitchCents":6,
                             "brightness":3, "smoothingMs":20,
                             "tags":["diapason","viola"] },
@@ -51,6 +51,7 @@ public:
       return;
     const auto &k = *m2.library.keyPressure;
     expectEquals(k.threshold, 0.1);
+    expectEquals(k.travelCurve, 2.5);
     expectEquals(k.levelDbBass, 30.0);
     expectEquals(k.levelDbTreble, 15.0);
     expectEquals(k.levelCurve, 2.0);
