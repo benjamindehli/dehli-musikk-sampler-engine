@@ -35,14 +35,16 @@ juce::MemoryBlock encodeFlac(const juce::AudioBuffer<float> &buf, double sr) {
   juce::MemoryBlock mb;
   juce::FlacAudioFormat flac;
 
-  auto *out = new juce::MemoryOutputStream(mb, false);
-  std::unique_ptr<juce::AudioFormatWriter> writer(
-      flac.createWriterFor(out, sr, (unsigned)buf.getNumChannels(), 16, {}, 0));
+  std::unique_ptr<juce::OutputStream> out =
+      std::make_unique<juce::MemoryOutputStream>(mb, false);
+  auto writer =
+      flac.createWriterFor(out, juce::AudioFormatWriterOptions{}
+                                    .withSampleRate(sr)
+                                    .withNumChannels(buf.getNumChannels())
+                                    .withBitsPerSample(16));
 
-  if (writer == nullptr) {
-    delete out; // ownership not taken on failure
+  if (writer == nullptr)
     return {};
-  }
 
   writer->writeFromAudioSampleBuffer(buf, 0, buf.getNumSamples());
   writer.reset(); // flush + close (deletes the stream it owns)

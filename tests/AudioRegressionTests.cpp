@@ -53,13 +53,14 @@ toneFlac(int frames, std::initializer_list<std::pair<double, float>> partials) {
 
   juce::MemoryBlock mb;
   juce::FlacAudioFormat flac;
-  auto *out = new juce::MemoryOutputStream(mb, false);
-  std::unique_ptr<juce::AudioFormatWriter> writer(
-      flac.createWriterFor(out, kSR, 1, 24, {}, 0));
-  if (writer == nullptr) {
-    delete out;
+  std::unique_ptr<juce::OutputStream> out =
+      std::make_unique<juce::MemoryOutputStream>(mb, false);
+  auto writer = flac.createWriterFor(out, juce::AudioFormatWriterOptions{}
+                                              .withSampleRate(kSR)
+                                              .withNumChannels(1)
+                                              .withBitsPerSample(24));
+  if (writer == nullptr)
     return {};
-  }
   writer->writeFromAudioSampleBuffer(buf, 0, frames);
   writer.reset();
   return mb;

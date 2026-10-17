@@ -19,13 +19,14 @@ juce::MemoryBlock dcFlac(float level, int frames) {
 
   juce::MemoryBlock mb;
   juce::FlacAudioFormat flac;
-  auto *out = new juce::MemoryOutputStream(mb, false);
-  std::unique_ptr<juce::AudioFormatWriter> w(
-      flac.createWriterFor(out, kSR, 1, 16, {}, 0));
-  if (w == nullptr) {
-    delete out;
+  std::unique_ptr<juce::OutputStream> out =
+      std::make_unique<juce::MemoryOutputStream>(mb, false);
+  auto w = flac.createWriterFor(out, juce::AudioFormatWriterOptions{}
+                                         .withSampleRate(kSR)
+                                         .withNumChannels(1)
+                                         .withBitsPerSample(16));
+  if (w == nullptr)
     return {};
-  }
   w->writeFromAudioSampleBuffer(buf, 0, frames);
   w.reset();
   return mb;
