@@ -27,6 +27,37 @@ public:
     for (auto *fixtureName : {"bass.json", "drums.json", "wurli.json",
                               "autostrum.json", "kitchensink.json"})
       roundTrip(fixtureName);
+    testKeyPressureRoundTrip();
+  }
+
+  void testKeyPressureRoundTrip() {
+    beginTest("keyPressure survives write → load");
+
+    auto m1 = dm::loadManifestFromJson(R"({
+            "schema":1,
+            "keyPressure":{ "threshold":0.1, "levelDbBass":30, "levelDbTreble":15,
+                            "levelCurve":2, "pitchCents":6,
+                            "brightness":3, "smoothingMs":20,
+                            "tags":["diapason","viola"] },
+            "modes":[{ "name":"A", "groups":[] }]
+        })");
+    expect(m1.ok);
+    expect(m1.warnings.isEmpty(), m1.warnings.joinIntoString("; "));
+    expect(m1.library.keyPressure.has_value());
+
+    auto m2 = dm::loadManifestFromJson(dm::writeManifestToJson(m1.library));
+    expect(m2.ok && m2.library.keyPressure.has_value());
+    if (!m2.library.keyPressure)
+      return;
+    const auto &k = *m2.library.keyPressure;
+    expectEquals(k.threshold, 0.1);
+    expectEquals(k.levelDbBass, 30.0);
+    expectEquals(k.levelDbTreble, 15.0);
+    expectEquals(k.levelCurve, 2.0);
+    expectEquals(k.pitchCents, 6.0);
+    expectEquals(k.brightness, 3.0);
+    expectEquals(k.smoothingMs, 20.0);
+    expect(k.tags == juce::StringArray{"diapason", "viola"});
   }
 
   void roundTrip(const juce::String &fixtureName) {

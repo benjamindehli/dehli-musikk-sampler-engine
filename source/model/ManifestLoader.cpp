@@ -763,7 +763,7 @@ ManifestParseResult loadManifest(const var &root) {
       res.warnings); // unknown-key warnings land in res.warnings
   checkKeys(root, "manifest",
             {"schema", "format", "library", "gainDb", "polySaveDefault",
-             "retriggerMuteDefault", "airSupply", "modes"});
+             "retriggerMuteDefault", "airSupply", "keyPressure", "modes"});
 
   res.library.schema = intg(root, "schema", 0);
   res.library.format = str(root, "format");
@@ -780,6 +780,21 @@ ManifestParseResult loadManifest(const var &root) {
     a.attack = optD(air, "attack").value_or(a.attack);
     a.tags = strArray(air, "tags");
     res.library.airSupply = a;
+  }
+  if (const auto kp = get(root, "keyPressure"); kp.isObject()) {
+    checkKeys(kp, "keyPressure",
+              {"threshold", "levelDbBass", "levelDbTreble", "levelCurve",
+               "pitchCents", "brightness", "smoothingMs", "tags"});
+    KeyPressure k;
+    k.threshold = optD(kp, "threshold").value_or(k.threshold);
+    k.levelDbBass = optD(kp, "levelDbBass").value_or(k.levelDbBass);
+    k.levelDbTreble = optD(kp, "levelDbTreble").value_or(k.levelDbTreble);
+    k.levelCurve = optD(kp, "levelCurve").value_or(k.levelCurve);
+    k.pitchCents = optD(kp, "pitchCents").value_or(k.pitchCents);
+    k.brightness = optD(kp, "brightness").value_or(k.brightness);
+    k.smoothingMs = optD(kp, "smoothingMs").value_or(k.smoothingMs);
+    k.tags = strArray(kp, "tags");
+    res.library.keyPressure = k;
   }
 
   if (res.library.schema == 0)

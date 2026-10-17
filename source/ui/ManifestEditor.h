@@ -69,6 +69,10 @@ public:
       settings overlay offers its toggle. */
   virtual bool hasAirSupply() const { return false; }
 
+  /** True when the library declares per-key air from key pressure
+      (KeyPressure) — the settings overlay offers its toggle. */
+  virtual bool hasKeyPressure() const { return false; }
+
   /** True in the Standalone build (no host transport to follow). The processor
       answers from its wrapperType — the only reliable source. */
   virtual bool isStandaloneBuild() const { return false; }

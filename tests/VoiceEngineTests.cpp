@@ -74,7 +74,207 @@ public:
     testMorphNoteInRelease();
     testGroupVelTrackOverride();
     testAirSupply();
+    testKeyPressure();
+    testMpe();
+    testMpePitchBend();
     testRetriggerMute();
+  }
+
+  // Reed group (tag "reed": notes 60 = DC 0.5, 62 = DC 0.25) + an untagged
+  // noise group on 64 (DC 0.5). DC passes the darkening lowpass unchanged, so
+  // the output level isolates the key-pressure gain.
+  static constexpr const char *kPressureManifest = R"({
+            "schema":1,
+            "modes":[{ "name":"Press",
+              "amp":{"attack":0,"decay":0,"sustain":1,"release":0,"volume":1,"velTrack":0},
+              "groups":[
+                { "tags":["reed"], "samples":[
+                  { "source":"flac:a","loNote":60,"hiNote":60,"rootNote":60,"sampleRate":48000,"pitchKeyTrack":false },
+                  { "source":"flac:b","loNote":62,"hiNote":62,"rootNote":62,"sampleRate":48000,"pitchKeyTrack":false } ]},
+                { "tags":["noise"], "samples":[
+                  { "source":"flac:a","loNote":64,"hiNote":64,"rootNote":64,"sampleRate":48000,"pitchKeyTrack":false } ]}
+              ] }]
+        })";
+
+  void testKeyPressure() {
+    beginTest("key pressure: poly aftertouch sets each reed's air; no "
+              "pressure = full air");
+
+    auto a = encodeFlac(makeDc(0.5f, 480000), kSR);
+    auto b = encodeFlac(makeDc(0.25f, 480000), kSR);
+    dm::EmbeddedFlacSource src;
+    expect(src.addFlac("flac:a", a.getData(), a.getSize()));
+    expect(src.addFlac("flac:b", b.getData(), b.getSize()));
+    auto m = dm::loadManifestFromJson(kPressureManifest);
+    expect(m.ok, "manifest should load");
+
+    dm::VoiceEngine ve;
+    ve.prepare(kSR, 512, 1);
+    dm::KeyPressure kp;
+    kp.tags = {"reed"};
+    ve.setKeyPressure(kp); // BEFORE setMode — that's where its groups resolve
+    ve.setMode(m.library.modes.getReference(0), src);
+    ve.setKeyPressureEnabled(true);
+
+    auto settle = [&](juce::MidiBuffer first) {
+      juce::AudioBuffer<float> out(1, 512);
+      ve.processBlock(out, first);
+      juce::MidiBuffer empty;
+      for (int i = 0; i < 30; ++i) // ~0.3 s: far past the 15 ms valve lag
+      {
+        out.clear();
+        ve.processBlock(out, empty);
+      }
+      return out.getSample(0, 400);
+    };
+    auto msg = [](const juce::MidiMessage &mm) {
+      juce::MidiBuffer mb;
+      mb.addEvent(mm, 0);
+      return mb;
+    };
+
+    // A keyboard that never sends pressure plays exactly as recorded.
+    expectWithinAbsoluteError(
+        settle(msg(juce::MidiMessage::noteOn(1, 60, (juce::uint8)100))), 0.5f,
+        0.01f);
+
+    // Pressure 0 → below the speaking threshold → silent.
+    expectWithinAbsoluteError(
+        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 0))), 0.0f,
+        1.0e-4f);
+
+    // Half pressure: speaking, but well below full.
+    const float half =
+        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 64)));
+    expect(half > 0.05f && half < 0.45f,
+           "half pressure should be quieter but audible, got " +
+               juce::String(half));
+
+    // Full pressure: back to the recorded level.
+    expectWithinAbsoluteError(
+        settle(msg(juce::MidiMessage::aftertouchChange(1, 60, 127))), 0.5f,
+        0.01f);
+
+    // Once aftertouch has been seen, a new key starts unpressed (silent) and
+    // the noise group (not a reed) ignores pressure entirely.
+    expectWithinAbsoluteError(
+        settle(msg(juce::MidiMessage::noteOn(1, 62, (juce::uint8)100))), 0.5f,
+        0.01f); // 0.5 (60, full) + 0 (62, unpressed)
+    expectWithinAbsoluteError(
+        settle(msg(juce::MidiMessage::noteOn(1, 64, (juce::uint8)100))), 1.0f,
+        0.01f); // + noise 0.5 at full level
+
+    // Toggle off: every reed glides back to full air.
+    ve.setKeyPressureEnabled(false);
+    expectWithinAbsoluteError(settle({}), 1.25f, 0.01f);
+  }
+
+  void testMpePitchBend() {
+    beginTest("MPE: member bend moves one note; master bend moves all");
+
+    // Ramp samples: the output's slope × length = playback rate. Short enough
+    // that 16-bit FLAC still resolves it; measured over 400 samples.
+    constexpr int kLen = 4800;
+    juce::AudioBuffer<float> ramp(1, kLen);
+    for (int i = 0; i < kLen; ++i)
+      ramp.setSample(0, i, (float)i / (float)kLen);
+    auto r = encodeFlac(ramp, kSR);
+    dm::EmbeddedFlacSource src;
+    expect(src.addFlac("flac:r", r.getData(), r.getSize()));
+    auto m = dm::loadManifestFromJson(R"({
+            "schema":1,
+            "modes":[{ "name":"Bend",
+              "amp":{"attack":0,"decay":0,"sustain":1,"release":0,"volume":1,"velTrack":0},
+              "groups":[{ "samples":[
+                { "source":"flac:r","loNote":60,"hiNote":62,"rootNote":60,"sampleRate":48000,"pitchKeyTrack":false } ]}]
+            }]
+        })");
+    expect(m.ok, "manifest should load");
+
+    dm::VoiceEngine ve;
+    ve.prepare(kSR, 512, 1);
+    ve.setMode(m.library.modes.getReference(0), src);
+
+    juce::AudioBuffer<float> out(1, 512);
+    auto slope = [&](juce::MidiBuffer mb) { // summed playback rate of all notes
+      out.clear();
+      ve.processBlock(out, mb);
+      return (out.getSample(0, 500) - out.getSample(0, 100)) / 400.0f *
+             (float)kLen;
+    };
+
+    juce::MidiBuffer mb;
+    mb.addEvent(juce::MidiMessage::noteOn(2, 60, (juce::uint8)100), 0);
+    mb.addEvent(juce::MidiMessage::noteOn(3, 62, (juce::uint8)100), 0);
+    expectWithinAbsoluteError(slope(mb), 2.0f, 0.02f);
+
+    // +12 semitones on channel 2 (per-note range 48): that note doubles.
+    mb.clear();
+    mb.addEvent(juce::MidiMessage::pitchWheel(2, 8192 + 8192 / 4), 0);
+    expectWithinAbsoluteError(slope(mb), 3.0f, 0.03f);
+
+    // Master channel bend still moves everything (+2 st at the default range).
+    mb.clear();
+    mb.addEvent(juce::MidiMessage::pitchWheel(1, 16383), 0);
+    const float up = (float)std::pow(2.0, 2.0 / 12.0);
+    expectWithinAbsoluteError(slope(mb), 3.0f * up, 0.03f);
+  }
+
+  void testMpe() {
+    beginTest("MPE: auto-detected zone, per-note pressure and pitch bend");
+
+    auto a = encodeFlac(makeDc(0.5f, 480000), kSR);
+    auto b = encodeFlac(makeDc(0.25f, 480000), kSR);
+    dm::EmbeddedFlacSource src;
+    expect(src.addFlac("flac:a", a.getData(), a.getSize()));
+    expect(src.addFlac("flac:b", b.getData(), b.getSize()));
+    auto m = dm::loadManifestFromJson(kPressureManifest);
+    expect(m.ok, "manifest should load");
+
+    dm::VoiceEngine ve;
+    ve.prepare(kSR, 512, 1);
+    dm::KeyPressure kp;
+    kp.tags = {"reed"};
+    ve.setKeyPressure(kp);
+    ve.setMode(m.library.modes.getReference(0), src);
+    ve.setKeyPressureEnabled(true);
+
+    juce::AudioBuffer<float> out(1, 512);
+    auto render = [&](juce::MidiBuffer &mb) { // consumes mb's events
+      for (int i = 0; i < 30; ++i) {
+        out.clear();
+        ve.processBlock(out, mb);
+        mb.clear();
+      }
+      return out.getSample(0, 400);
+    };
+
+    // One note on a single non-1 channel is just a keyboard on channel 2.
+    juce::MidiBuffer mb;
+    mb.addEvent(juce::MidiMessage::noteOn(2, 60, (juce::uint8)100), 0);
+    expectWithinAbsoluteError(render(mb), 0.5f, 0.01f);
+    expect(!ve.isMpeActive(), "one channel must not look like MPE");
+
+    // Notes on a second member channel = an MPE controller. Its pressure was
+    // sent BEFORE the note-on (as MPE controllers do): full on channel 3,
+    // nothing yet on channel 2, so 60 falls silent and 62 sounds.
+    mb.addEvent(juce::MidiMessage::channelPressureChange(3, 127), 0);
+    mb.addEvent(juce::MidiMessage::noteOn(3, 62, (juce::uint8)100), 1);
+    expectWithinAbsoluteError(render(mb), 0.25f, 0.01f);
+    expect(ve.isMpeActive(), "two member channels should enable MPE");
+
+    // Pressure on channel 2 reaches only its own note.
+    mb.addEvent(juce::MidiMessage::channelPressureChange(2, 127), 0);
+    expectWithinAbsoluteError(render(mb), 0.75f, 0.01f);
+
+    // Plain channel aftertouch on the master channel is ignored.
+    mb.addEvent(juce::MidiMessage::channelPressureChange(1, 0), 0);
+    expectWithinAbsoluteError(render(mb), 0.75f, 0.01f);
+
+    // Note-off on channel 3 releases its note only, even with the same note
+    // number held elsewhere.
+    mb.addEvent(juce::MidiMessage::noteOff(3, 62), 0);
+    expectWithinAbsoluteError(render(mb), 0.5f, 0.01f);
   }
 
   void testRetriggerMute() {

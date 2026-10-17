@@ -204,6 +204,15 @@ public:
     return library != nullptr && library->airSupply.has_value();
   }
 
+  /** KeyPressure toggle (settings; only offered when the library declares it).
+   */
+  void setKeyPressureEnabled(bool enabled) {
+    keyPressureEnabled.store(enabled);
+  }
+  bool hasKeyPressure() const noexcept {
+    return library != nullptr && library->keyPressure.has_value();
+  }
+
   /** Runtime polyphony cap (settings menu); 0 = engine maximum. Applied per
    * block. */
   void setMaxPolyphony(int numVoices) { maxPolyphony.store(numVoices); }
@@ -362,6 +371,10 @@ private:
   bool deferredPending = false; // an initial build was skipped, awaiting a pick
   std::atomic<int> velocityCurve{1}; // 0 soft · 1 linear · 2 hard
   std::atomic<bool> airSupplyEnabled{false};
+  std::atomic<bool> keyPressureEnabled{false};
+  // Audio-thread MIDI state shared into every ModeRender (mutable: buildMode is
+  // const but hands each new ModeRender a pointer to it).
+  mutable MidiExpressionState expression;
   std::atomic<float> pitchDriftAmount{
       0.0f}; // pitch-drift wheel (0..1); applied to voices per block
   std::atomic<float> volumeDriftAmount{0.0f}; // volume-drift wheel (0..1)

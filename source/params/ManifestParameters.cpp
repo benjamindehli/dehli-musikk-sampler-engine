@@ -322,6 +322,11 @@ createLayout(const PresetLibrary &lib) {
     p.push_back(std::make_unique<AudioParameterBool>(
         ParameterID{id::airSupply, 1}, "Air Supply", true));
 
+  // Key-pressure (per-key air) toggle — only for libraries that declare it.
+  if (lib.keyPressure)
+    p.push_back(std::make_unique<AudioParameterBool>(
+        ParameterID{id::keyPressure, 1}, "Key Pressure", true));
+
   // Separate up/down wheel ranges (settings menu). 0 disables that direction.
   p.push_back(std::make_unique<AudioParameterInt>(
       ParameterID{id::pitchBendUp, 1}, "Pitch Bend Up", 0, 24, 2));

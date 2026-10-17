@@ -158,6 +158,7 @@ VoiceEngine::VoiceEngine() {
   if (voiceCap <= 0)
     voiceCap =
         kMaxVoices; // default: full pool (a settings cap survives re-prepare)
+  std::fill(std::begin(memberBendMul), std::end(memberBendMul), 1.0);
 }
 
 void VoiceEngine::prepare(double newSampleRate, int maxBlockSize,
@@ -237,6 +238,19 @@ void VoiceEngine::setMode(const Mode &mode, const SampleSource &source) {
       }
     airGroups.add(isAir);
     anyAirGroup = anyAirGroup || isAir;
+  }
+
+  // KeyPressure scope: the reeds follow their key's pressure; key on/off
+  // noises (untagged) keep sounding as recorded.
+  kpGroups.clearQuick();
+  for (const auto &g : mode.groups) {
+    bool isKp = hasKpCfg && kpCfg.tags.isEmpty();
+    for (const auto &t : g.tags)
+      if (hasKpCfg && kpCfg.tags.contains(t)) {
+        isKp = true;
+        break;
+      }
+    kpGroups.add(isKp);
   }
   sustainValue = 0;
   sustainActive = false;
@@ -593,7 +607,7 @@ VoiceEngine::Voice *VoiceEngine::allocateVoice() {
   return oldest;
 }
 
-void VoiceEngine::handleNoteOn(int note, float velocity) {
+void VoiceEngine::handleNoteOn(int note, float velocity, int channel) {
   // Velocity response curve (settings): soft eases reaching full level, hard
   // demands it. Shaped BEFORE layer selection so curves also reach the layers.
   if (velocityCurve == 0)
@@ -602,9 +616,11 @@ void VoiceEngine::handleNoteOn(int note, float velocity) {
     velocity = velocity * velocity;
 
   const int velMidi = juce::jlimit(0, 127, juce::roundToInt(velocity * 127.0f));
-  if (note >= 0 && note < 128)
+  if (note >= 0 && note < 128) {
     noteOnVelocity[note] =
-        velocity; // remembered for the release-trigger groups
+        velocity;              // remembered for the release-trigger groups
+    polyPressure[note] = 0.0f; // a fresh key press starts unpressed
+  }
 
   // Start a voice for EVERY enabled attack group covering this note+velocity —
   // drums layer several groups on one note (and velocity layers are separate
@@ -624,11 +640,12 @@ void VoiceEngine::handleNoteOn(int note, float velocity) {
         groupVolume[g] * groupTagVolume[g] * groupGain[g] <= 1.0e-6f)
       continue;
     if (const auto *zone = pickZoneInGroup(g, note, velMidi))
-      startVoice(*zone, note, velocity);
+      startVoice(*zone, note, velocity, channel);
   }
 }
 
-void VoiceEngine::startVoice(const Zone &zone, int note, float velocity) {
+void VoiceEngine::startVoice(const Zone &zone, int note, float velocity,
+                             int channel) {
   const int fadeOutSamples =
       juce::jmax(1, (int)(sampleRate * 0.004)); // ~4 ms declick
 
@@ -671,6 +688,10 @@ void VoiceEngine::startVoice(const Zone &zone, int note, float velocity) {
   v->buffer = zone.buffer;
   v->position = 0.0;
   v->note = note;
+  v->channel = channel;
+  v->airSm = -1.0f; // key pressure: first chunk starts at the current target
+  for (auto &z : v->airZ)
+    z[0] = z[1] = 0.0f;
   v->isRelease = zone.releaseTrigger;
   v->groupIndex = zone.groupIndex;
   v->silencedByTags =
@@ -792,15 +813,18 @@ void VoiceEngine::morphNote(int fromNote, int toNote) {
   }
 }
 
-void VoiceEngine::handleNoteOff(int note) {
+void VoiceEngine::handleNoteOff(int note, int channel) {
   // Release held (attack) voices — unless the sustain pedal is down, in which
   // case mark them held so they keep ringing until the pedal lifts.
   // Release-trigger (key-off) voices are one-shots that ignore note-off and
   // play out.
+  // MPE: two fingers may hold the same note on different member channels —
+  // release only the one on this channel.
+  const bool member = isMpeMember(channel);
   for (auto &v : voices)
     if (v.active && v.note == note && !v.isRelease &&
-        v.ampEnv) // one-shots (ampEnv=false) ignore note-off
-    {
+        v.ampEnv && // one-shots (ampEnv=false) ignore note-off
+        (!member || v.channel == channel)) {
       if (sustainActive)
         v.pedalHeld = true;
       else
@@ -816,7 +840,7 @@ void VoiceEngine::handleNoteOff(int note) {
     if (!groupEnabled[g] || !groupReleaseTrigger[g])
       continue;
     if (const auto *zone = pickZoneInGroup(g, note, velMidi))
-      startVoice(*zone, note, velocity);
+      startVoice(*zone, note, velocity, channel);
   }
 }
 
@@ -850,14 +874,35 @@ void VoiceEngine::handleSustain(int value) {
   sustainValue = value;
 }
 
-void VoiceEngine::handlePitchWheel(int wheelValue) {
+void VoiceEngine::handlePitchWheel(int wheelValue, int channel) {
+  const double frac = (wheelValue - 8192) / 8192.0;
+
+  // MPE member channel: bend only that channel's note, over the zone's
+  // per-note range (48 semitones unless the controller sent RPN 0).
+  if (isMpeMember(channel)) {
+    const auto &mpe = expression().mpe;
+    const auto zone = mpe.getLowerZone().isUsingChannelAsMemberChannel(channel)
+                          ? mpe.getLowerZone()
+                          : mpe.getUpperZone();
+    memberBendMul[channel] =
+        std::pow(2.0, frac * zone.perNotePitchbendRange / 12.0);
+    return;
+  }
+
   // Centre (8192) → no bend → multiplier 1.0. Up and down ranges are configured
   // separately (settings menu), so a whole-tone lift can sit next to a fifth
   // drop.
-  const double frac = (wheelValue - 8192) / 8192.0;
   const double semis =
       frac * (frac >= 0.0 ? bendUpSemitones : bendDownSemitones);
   pitchBendMul = std::pow(2.0, semis / 12.0);
+}
+
+// Key-pressure darkening: two cascaded one-pole lowpasses (12 dB/oct). With
+// coef 1 both stages pass the input through exactly.
+static inline float darken(float (&z)[2], float coef, float x) noexcept {
+  z[0] += coef * (x - z[0]);
+  z[1] += coef * (z[0] - z[1]);
+  return z[1];
 }
 
 void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
@@ -924,6 +969,32 @@ void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
         v.volDriftPhase = std::fmod(v.volDriftPhase, twoPi);
     }
 
+    // Key pressure: the key's pressure is this reed's air. MPE member notes
+    // read their channel's pressure; other notes follow polyphonic aftertouch
+    // once any has arrived; otherwise full air, exactly as recorded. Turning
+    // the toggle off glides back to full air through the same smoothing.
+    const bool kpVoice = groupIsKp(v.groupIndex) && v.note >= 0 && v.note < 128;
+    const bool member = isMpeMember(v.channel);
+    AirShape air;
+    if (kpVoice) {
+      float target = 1.0f;
+      if (kpEnabled) {
+        if (member)
+          target = chanPressure[v.channel];
+        else if (expression().polyLatched)
+          target = polyPressure[v.note];
+      }
+      if (v.airSm < 0.0f)
+        v.airSm = target;
+      else
+        v.airSm +=
+            (target - v.airSm) *
+            (1.0f -
+             std::exp((float)-numSamples /
+                      ((float)sampleRate * (float)kpCfg.smoothingMs * 0.001f)));
+      air = shapeAir(v.airSm, v.note);
+    }
+
     // Voices in a group with its own FX chain render into that group's scratch
     // buffer (filtered + gained as a group post-loop); air-driven reeds render
     // into the reed submix (lowpassed as one bank — they share the blower);
@@ -956,6 +1027,7 @@ void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
         v.groupIndex >= 0 && v.groupIndex < groupVolume.size();
     const float staticGain =
         v.gain * volDriftMul * (groupIsAir(v.groupIndex) ? airGainSm : 1.0f) *
+        air.gain *
         (hasGroup ? groupVolume[v.groupIndex] * groupTagVolume[v.groupIndex] *
                         groupGain[v.groupIndex]
                   : 1.0f);
@@ -973,7 +1045,8 @@ void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
     const float *gtRow =
         groupTremActive ? groupTrem[(size_t)v.groupIndex].data() + startSample
                         : nullptr;
-    const double step = v.rate * pitchBendMul * tuneMul;
+    const double step = v.rate * pitchBendMul * tuneMul * air.pitchMul *
+                        (member ? memberBendMul[v.channel] : 1.0);
     const bool monoSrc = srcChannels == 1;
     const auto &srcBuf = v.buffer->audio;
     float *out[kMaxOutChannels];
@@ -1001,11 +1074,12 @@ void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
       if (monoSrc) {
         // Mono source (most libraries): interpolate ONCE and fan out — the
         // per-channel form below would run the identical 8-tap sinc twice.
-        const float s =
-            (v.loopEnabled ? readLooped(st, srcBuf, 0, v.position, v.loopEnd,
-                                        v.loopLen, v.loopXf)
-                           : interpolate(st, srcBuf, 0, v.position)) *
-            g;
+        float s = v.loopEnabled ? readLooped(st, srcBuf, 0, v.position,
+                                             v.loopEnd, v.loopLen, v.loopXf)
+                                : interpolate(st, srcBuf, 0, v.position);
+        if (kpVoice) // key-pressure darkening (lpCoef 1 = transparent)
+          s = darken(v.airZ[0], air.lpCoef, s);
+        s *= g;
         if (outChannels >= 2) {
           out[0][i] += s * panL;
           out[1][i] += s * panR;
@@ -1016,10 +1090,11 @@ void VoiceEngine::renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
       } else {
         for (int ch = 0; ch < outChannels; ++ch) {
           const int srcCh = juce::jmin(ch, srcChannels - 1);
-          const float s = v.loopEnabled
-                              ? readLooped(st, srcBuf, srcCh, v.position,
-                                           v.loopEnd, v.loopLen, v.loopXf)
-                              : interpolate(st, srcBuf, srcCh, v.position);
+          float s = v.loopEnabled ? readLooped(st, srcBuf, srcCh, v.position,
+                                               v.loopEnd, v.loopLen, v.loopXf)
+                                  : interpolate(st, srcBuf, srcCh, v.position);
+          if (kpVoice && ch < 2)
+            s = darken(v.airZ[ch], air.lpCoef, s);
           const float panMul = (outChannels >= 2)
                                    ? (ch == 0 ? panL : (ch == 1 ? panR : 1.0f))
                                    : 1.0f;
@@ -1200,13 +1275,26 @@ void VoiceEngine::processBlock(juce::AudioBuffer<float> &buffer,
     pos = eventPos;
 
     const auto msg = meta.getMessage();
-    if (msg.isNoteOn())
-      handleNoteOn(msg.getNoteNumber(), msg.getFloatVelocity());
-    else if (msg.isNoteOff())
-      handleNoteOff(msg.getNoteNumber());
+    const int ch = juce::jlimit(1, 16, msg.getChannel());
+    expression().mpe.processNextMidiEvent(msg); // MCM + RPN 0 bend ranges
+    if (msg.isNoteOn()) {
+      noteMpeChannel(ch);
+      handleNoteOn(msg.getNoteNumber(), msg.getFloatVelocity(), ch);
+    } else if (msg.isNoteOff())
+      handleNoteOff(msg.getNoteNumber(), ch);
     else if (msg.isPitchWheel())
-      handlePitchWheel(msg.getPitchWheelValue());
-    else if (msg.isController() && msg.getControllerNumber() == 64)
+      handlePitchWheel(msg.getPitchWheelValue(), ch);
+    else if (msg.isChannelPressure())
+      // Kept for every channel (MPE controllers send it BEFORE the note-on
+      // that may first reveal them), but only MPE member notes read it — plain
+      // channel aftertouch would squeeze every note at once.
+      chanPressure[ch] = (float)msg.getChannelPressureValue() / 127.0f;
+    else if (msg.isAftertouch()) {
+      const int n = msg.getNoteNumber();
+      if (n >= 0 && n < 128)
+        polyPressure[n] = (float)msg.getAfterTouchValue() / 127.0f;
+      expression().polyLatched = true;
+    } else if (msg.isController() && msg.getControllerNumber() == 64)
       handleSustain(msg.getControllerValue());
     else if (msg.isAllNotesOff() || msg.isAllSoundOff())
       allNotesOff();
@@ -1254,7 +1342,8 @@ void VoiceEngine::updateAirSupply(int numSamples) {
   // Sounding notes = distinct notes with a held (non-releasing) voice: a
   // released reed's valve is closed and draws no air. Release-trigger voices
   // are noises, not reeds.
-  int n = 0;
+  // A partly pressed key (KeyPressure) draws only its share of air.
+  double n = 0.0;
   if (airEnabled) {
     bool seen[128]{};
     for (const auto &v : voices)
@@ -1262,10 +1351,12 @@ void VoiceEngine::updateAirSupply(int numSamples) {
           groupIsAir(v.groupIndex) && v.note >= 0 && v.note < 128 &&
           !seen[(size_t)v.note]) {
         seen[(size_t)v.note] = true;
-        ++n;
+        n += (groupIsKp(v.groupIndex) && v.airSm >= 0.0f)
+                 ? (double)juce::jlimit(0.0f, 1.0f, v.airSm)
+                 : 1.0;
       }
   }
-  const double notes = (double)juce::jmax(1, n);
+  const double notes = juce::jmax(1.0, n);
 
   // Targets (disabled → neutral): per-note gain n^-volume, cutoff darkening,
   // attack stretch n^attack. The fan can't change pressure instantly — smooth
@@ -1292,6 +1383,55 @@ void VoiceEngine::updateAirSupply(int numSamples) {
   airCutoffSm +=
       (cutoffT - airCutoffSm) *
       (1.0f - std::exp((float)-numSamples / ((float)sampleRate * tauC)));
+}
+
+bool VoiceEngine::isMpeMember(int channel) const noexcept {
+  const auto &mpe = expression().mpe;
+  return mpe.getLowerZone().isUsingChannelAsMemberChannel(channel) ||
+         mpe.getUpperZone().isUsingChannelAsMemberChannel(channel);
+}
+
+void VoiceEngine::noteMpeChannel(int channel) {
+  // An MPE controller (or a DAW's MPE track) without a Configuration Message:
+  // notes spread across two or more channels between 2 and 15 is MPE's
+  // signature. A keyboard set to any single channel never trips this, so it
+  // keeps the global pitch wheel.
+  auto &ex = expression();
+  if (ex.mpe.isActive() || channel < 2 || channel > 15)
+    return;
+  ex.channelsSeen |= (juce::uint16)(1u << channel);
+  if (juce::countNumberOfBits((juce::uint32)ex.channelsSeen) >= 2)
+    ex.mpe.setLowerZone(15); // channel 1 master, 2..16 members, ±48 per note
+}
+
+VoiceEngine::AirShape VoiceEngine::shapeAir(float air, int note) const {
+  // u = how far above the speaking threshold, 0..1. Below it the reed is
+  // silent; just above it speaks at -levelDb (deeper in the bass), rising to
+  // full with most of the rise early.
+  const auto &k = kpCfg;
+  const double thr = juce::jlimit(0.0, 0.99, k.threshold);
+  const double u = juce::jlimit(0.0, 1.0, ((double)air - thr) / (1.0 - thr));
+  const double t = juce::jlimit(0.0, 1.0, (note - 36) / 48.0);
+  const double levelDb = k.levelDbBass + (k.levelDbTreble - k.levelDbBass) * t;
+
+  AirShape s;
+  s.gain =
+      (double)air <= thr
+          ? 0.0f
+          : juce::Decibels::decibelsToGain(
+                (float)(-levelDb * std::pow(1.0 - u, k.levelCurve)), -200.0f);
+  s.pitchMul = std::pow(2.0, -k.pitchCents * (1.0 - u) * (1.0 - u) / 1200.0);
+
+  // Darkening: cutoff at brightness × the note's frequency at the threshold,
+  // opening logarithmically toward 20 kHz; the (1-u) factor lands the
+  // coefficient on exactly 1 (bit-transparent) at full air.
+  const double noteHz = 440.0 * std::pow(2.0, (note - 69) / 12.0);
+  const double lowHz = juce::jlimit(20.0, 20000.0, noteHz * k.brightness);
+  const double fc = lowHz * std::pow(20000.0 / lowHz, u);
+  s.lpCoef = (float)(1.0 - std::exp(-juce::MathConstants<double>::twoPi * fc /
+                                    sampleRate) *
+                               (1.0 - u));
+  return s;
 }
 
 void VoiceEngine::allNotesOff() {

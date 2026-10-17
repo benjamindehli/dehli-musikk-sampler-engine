@@ -562,6 +562,24 @@ var manifestToVar(const PresetLibrary &library) {
     }
     o.set("airSupply", air.toVar());
   }
+  if (library.keyPressure) {
+    const auto &k = *library.keyPressure;
+    Obj kp;
+    kp.set("threshold", k.threshold);
+    kp.set("levelDbBass", k.levelDbBass);
+    kp.set("levelDbTreble", k.levelDbTreble);
+    kp.set("levelCurve", k.levelCurve);
+    kp.set("pitchCents", k.pitchCents);
+    kp.set("brightness", k.brightness);
+    kp.set("smoothingMs", k.smoothingMs);
+    if (!k.tags.isEmpty()) {
+      juce::Array<var> tags;
+      for (const auto &t : k.tags)
+        tags.add(t);
+      kp.set("tags", fromArray(tags));
+    }
+    o.set("keyPressure", kp.toVar());
+  }
 
   juce::Array<var> modes;
   for (const auto &m : library.modes)

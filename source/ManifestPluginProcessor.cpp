@@ -60,6 +60,8 @@ ManifestPluginProcessor::ManifestPluginProcessor(Assets a)
   prmVelocityCurve = apvts->getRawParameterValue(params::id::velocityCurve);
   prmAirSupply = apvts->getRawParameterValue(
       params::id::airSupply); // null unless declared
+  prmKeyPressure = apvts->getRawParameterValue(
+      params::id::keyPressure); // null unless declared
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor() {
@@ -418,6 +420,8 @@ void ManifestPluginProcessor::processBlock(juce::AudioBuffer<float> &buffer,
       engine.setMasterTune(prmMasterTune->load());
     if (prmAirSupply)
       engine.setAirSupplyEnabled(prmAirSupply->load() > 0.5f);
+    if (prmKeyPressure)
+      engine.setKeyPressureEnabled(prmKeyPressure->load() > 0.5f);
     if (prmVelocityCurve)
       engine.setVelocityCurve(
           juce::jlimit(0, 2, (int)prmVelocityCurve->load()));

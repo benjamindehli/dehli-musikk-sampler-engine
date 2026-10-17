@@ -59,6 +59,8 @@ inline constexpr const char *velocityCurve =
     "velocityCurve"; // 0 soft · 1 linear · 2 hard
 inline constexpr const char *airSupply =
     "airSupply"; // shared-air simulation toggle
+inline constexpr const char *keyPressure =
+    "keyPressure"; // per-key air from MPE pressure / poly aftertouch
 } // namespace id
 
 // Voice-cap choices for the maxPolyphony parameter (choice index → voice

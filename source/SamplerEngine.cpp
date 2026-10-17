@@ -112,6 +112,9 @@ SamplerEngine::buildMode(int index, std::atomic<float> *progress,
     // air-driven reeds from the config's tags.
     if (library->airSupply)
       mr->voices.setAirSupply(*library->airSupply);
+    if (library->keyPressure) // also BEFORE setMode (resolves its groups)
+      mr->voices.setKeyPressure(*library->keyPressure);
+    mr->voices.setExpressionState(&expression); // MPE zones survive the swap
     mr->voices.setMode(mode, *source); // samples now decoded → fast wiring
     mr->fx.setEffects(mode.effects, *source);
 
@@ -425,6 +428,7 @@ void SamplerEngine::processBlock(juce::AudioBuffer<float> &buffer,
   cur->voices.setSkipMutedGroups(skipMutedGroups.load());
   cur->voices.setRetriggerMute(retriggerMute.load());
   cur->voices.setAirSupplyEnabled(airSupplyEnabled.load());
+  cur->voices.setKeyPressureEnabled(keyPressureEnabled.load());
   cur->voices.setMasterTune(masterTuneCents.load());
   cur->voices.setVelocityCurve(velocityCurve.load());
   if (const int cap = maxPolyphony.load(); cap > 0)

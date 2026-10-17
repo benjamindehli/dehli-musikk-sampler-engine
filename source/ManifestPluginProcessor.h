@@ -146,6 +146,10 @@ public:
                           // 0)
   }
   bool hasAirSupply() const override { return engine.hasAirSupply(); }
+  bool hasKeyPressure() const override { return engine.hasKeyPressure(); }
+  // Per-note pitch bend + pressure from MPE controllers (the engine detects
+  // the zones); lets hosts like Logic route an MPE track's channels intact.
+  bool supportsMPE() const override { return true; }
   bool hasSequencer() const override {
     for (const auto &m : library.modes)
       if (!m.sequenceTriggers.isEmpty())
@@ -254,6 +258,8 @@ private:
   std::atomic<float> *prmVelocityCurve{nullptr};
   std::atomic<float> *prmAirSupply{
       nullptr}; // null when the library has no AirSupply
+  std::atomic<float> *prmKeyPressure{
+      nullptr}; // null when the library has no KeyPressure
 
   // ── MIDI learn state ────────────────────────────────────────────────────
   // ccTargets is the audio thread's mapping table (atomics; message thread

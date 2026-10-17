@@ -19,6 +19,17 @@
 
 namespace dm {
 
+/** MIDI expression state that must outlive a mode switch: MPE zones (an MPE
+    Configuration Message is often sent only once, when the controller
+    connects) and whether this instance has seen polyphonic aftertouch. Owned
+    by SamplerEngine and shared into each mode's VoiceEngine; a standalone
+    VoiceEngine (tests) uses its own. Audio thread only. */
+struct MidiExpressionState {
+  juce::MPEZoneLayout mpe; // from MCM / RPN 0, or the auto-detected lower zone
+  juce::uint16 channelsSeen = 0; // note-on channels 2..15 (auto-detect bits)
+  bool polyLatched = false; // poly aftertouch seen → new notes start unpressed
+};
+
 class VoiceEngine {
 public:
   VoiceEngine();
@@ -148,6 +159,20 @@ public:
   void setAirSupply(const AirSupply &config) { airCfg = config; }
   void setAirSupplyEnabled(bool enabled) { airEnabled = enabled; }
 
+  /** Per-key air from key pressure — see dm::KeyPressure. Configure BEFORE
+     setMode (it resolves the pressure-driven groups from the tags); enable or
+     disable per block from the settings toggle. */
+  void setKeyPressure(const KeyPressure &config) {
+    kpCfg = config;
+    hasKpCfg = true;
+  }
+  void setKeyPressureEnabled(bool enabled) { kpEnabled = enabled; }
+
+  /** Share MPE zones + the aftertouch latch across mode switches (see
+     MidiExpressionState). Null = use this engine's own. */
+  void setExpressionState(MidiExpressionState *shared) { sharedExpr = shared; }
+  bool isMpeActive() const noexcept { return expression().mpe.isActive(); }
+
   /** Runtime polyphony cap (settings menu). New voices allocate/steal within
      the first `maxPolyphony` slots; voices already ringing above a lowered cap
      simply play out. Clamped to the compile-time voice pool size. */
@@ -199,6 +224,8 @@ private:
     double position = 0.0;
     double rate = 1.0;
     int note = -1;
+    int channel =
+        1; // MIDI channel of the note-on (MPE: per-note bend/pressure)
     int groupIndex = -1;
     float pitchDriftDepth = 0.0f; // random per-voice pitch-drift depth (0.4..1)
     float volDriftDepth = 0.0f; // random per-voice volume-drift depth (0.4..1)
@@ -236,20 +263,27 @@ private:
     bool isRelease =
         false; // release-trigger voice: plays out, ignores note-off
     bool pedalHeld = false; // note-off arrived while the sustain pedal was down
+
+    // Key pressure (KeyPressure groups only): smoothed air 0..1 (-1 = fresh
+    // voice: start at the target, no ramp) + the darkening lowpass state (two
+    // cascaded one-poles) per output channel (L/R).
+    float airSm = -1.0f;
+    float airZ[2][2]{};
   };
 
   void renderChunk(juce::AudioBuffer<float> &buffer, int startSample,
                    int numSamples);
-  void handleNoteOn(int note, float velocity);
-  void handleNoteOff(int note);
+  void handleNoteOn(int note, float velocity, int channel);
+  void handleNoteOff(int note, int channel);
   void handleSustain(
       int cc64Value); // sustain pedal: hold notes + fire damper-noise groups
-  void handlePitchWheel(int wheelValue); // 0..16383, centre 8192 (±2 semitones)
+  void handlePitchWheel(int wheelValue,
+                        int channel); // 0..16383, centre 8192
   Voice *allocateVoice();
   const Zone *pickZoneInGroup(
       int group, int note,
       int velocity); // velocity layer + round-robin within one group
-  void startVoice(const Zone &zone, int note, float velocity);
+  void startVoice(const Zone &zone, int note, float velocity, int channel = 1);
   CurvedAdsr::Parameters effectiveAdsr(const CurvedAdsr::Parameters &base,
                                        int groupIndex) const;
 
@@ -323,6 +357,39 @@ private:
   float airLpState[16]{};   // one-pole state per output channel
   juce::AudioBuffer<float>
       airBuffer; // reed submix: lowpassed, then summed into the output
+
+  // ── MPE + key pressure (KeyPressure) ──────────────────────────────────────
+  // MPE member channels carry one note each: their pitch bend and channel
+  // pressure belong to that note alone. Master-channel bend (and every bend
+  // when no MPE zone is active) stays global (pitchBendMul).
+  MidiExpressionState &expression() noexcept {
+    return sharedExpr != nullptr ? *sharedExpr : ownExpr;
+  }
+  const MidiExpressionState &expression() const noexcept {
+    return sharedExpr != nullptr ? *sharedExpr : ownExpr;
+  }
+  bool isMpeMember(int channel) const noexcept;
+  void noteMpeChannel(int channel); // auto-detect a zone-less MPE controller
+  bool groupIsKp(int groupIndex) const noexcept {
+    return groupIndex >= 0 && groupIndex < kpGroups.size() &&
+           kpGroups[groupIndex];
+  }
+  // Air (0..1) → per-voice gain, pitch multiplier and lowpass coefficient.
+  struct AirShape {
+    float gain = 1.0f;
+    double pitchMul = 1.0;
+    float lpCoef = 1.0f; // 1 = transparent
+  };
+  AirShape shapeAir(float air, int note) const;
+  MidiExpressionState ownExpr;
+  MidiExpressionState *sharedExpr{nullptr};
+  double memberBendMul[17];  // per MIDI channel (1..16), MPE member bend
+  float chanPressure[17]{};  // per MIDI channel, last channel pressure 0..1
+  float polyPressure[128]{}; // per key, last polyphonic aftertouch 0..1
+  KeyPressure kpCfg;
+  bool hasKpCfg{false};
+  bool kpEnabled{false};
+  juce::Array<bool> kpGroups; // per group: does it follow key pressure?
 
   // ── Modulators (LFOs) ──────────────────────────────────────────────────
   // A mode can define several: tremolo on different group sets at different

@@ -16,9 +16,10 @@ namespace dm {
 class SettingsPanel : public juce::Component {
 public:
   SettingsPanel(juce::AudioProcessorValueTreeState &state, bool showSequencer,
-                bool isStandalone, bool showAirSupply = false)
+                bool isStandalone, bool showAirSupply = false,
+                bool showKeyPressure = false)
       : apvts(state), hasSequencer(showSequencer), hasAirSupply(showAirSupply),
-        standalone(isStandalone) {
+        hasKeyPressure(showKeyPressure), standalone(isStandalone) {
     // Dismiss by clicking the dimmed area; swallow everything else.
     setInterceptsMouseClicks(true, true);
 
@@ -117,6 +118,18 @@ public:
           apvts, params::id::airSupply, airToggle);
     }
 
+    if (hasKeyPressure) {
+      initLabel(keyPressureLabel, "Key pressure");
+      keyPressureToggle.setTooltip(
+          "MPE pressure or polyphonic aftertouch opens each key's valve: "
+          "a lightly pressed key gives its reed less air - softer, darker "
+          "and slightly flat. Keyboards without pressure play at full air.");
+      addAndMakeVisible(keyPressureToggle);
+      keyPressureAttachment = std::make_unique<
+          juce::AudioProcessorValueTreeState::ButtonAttachment>(
+          apvts, params::id::keyPressure, keyPressureToggle);
+    }
+
     if (hasSequencer) {
       initLabel(seqHeader, "Sequencer");
       seqHeader.setFont(juce::Font(juce::FontOptions(13.0f).withStyle("Bold")));
@@ -171,7 +184,7 @@ public:
 
   void resized() override {
     const int rowH = 30, labelW = 130, pad = 14;
-    const int rows = 7 + (hasAirSupply ? 1 : 0) +
+    const int rows = 7 + (hasAirSupply ? 1 : 0) + (hasKeyPressure ? 1 : 0) +
                      (hasSequencer ? 5 : 0); // + title row; seq adds header + 4
     const int panelW = 330, panelH = pad * 2 + rowH * (rows + 1);
     panelRect = getLocalBounds().withSizeKeepingCentre(panelW, panelH);
@@ -196,6 +209,8 @@ public:
     row(velCurveLabel, velCurveBox);
     if (hasAirSupply)
       row(airLabel, airToggle);
+    if (hasKeyPressure)
+      row(keyPressureLabel, keyPressureToggle);
     if (hasSequencer) {
       seqHeader.setBounds(r.removeFromTop(rowH));
       row(syncLabel, syncToggle);
@@ -230,18 +245,19 @@ private:
   juce::AudioProcessorValueTreeState &apvts;
   const bool hasSequencer;
   const bool hasAirSupply;
+  const bool hasKeyPressure;
   const bool
       standalone; // from the processor's wrapperType (the reliable source)
   juce::Rectangle<int> panelRect;
 
   juce::Label titleLabel, bendUpLabel, bendDownLabel, polyLabel, polySaveLabel,
       retriggerLabel, tuneLabel, velCurveLabel, seqHeader, syncLabel,
-      syncDawLabel, bpmLabel, noteValueLabel, airLabel;
+      syncDawLabel, bpmLabel, noteValueLabel, airLabel, keyPressureLabel;
   juce::TextButton closeButton;
   juce::Slider bendUpSlider, bendDownSlider, tuneSlider, bpmSlider;
   juce::ComboBox polyBox, velCurveBox, noteValueBox;
   juce::ToggleButton polySaveToggle, retriggerToggle, syncToggle, syncDawToggle,
-      airToggle;
+      airToggle, keyPressureToggle;
 
   std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
       bendUpAttachment, bendDownAttachment, tuneAttachment, bpmAttachment;
@@ -249,7 +265,7 @@ private:
       polyAttachment, velCurveAttachment, noteValueAttachment;
   std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment>
       polySaveAttachment, retriggerAttachment, syncAttachment,
-      syncDawAttachment, airAttachment;
+      syncDawAttachment, airAttachment, keyPressureAttachment;
 };
 
 } // namespace dm

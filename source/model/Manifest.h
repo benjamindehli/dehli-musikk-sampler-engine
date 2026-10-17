@@ -504,6 +504,35 @@ struct AirSupply {
   juce::StringArray tags;
 };
 
+/** Per-key air from key pressure (MPE channel pressure / polyphonic
+    aftertouch): a partly pressed reed-organ key opens its valve only partly,
+    so the reed gets less air — quieter, darker and slightly flat, silent below
+    the speaking threshold. Fitted from slow key-press recordings of the
+    Elektrisk Salmesykkel (2026-10). A note with no pressure data plays at full
+    air, exactly as recorded. */
+struct KeyPressure {
+  double threshold = 0.05; // pressure (0..1) below which the reed is silent
+  // Level just above the threshold, below full (dB), interpolated between
+  // note 36 (bass) and note 84 (treble): the recordings speak at about -36 dB
+  // in the bass, -25 dB in the middle and -19 dB in the treble.
+  double levelDbBass = 36.0;
+  double levelDbTreble = 19.0;
+  // Shape of the rise (dB = -levelDb * (1-u)^levelCurve, u = 0..1 above the
+  // threshold): 1.8 fits all three recordings, most of the rise early.
+  double levelCurve = 1.8;
+  double pitchCents = 8.0; // how flat the reed speaks at the threshold
+  // Darkening: per-note two-pole (12 dB/oct) lowpass at brightness × the
+  // note's frequency at the threshold, opening to fully transparent at full
+  // air. 1.5 puts the upper harmonics ~19 dB down as the reed starts to speak,
+  // as in the mid recording.
+  double brightness = 1.5;
+  double smoothingMs = 15.0; // valve/air lag on pressure changes
+
+  // Groups carrying any of these tags follow the pressure (the reeds). Empty =
+  // every group; name the reed tags so key on/off noises are unaffected.
+  juce::StringArray tags;
+};
+
 struct PresetLibrary {
   int schema = 0;       // manifest schema version
   juce::String format;  // "dmse-manifest"
@@ -520,6 +549,8 @@ struct PresetLibrary {
             // same key is wanted (e.g. overlapping cymbal hits).
   std::optional<AirSupply>
       airSupply; // present → the settings panel offers the toggle
+  std::optional<KeyPressure>
+      keyPressure; // present → the settings panel offers the toggle
   juce::Array<Mode> modes;
 };
 
