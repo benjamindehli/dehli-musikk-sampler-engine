@@ -78,6 +78,12 @@ public:
      the editor shows a progress overlay and the engine renders silence until
      it's ready. */
   bool isLoading() const noexcept { return loading.load(); }
+
+  /** How long the mode being played, or the one about to replace it, can keep
+      sounding after its input stops: the longest note release plus the longest
+      impulse response (see TailLength.h). 0 until a mode has been built. Safe
+      from any thread, for AudioProcessor::getTailLengthSeconds. */
+  double getTailLengthSeconds() const noexcept { return tailSeconds.load(); }
   float loadProgress() const noexcept {
     return loadProgressValue.load();
   } // 0..1
@@ -254,6 +260,11 @@ private:
     // reads valid.
     SampleSource *src = nullptr;
     juce::StringArray held;
+
+    // How long this mode can sound after its input stops (see TailLength.h).
+    // Worked out by buildMode once the samples and IRs are decoded.
+    double tailSeconds = 0.0;
+
     ~ModeRender() {
       if (src != nullptr)
         for (const auto &id : held)
@@ -305,6 +316,7 @@ private:
   std::atomic<bool> abortBuild{false};
   std::atomic<bool> loading{false};
   std::atomic<float> loadProgressValue{0.0f};
+  std::atomic<double> tailSeconds{0.0}; // the published mode's, see above
 
   // FX UI overrides: applied only once "touched", so untouched controls keep
   // the manifest defaults (and survive mode switches).

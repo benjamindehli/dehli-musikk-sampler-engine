@@ -1,4 +1,5 @@
 #include "SamplerEngine.h"
+#include "audio/TailLength.h"
 #include <cmath>
 
 namespace dm {
@@ -45,15 +46,21 @@ SamplerEngine::buildMode(int index, std::atomic<float> *progress,
     // released when the ModeRender is destroyed, so only live modes cost RAM.
     mr->src = source;
     juce::StringArray ids;
+    juce::StringArray irIds; // the impulse responses among them, for the tail
     auto want = [&ids](const juce::String &id) {
       if (id.isNotEmpty())
         ids.addIfNotAlreadyThere(id);
+    };
+    auto wantIr = [&want, &irIds](const juce::String &id) {
+      want(id);
+      if (id.isNotEmpty())
+        irIds.addIfNotAlreadyThere(id);
     };
     for (const auto &g : mode.groups)
       for (const auto &s : g.samples)
         want(s.source);
     for (const auto &e : mode.effects)
-      want(e.ir);
+      wantIr(e.ir);
     for (const auto &tab :
          mode.ui.tabs) // runtime-switchable IRs (cabinet / Home-Church)
     {
@@ -61,12 +68,12 @@ SamplerEngine::buildMode(int index, std::atomic<float> *progress,
         for (const auto &opt : menu.options)
           for (const auto &b : opt.bindings)
             if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
-              want(b.translationValue.toString());
+              wantIr(b.translationValue.toString());
       for (const auto &btn : tab.buttons)
         for (const auto &st : btn.states)
           for (const auto &b : st.bindings)
             if (b.parameter == "FX_IR_FILE" && b.translationValue.isString())
-              want(b.translationValue.toString());
+              wantIr(b.translationValue.toString());
     }
 
     // Register every id for release up front (single-threaded), then decode
@@ -117,6 +124,7 @@ SamplerEngine::buildMode(int index, std::atomic<float> *progress,
     mr->voices.setExpressionState(&expression); // MPE zones survive the swap
     mr->voices.setMode(mode, *source); // samples now decoded → fast wiring
     mr->fx.setEffects(mode.effects, *source);
+    mr->tailSeconds = modeTailSeconds(mode, irIds, *source);
 
     // Re-apply any cabinet-menu IR selection so it survives a mode (re)build.
     for (int ei = 0; ei < kMaxEffects; ++ei)
@@ -164,8 +172,12 @@ void SamplerEngine::beginAsyncBuild(int index) {
     auto *mr = buildMode(idx, &loadProgressValue, &abortBuild);
     if (abortBuild.load()) {
       delete mr; // discarded — superseded/closing
-    } else if (auto *superseded = pending.exchange(mr)) {
-      delete superseded; // a previous pending was never adopted
+    } else {
+      // Published with the mode, so a host asking from now on gets the tail
+      // of the mode that is about to play.
+      tailSeconds.store(mr->tailSeconds);
+      if (auto *superseded = pending.exchange(mr))
+        delete superseded; // a previous pending was never adopted
     }
     loading.store(false);
   });
