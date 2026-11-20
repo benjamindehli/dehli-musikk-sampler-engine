@@ -1,5 +1,7 @@
 #include "ManifestPluginProcessor.h"
 
+#include <cmath>
+
 namespace dm {
 
 ManifestPluginProcessor::ManifestPluginProcessor(Assets a)
@@ -537,7 +539,23 @@ void ManifestPluginProcessor::setStateInformation(const void *data,
     return;
   if (auto xml = getXmlFromBinary(data, sizeInBytes))
     if (xml->hasTagName(apvts->state.getType())) {
-      apvts->replaceState(juce::ValueTree::fromXml(*xml));
+      auto tree = juce::ValueTree::fromXml(*xml);
+
+      // A value that is not a number, from a damaged or hand-edited session,
+      // goes back to its parameter's default before anything reads it. NaN is
+      // the one value the parameters' range clamps let through: replaceState
+      // hands it straight on, the host then shows and saves NaN, and a NaN
+      // master output silences the instrument.
+      for (auto child : tree)
+        if (child.hasProperty("value") &&
+            !std::isfinite((double)child.getProperty("value")))
+          if (auto *ranged = dynamic_cast<juce::RangedAudioParameter *>(
+                  apvts->getParameter(child.getProperty("id").toString())))
+            child.setProperty(
+                "value", ranged->convertFrom0to1(ranged->getDefaultValue()),
+                nullptr);
+
+      apvts->replaceState(tree);
       rebuildCcTargets(); // user MIDI mappings ride along in the state tree
       // A DAW session restore names the mode — load it without the chooser.
       // The Standalone restores state on every launch, but launching the app

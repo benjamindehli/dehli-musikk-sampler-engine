@@ -75,6 +75,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/SampleSourceTests.cpp
         tests/MissingSamplesTests.cpp
         tests/AccessibilityTests.cpp
+        tests/StateRestoreTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE
