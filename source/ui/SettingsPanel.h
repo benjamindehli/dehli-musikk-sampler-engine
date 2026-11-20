@@ -17,9 +17,10 @@ class SettingsPanel : public juce::Component {
 public:
   SettingsPanel(juce::AudioProcessorValueTreeState &state, bool showSequencer,
                 bool isStandalone, bool showAirSupply = false,
-                bool showKeyPressure = false)
+                bool showKeyPressure = false, bool showUpdateCheck = false)
       : apvts(state), hasSequencer(showSequencer), hasAirSupply(showAirSupply),
-        hasKeyPressure(showKeyPressure), standalone(isStandalone) {
+        hasKeyPressure(showKeyPressure), hasUpdateCheck(showUpdateCheck),
+        standalone(isStandalone) {
     // Dismiss by clicking the dimmed area; swallow everything else.
     setInterceptsMouseClicks(true, true);
 
@@ -130,6 +131,21 @@ public:
           apvts, params::id::keyPressure, keyPressureToggle);
     }
 
+    if (hasUpdateCheck) {
+      // Not a parameter: it is kept on this machine, not in the session, so
+      // the editor reads and writes it through these.
+      initLabel(updateLabel, "Check for updates");
+      updateToggle.setTooltip(
+          "When the window opens, check the product page for a new version. "
+          "It reads one small file and sends nothing about you.");
+      updateToggle.setTitle("Check for updates");
+      updateToggle.onClick = [this] {
+        if (onUpdateCheckToggled)
+          onUpdateCheckToggled(updateToggle.getToggleState());
+      };
+      addAndMakeVisible(updateToggle);
+    }
+
     if (hasSequencer) {
       initLabel(seqHeader, "Sequencer");
       seqHeader.setFont(juce::Font(juce::FontOptions(13.0f).withStyle("Bold")));
@@ -174,6 +190,13 @@ public:
 
   std::function<void()> onClose;
 
+  /** The update check setting, shown when the panel was made with
+      showUpdateCheck. */
+  std::function<void(bool)> onUpdateCheckToggled;
+  void setUpdateCheckState(bool allowed) {
+    updateToggle.setToggleState(allowed, juce::dontSendNotification);
+  }
+
   void paint(juce::Graphics &g) override {
     g.fillAll(juce::Colour(0xff000102).withAlpha(0.55f)); // dim the editor
     g.setColour(juce::Colour(0xff202122));
@@ -185,6 +208,7 @@ public:
   void resized() override {
     const int rowH = 30, labelW = 130, pad = 14;
     const int rows = 7 + (hasAirSupply ? 1 : 0) + (hasKeyPressure ? 1 : 0) +
+                     (hasUpdateCheck ? 1 : 0) +
                      (hasSequencer ? 5 : 0); // + title row; seq adds header + 4
     const int panelW = 330, panelH = pad * 2 + rowH * (rows + 1);
     panelRect = getLocalBounds().withSizeKeepingCentre(panelW, panelH);
@@ -211,6 +235,8 @@ public:
       row(airLabel, airToggle);
     if (hasKeyPressure)
       row(keyPressureLabel, keyPressureToggle);
+    if (hasUpdateCheck)
+      row(updateLabel, updateToggle);
     if (hasSequencer) {
       seqHeader.setBounds(r.removeFromTop(rowH));
       row(syncLabel, syncToggle);
@@ -246,18 +272,20 @@ private:
   const bool hasSequencer;
   const bool hasAirSupply;
   const bool hasKeyPressure;
+  const bool hasUpdateCheck;
   const bool
       standalone; // from the processor's wrapperType (the reliable source)
   juce::Rectangle<int> panelRect;
 
   juce::Label titleLabel, bendUpLabel, bendDownLabel, polyLabel, polySaveLabel,
       retriggerLabel, tuneLabel, velCurveLabel, seqHeader, syncLabel,
-      syncDawLabel, bpmLabel, noteValueLabel, airLabel, keyPressureLabel;
+      syncDawLabel, bpmLabel, noteValueLabel, airLabel, keyPressureLabel,
+      updateLabel;
   juce::TextButton closeButton;
   juce::Slider bendUpSlider, bendDownSlider, tuneSlider, bpmSlider;
   juce::ComboBox polyBox, velCurveBox, noteValueBox;
   juce::ToggleButton polySaveToggle, retriggerToggle, syncToggle, syncDawToggle,
-      airToggle, keyPressureToggle;
+      airToggle, keyPressureToggle, updateToggle;
 
   std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>
       bendUpAttachment, bendDownAttachment, tuneAttachment, bpmAttachment;

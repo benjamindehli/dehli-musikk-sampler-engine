@@ -53,6 +53,10 @@ public:
     // small. Images/manifest/IR still come from findResource. Empty File =
     // fully embedded (the default for small libs).
     juce::File packFile;
+
+    // The product page, ending in a slash, whose latest.json the update check
+    // reads. Empty = no update check.
+    juce::String siteUrl;
   };
 
   explicit ManifestPluginProcessor(Assets assets);
@@ -117,6 +121,7 @@ public:
   }
   juce::String getPluginVersion() const override { return assets.version; }
   juce::String getPluginName() const override { return getName(); }
+  UpdateCheck *getUpdateCheck() override { return updateCheck.get(); }
   /** Embedding hosts (DMSE Studio) call this with false so the editor leaves
       the surrounding app window alone. Default true = plugin behaviour. */
   void setEditorManagesWindow(bool manages) { editorManagesWindow = manages; }
@@ -229,6 +234,7 @@ private:
       int modeIndex); // cabinet-menu FX_IR_FILE → engine (message thread)
 
   Assets assets;
+  std::unique_ptr<UpdateCheck> updateCheck; // null without a product page
 
   juce::MidiKeyboardState keyboardState;
   std::unique_ptr<EmbeddedFlacSource> sampleSource;

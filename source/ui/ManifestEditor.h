@@ -14,6 +14,7 @@
 #include "SettingsPanel.h"
 #include "StandaloneWindowLookAndFeel.h"
 #include "WheelLookAndFeel.h"
+#include <UpdateCheck.h>
 #include <atomic>
 #include <functional>
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -60,6 +61,11 @@ public:
   /** Plugin display name (e.g. "Strykebrett") shown in the bottom strip. Empty
    * → none. */
   virtual juce::String getPluginName() const { return {}; }
+
+  /** The update check, or null when the host has no product page to ask (DMSE
+      Studio, or a build whose product page could not be worked out). Owned by
+      the host, so a closing editor never waits for the network. */
+  virtual UpdateCheck *getUpdateCheck() { return nullptr; }
 
   /** True when any mode carries sequence triggers — the settings overlay only
       shows the sequencer block for libraries that actually sequence. */
@@ -174,7 +180,21 @@ public:
     return forwardKeyState(isKeyDown);
   }
 
+  /** Shows that `version` is out: a lit link in the bottom strip that opens
+      `url`. Called when the update check finds a newer release. Empty clears
+      it. */
+  void announceRelease(const juce::String &version, const juce::String &url);
+
+  /** Whether the card asking about the update check is showing. */
+  bool isAskingAboutUpdates() const { return updateQuestion.isVisible(); }
+
 private:
+  // Starts the update check if the player allowed it.
+  void maybeCheckForUpdates();
+  // Shows the question once, unless another card or the mode chooser is up,
+  // in which case it waits for a later chance. Marked only when answered.
+  void maybeAskAboutUpdates();
+  void setUpdateCheckAllowed(bool allowed);
   void rebuildUi();
   void layerOverlay();       // (re)position the instrument-overlay layer + keep
                              // modals above it
@@ -318,6 +338,62 @@ private:
     void mouseUp(const juce::MouseEvent &) override { setVisible(false); }
   };
   MissingSamplesNotice missingNotice;
+
+  // The question the editor asks once: whether to check for a new version
+  // when the window opens. A card like the missing-samples one, with answers.
+  struct UpdateQuestion : juce::Component {
+    juce::String product;
+    juce::TextButton yes{"Yes"}, notNow{"Not now"};
+    UpdateQuestion() {
+      setTitle("Check for a new version?");
+      yes.setTitle("Check for a new version");
+      notNow.setTitle("Do not check for a new version");
+      addAndMakeVisible(yes);
+      addAndMakeVisible(notNow);
+    }
+    void paint(juce::Graphics &g) override {
+      const auto r = getLocalBounds().toFloat();
+      g.setColour(juce::Colour(0xff141516).withAlpha(0.94f));
+      g.fillRoundedRectangle(r, 6.0f);
+      g.setColour(juce::Colour(0xff6f8fb0));
+      g.drawRoundedRectangle(r.reduced(0.5f), 6.0f, 1.0f);
+      auto area = getLocalBounds().reduced(14, 10);
+      g.setColour(juce::Colour(0xffe8e9ea));
+      g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
+      g.drawText("Check for a new version?", area.removeFromTop(20),
+                 juce::Justification::centredLeft);
+      g.setFont(juce::Font(juce::FontOptions(13.0f)));
+      g.setColour(juce::Colour(0xffc4c6c8));
+      g.drawFittedText("When the window opens, " + product +
+                           " can check for a new version. It reads one small "
+                           "file from its product page and sends nothing "
+                           "about you.",
+                       area.withTrimmedBottom(30), juce::Justification::topLeft,
+                       3, 1.0f);
+    }
+    void resized() override {
+      auto row = getLocalBounds().reduced(14, 10).removeFromBottom(26);
+      notNow.setBounds(row.removeFromRight(84));
+      row.removeFromRight(8);
+      yes.setBounds(row.removeFromRight(64));
+    }
+  };
+  UpdateQuestion updateQuestion;
+
+  // The new version, lit, at the right end of the bottom strip. Hidden until
+  // the update check finds one. Opens the product page.
+  struct ReleaseLink : juce::Button {
+    ReleaseLink() : juce::Button("New version") {}
+    juce::String text;
+    void paintButton(juce::Graphics &g, bool over, bool) override {
+      g.setColour(juce::Colour(over ? 0xffb8d4f0 : 0xff8fb4dc));
+      g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+      g.drawText(text, getLocalBounds(), juce::Justification::centredRight,
+                 false);
+    }
+  };
+  ReleaseLink releaseLink;
+  juce::String releaseUrl;
   WheelLookAndFeel wheelLnf;
   StandaloneWindowLookAndFeel standaloneLnf;
   juce::LookAndFeel_V4

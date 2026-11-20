@@ -8,6 +8,9 @@ ManifestPluginProcessor::ManifestPluginProcessor(Assets a)
     : juce::AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
       assets(std::move(a)) {
+  if (isUsableSite(assets.siteUrl))
+    updateCheck = std::make_unique<UpdateCheck>(assets.siteUrl);
+
   loadEmbeddedLibrary();
 
   apvts = std::make_unique<juce::AudioProcessorValueTreeState>(

@@ -22,6 +22,9 @@ juce::AudioProcessor *JUCE_CALLTYPE createPluginFilter() {
   dm::ManifestPluginProcessor::Assets assets;
   assets.name = JucePlugin_Name;
   assets.version = JucePlugin_VersionString;
+#ifdef DMSE_SITE_URL
+  assets.siteUrl = DMSE_SITE_URL; // the product page, from the repo's remote
+#endif
 
 #if DMSE_HAS_ASSETS
   // The manifest is embedded SPLIT (manifest/index.json + modes/ + partials/);

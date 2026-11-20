@@ -179,6 +179,7 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
   modeChooser.setLookAndFeel(&stripLnf);
   modeChooser.onPick = [this](int i) {
     modeChooser.setVisible(false);
+    maybeAskAboutUpdates(); // held back while the chooser was up
     modeSelector.setSelectedId(
         i + 1, juce::dontSendNotification); // keep the strip in sync
     host.confirmModeChoice(i);
@@ -192,11 +193,35 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
   addChildComponent(missingNotice);
   missingNotice.setVisible(missingNotice.text.isNotEmpty());
 
+  // The update check. Only when the host has a product page to ask.
+  updateQuestion.product = host.getPluginName();
+  updateQuestion.yes.onClick = [this] {
+    UpdateSettings(host.getPluginName()).setOffered(true);
+    setUpdateCheckAllowed(true);
+  };
+  updateQuestion.notNow.onClick = [this] {
+    UpdateSettings(host.getPluginName()).setOffered(true);
+    updateQuestion.setVisible(false);
+  };
+  addChildComponent(updateQuestion);
+  releaseLink.onClick = [this] {
+    if (releaseUrl.isNotEmpty())
+      juce::URL(releaseUrl).launchInDefaultBrowser();
+  };
+  addChildComponent(releaseLink);
+
   if (host.needsModeChoice()) {
     auto *modeValue = host.getApvts().getRawParameterValue(params::id::mode);
     const int last = modeValue != nullptr ? (int)modeValue->load() : 0;
     modeChooser.setModes(host.getModeNames(), last);
     modeChooser.setVisible(true);
+  }
+
+  if (host.getUpdateCheck() != nullptr) {
+    if (UpdateSettings(host.getPluginName()).allowed())
+      maybeCheckForUpdates();
+    else
+      maybeAskAboutUpdates();
   }
 
   // Names for screen readers on the editor's own controls. The instrument's
@@ -264,6 +289,12 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
 
 ManifestEditor::~ManifestEditor() {
   stopTimer();
+  // The fetch belongs to the host and outlives this window, so it is only told
+  // to give up here, never waited for on the message thread.
+  if (auto *check = host.getUpdateCheck()) {
+    check->cancel();
+    check->setListener(nullptr);
+  }
   host.onModeChanged = nullptr;
   pitchWheel.setLookAndFeel(nullptr);
   modWheel.setLookAndFeel(nullptr);
@@ -460,11 +491,19 @@ void ManifestEditor::openSettings() {
   if (settingsPanel == nullptr) {
     settingsPanel = std::make_unique<SettingsPanel>(
         host.getApvts(), host.hasSequencer(), host.isStandaloneBuild(),
-        host.hasAirSupply(), host.hasKeyPressure());
+        host.hasAirSupply(), host.hasKeyPressure(),
+        host.getUpdateCheck() != nullptr);
+    settingsPanel->onUpdateCheckToggled = [this](bool allowed) {
+      UpdateSettings(host.getPluginName()).setOffered(true);
+      setUpdateCheckAllowed(allowed);
+    };
     settingsPanel->setLookAndFeel(&stripLnf);
     settingsPanel->onClose = [this] { settingsPanel->setVisible(false); };
     addChildComponent(*settingsPanel);
   }
+  if (host.getUpdateCheck() != nullptr)
+    settingsPanel->setUpdateCheckState(
+        UpdateSettings(host.getPluginName()).allowed());
   settingsPanel->setBounds(getLocalBounds());
   settingsPanel->setVisible(true);
   settingsPanel->toFront(true);
@@ -708,6 +747,8 @@ void ManifestEditor::layerOverlay() {
     loadingOverlay.toFront(false);
   if (modeChooser.isVisible())
     modeChooser.toFront(false);
+  if (updateQuestion.isVisible())
+    updateQuestion.toFront(false);
   if (settingsPanel != nullptr && settingsPanel->isVisible())
     settingsPanel->toFront(false);
   if (learnBanner.isVisible())
@@ -743,6 +784,15 @@ void ManifestEditor::resized() {
   // Bottom strip: credit (left) / plugin name + version (right).
   auto footer = area.removeFromBottom(kBottomStrip).reduced(10, 0);
   creditLabel.setBounds(footer.removeFromLeft(footer.getWidth() / 2));
+  if (releaseLink.isVisible()) {
+    const auto width =
+        juce::roundToInt(std::ceil(juce::GlyphArrangement::getStringWidth(
+            juce::Font(juce::FontOptions(10.0f, juce::Font::bold)),
+            releaseLink.text))) +
+        4;
+    releaseLink.setBounds(footer.removeFromRight(width));
+    footer.removeFromRight(10);
+  }
   versionLabel.setBounds(footer);
 
   // The labels band adds window height (see preferredHeight); the manifest face
@@ -829,6 +879,10 @@ void ManifestEditor::resized() {
       getLocalBounds()
           .withSizeKeepingCentre(juce::jmin(560, getWidth() - 24), 96)
           .withY(kTopStrip + 8));
+  updateQuestion.setBounds(
+      getLocalBounds()
+          .withSizeKeepingCentre(juce::jmin(460, getWidth() - 24), 110)
+          .withY(kTopStrip + 8));
 
   if (settingsPanel != nullptr)
     settingsPanel->setBounds(getLocalBounds());
@@ -841,6 +895,66 @@ void ManifestEditor::resized() {
   instrumentOverlay.setBounds(
       getLocalBounds().withTrimmedTop(kTopStrip).withTrimmedBottom(
           kBottomStrip));
+}
+
+void ManifestEditor::maybeAskAboutUpdates() {
+  if (host.getUpdateCheck() == nullptr || updateQuestion.isVisible())
+    return;
+  const UpdateSettings settings(host.getPluginName());
+  if (settings.allowed() || settings.offered())
+    return;
+  // Another card, or the choice of mode, comes first. Nothing is marked, so
+  // the question waits for a later window.
+  if (missingNotice.isVisible() || modeChooser.isVisible())
+    return;
+  updateQuestion.setVisible(true);
+  updateQuestion.toFront(false);
+}
+
+void ManifestEditor::setUpdateCheckAllowed(bool allowed) {
+  UpdateSettings(host.getPluginName()).setAllowed(allowed);
+  updateQuestion.setVisible(false);
+  if (settingsPanel != nullptr)
+    settingsPanel->setUpdateCheckState(allowed);
+  if (allowed)
+    maybeCheckForUpdates();
+  else
+    announceRelease({}, {});
+}
+
+void ManifestEditor::maybeCheckForUpdates() {
+  auto *check = host.getUpdateCheck();
+  if (check == nullptr || !UpdateSettings(host.getPluginName()).allowed())
+    return;
+
+  // Found by an earlier window on this instance.
+  if (const auto release = check->newerRelease())
+    announceRelease(release->version, release->url);
+
+  // A SafePointer, since the fetch outlives the window. The answer arrives on
+  // the message thread, where the editor is also destroyed, so the pointer is
+  // either valid or null.
+  check->setListener(
+      [safe = juce::Component::SafePointer<ManifestEditor>(this)] {
+        if (auto *editor = safe.getComponent())
+          if (auto *c = editor->host.getUpdateCheck())
+            if (const auto release = c->newerRelease())
+              editor->announceRelease(release->version, release->url);
+      });
+  check->start(host.getPluginVersion());
+}
+
+void ManifestEditor::announceRelease(const juce::String &version,
+                                     const juce::String &url) {
+  const bool found = version.isNotEmpty();
+  releaseLink.text = found ? version + " is out" : juce::String();
+  releaseLink.setTitle(found ? "Version " + version +
+                                   " is out. Opens the product page."
+                             : juce::String());
+  releaseLink.setTooltip(found ? "Open the product page" : juce::String());
+  releaseUrl = found ? url : juce::String();
+  releaseLink.setVisible(found);
+  resized(); // the strip makes room for the link
 }
 
 } // namespace dm

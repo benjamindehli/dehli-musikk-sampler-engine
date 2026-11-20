@@ -25,6 +25,11 @@
 #     .icns (Standalone .app + plugin bundles), Windows .ico (Standalone .exe).
 #     Linux desktop icons come from the tarball installer instead (packaging/linux
 #     ships the same PNG and points the .desktop entry at it).
+#   * the product page for the opt-in update check (DMSE_SITE_URL), worked out from
+#     the plugin repo's GitHub remote the way site/generate_site.py does:
+#     https://<owner>.github.io/<repo>/. With no GitHub remote there is no update
+#     check. Curl is linked for it, since JUCE's Linux networking needs curl for
+#     https.
 #
 # BUNDLE_ID defaults to com.dehlimusikk.<lowercased target>, which matches every
 # existing product; pass it explicitly only to deviate.
@@ -73,13 +78,42 @@ function(dmse_add_plugin target)
         COPY_PLUGIN_AFTER_BUILD TRUE
         VST3_CATEGORIES         "Instrument" "Sampler"
         AU_MAIN_TYPE            "kAudioUnitType_MusicDevice"
+        NEEDS_CURL              TRUE
     )
+    # Turns curl on in the engine's JUCE settings for this target only (see the
+    # engine's CMakeLists).
+    set_target_properties(${target} PROPERTIES DMSE_USE_CURL TRUE)
+
+    # The product page, from the repo's own remote, so the 13 plugin repos need
+    # nothing extra. Read at configure time.
+    find_package(Git QUIET)
+    set(_dmse_site "")
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" remote get-url origin
+            OUTPUT_VARIABLE _dmse_remote
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+            RESULT_VARIABLE _dmse_remote_result)
+        if(_dmse_remote_result EQUAL 0
+           AND _dmse_remote MATCHES "github\\.com[:/]+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$")
+            set(_dmse_owner "${CMAKE_MATCH_1}")
+            string(REGEX REPLACE "\\.git$" "" _dmse_repo "${CMAKE_MATCH_2}")
+            string(TOLOWER "${_dmse_owner}" _dmse_owner)
+            set(_dmse_site "https://${_dmse_owner}.github.io/${_dmse_repo}/")
+        endif()
+    endif()
+    if(_dmse_site)
+        message(STATUS "${target}: update check reads ${_dmse_site}latest.json")
+        target_compile_definitions(${target} PRIVATE DMSE_SITE_URL="${_dmse_site}")
+    else()
+        message(STATUS "${target}: no GitHub remote, so no update check")
+    endif()
 
     target_sources(${target} PRIVATE "${DMSE_ENGINE_DIR}/plugin/PluginEntry.cpp")
 
     target_compile_definitions(${target} PUBLIC
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
     )
 

@@ -16,6 +16,7 @@ add_library(dehli_musikk_sampler_engine STATIC
     source/ui/ManifestUiComponent.cpp
     source/ui/ManifestEditor.cpp
     source/params/ManifestParameters.cpp
+    source/UpdateCheck.cpp
 )
 
 target_include_directories(dehli_musikk_sampler_engine
@@ -40,15 +41,20 @@ target_link_libraries(dehli_musikk_sampler_engine
         juce::juce_recommended_warning_flags
 )
 
-# FLAC support in juce_audio_formats. Web/curl are off (same values the plugin
-# targets set) — REQUIRED on Linux, where juce_core/juce_gui_extra otherwise
-# demand libcurl and GTK/WebKit dev headers at compile time.
+# FLAC support in juce_audio_formats. The web browser is off, which is required
+# on Linux, where juce_gui_extra otherwise demands GTK/WebKit dev headers.
+#
+# Curl is off too, except in the plugins dmse_add_plugin makes, which mark
+# themselves with DMSE_USE_CURL. Their update check reaches an https address,
+# and JUCE's Linux networking needs curl for that. Read on the target that
+# consumes the engine, so DMSE Studio, the converter and the tests stay
+# without curl and need no libcurl headers on Linux.
 target_compile_definitions(dehli_musikk_sampler_engine
     PUBLIC
         JUCE_USE_FLAC=1
         JUCE_MODAL_LOOPS_PERMITTED=0
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
+        JUCE_USE_CURL=$<BOOL:$<TARGET_PROPERTY:DMSE_USE_CURL>>
 )
 
 # ---------------------------------------------------------------------------
@@ -76,6 +82,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/MissingSamplesTests.cpp
         tests/AccessibilityTests.cpp
         tests/StateRestoreTests.cpp
+        tests/UpdateCheckTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE
