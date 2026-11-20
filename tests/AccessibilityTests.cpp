@@ -73,14 +73,14 @@ public:
                              type.contains("ImageStateButton");
         if (control && child->isVisible()) {
           ++controls;
-          auto name = child->getTitle();
-          if (name.isEmpty())
+          auto title = child->getTitle();
+          if (title.isEmpty())
             if (auto *b = dynamic_cast<juce::Button *>(child))
-              name = b->getButtonText();
-          if (name.isEmpty())
+              title = b->getButtonText();
+          if (title.isEmpty())
             ++nameless;
           else
-            ++names[name];
+            ++names[title];
         }
         walk(*child);
       }
@@ -89,8 +89,8 @@ public:
 
     expect(controls >= 10, "the walk reached the manifest and editor controls");
     expectEquals(nameless, 0, "controls without a name");
-    for (const auto &[name, count] : names)
-      expectEquals(count, 1, "controls named " + name);
+    for (const auto &[title, count] : names)
+      expectEquals(count, 1, "controls named " + title);
 
     // The shape of each kind of name.
     expect(names.count("Envelope attack") == 1,
