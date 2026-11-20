@@ -1,0 +1,5 @@
+# Leaks the sanitizers job is told to ignore, for LeakSanitizer.
+#
+# fontconfig loads its configuration once, the first time JUCE looks up a font
+# on Linux, and never frees it. It is fontconfig's, not this code's.
+leak:FcInitLoadConfigAndFonts

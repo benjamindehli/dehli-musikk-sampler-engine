@@ -1,0 +1,90 @@
+# The engine's unit tests, on their own and again with the address and
+# undefined behaviour sanitizers.
+#
+# The engine configures on its own here, fetching the same pinned JUCE the
+# dehli-musikk-sample-plugins workspace uses (see the top of CMakeLists.txt), so
+# no plugin repo is needed. The tests load their own fixtures and need no
+# samples.
+
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Every job only reads the repository and builds it.
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run's answer irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Engine tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install JUCE build dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: bash .github/scripts/install-linux-deps.sh
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build the tests
+        run: cmake --build build --target dmse_tests --parallel 3
+      - name: Run the tests
+        run: ctest --test-dir build --output-on-failure
+
+  # The tests again, built with the sanitizers. The tests job answers whether
+  # the engine does the right thing. This one answers whether it does it without
+  # reading past a buffer or leaning on behaviour the standard leaves undefined,
+  # which a check cannot see: a read one byte off the end hands back a plausible
+  # number. Linux alone, since these are faults in the code, not the platform.
+  sanitizers:
+    name: Sanitizers
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install JUCE build dependencies
+        timeout-minutes: 10
+        run: bash .github/scripts/install-linux-deps.sh
+      # RelWithDebInfo, not Debug: Debug arms every jassert in JUCE, and a
+      # headless run trips ones that say nothing about this code.
+      - name: Configure
+        run: >
+          cmake -B build-san -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DDMSE_SANITIZE=ON
+      # Two at a time: a sanitized JUCE unit takes a lot of memory to compile.
+      - name: Build the tests
+        run: cmake --build build-san --target dmse_tests --parallel 2
+      # The log is checked as well as the exit status: the sanitizers carry on
+      # after a report, so one run lists everything, and a run can report a
+      # fault and still exit zero. -V, since ctest otherwise prints a test's
+      # output only when it fails, and such a report would never reach the log.
+      - name: Run the tests
+        env:
+          ASAN_OPTIONS: detect_leaks=1:detect_stack_use_after_return=1
+          # fontconfig's own one-time setup, see the file. The log lists every
+          # suppression used, so one that grows shows.
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/lsan.supp:print_suppressions=1
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: |
+          set -o pipefail
+          ctest --test-dir build-san -V 2>&1 | tee sanitizer.log
+      - name: Fail on anything the sanitizers reported
+        run: |
+          if grep -nE "runtime error:|ERROR: AddressSanitizer|ERROR: LeakSanitizer|SUMMARY: (Address|Undefined)" sanitizer.log; then
+            echo "::error::the sanitizers reported the lines above"
+            exit 1
+          fi
+          echo "clean"

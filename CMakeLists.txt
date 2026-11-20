@@ -3,6 +3,32 @@
 # Consumes JUCE modules directly (no JuceHeader.h). Plugin/CLI products link
 # against the `dehli_musikk_sampler_engine` target and include the engine's
 # public headers directly (e.g. <SamplerEngine.h>).
+#
+# Normally added by the dehli-musikk-sample-plugins workspace, which fetches JUCE
+# once for every sub-project. Configured on its own, as the engine's CI does, it
+# fetches the same JUCE itself, so its tests can be built from this repo alone:
+#   cmake -B build && cmake --build build --target dmse_tests
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.22)
+    # The version CITATION.cff states. JUCE wants one for the test program.
+    project(DehliMusikkSamplerEngine VERSION 1.0.0 LANGUAGES C CXX)
+    if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
+    endif()
+    # As the workspace sets them. Keep the JUCE tag the same as its
+    # JUCE_GIT_TAG, so the tests here build against what the plugins ship with.
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    include(FetchContent)
+    FetchContent_Declare(
+        JUCE
+        GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
+        GIT_TAG        9.0.6
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(JUCE)
+    enable_testing()
+endif()
 
 add_library(dehli_musikk_sampler_engine STATIC
     source/SamplerEngine.cpp
@@ -84,6 +110,21 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/StateRestoreTests.cpp
         tests/UpdateCheckTests.cpp
     )
+
+    # The tests and the engine they link, built with the address and undefined
+    # behaviour sanitizers, for the sanitizers job in CI. Never the plugins.
+    option(DMSE_SANITIZE "Build the engine tests with address and UB sanitizers" OFF)
+    if(DMSE_SANITIZE AND NOT MSVC)
+        foreach(target dmse_tests dehli_musikk_sampler_engine)
+            # Frame pointers and no tail calls, so a report names every frame.
+            target_compile_options(${target} PRIVATE
+                -fsanitize=address,undefined
+                -fno-omit-frame-pointer
+                -fno-optimize-sibling-calls
+                -g)
+            target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+        endforeach()
+    endif()
 
     target_link_libraries(dmse_tests PRIVATE
         dehli_musikk_sampler_engine
