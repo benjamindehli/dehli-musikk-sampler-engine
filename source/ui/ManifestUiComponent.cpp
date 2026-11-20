@@ -3,9 +3,52 @@
 #include <cmath>
 #include <model/NoteValues.h> // note-value table for the tempo-synced StrumSpeed detents
 #include <model/TableEval.h> // shared evalTableLinear (VISIBLE step tables / OPACITY ramps)
+#include <set>
 #include <vector>
 
 namespace dm {
+
+namespace {
+// What a screen reader calls a button and its states. The manifest gives a
+// button no name, only state names, which often share a leading word:
+// "velocity_off" and "velocity_on" make a button "Velocity" with the states
+// "Off" and "On". With no shared word ("Off" and "On", or "Diapason" and
+// "Viola") the button takes the name hosts show for its parameter,
+// "Button <n>", and the states are read as they are.
+struct ButtonWords {
+  juce::String name;
+  juce::StringArray states;
+};
+
+juce::String asWords(juce::String s) {
+  s = s.replaceCharacter('_', ' ').trim();
+  return s.substring(0, 1).toUpperCase() + s.substring(1);
+}
+
+ButtonWords buttonWords(const Button &b, int index) {
+  juce::StringArray raw;
+  for (const auto &st : b.states)
+    raw.add(st.name);
+
+  juce::String shared = raw.size() >= 2 ? raw[0] : juce::String();
+  for (const auto &r : raw)
+    while (shared.isNotEmpty() && !r.startsWith(shared))
+      shared = shared.dropLastCharacters(1);
+  // Only a whole word counts, so "Saw" and "Square" share nothing.
+  const int cut =
+      juce::jmax(shared.lastIndexOfChar('_'), shared.lastIndexOfChar(' '));
+  shared = cut > 0 ? shared.substring(0, cut + 1) : juce::String();
+
+  ButtonWords w;
+  w.name = shared.isNotEmpty() ? asWords(shared)
+                               : "Button " + juce::String(index + 1);
+  for (int i = 0; i < raw.size(); ++i) {
+    auto state = asWords(raw[i].substring(shared.length()));
+    w.states.add(state.isNotEmpty() ? state : juce::String(i + 1));
+  }
+  return w;
+}
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Filmstrip rotary knob: a vertical strip of `frames` images; the frame shown
@@ -130,9 +173,7 @@ public:
 #endif
     if (resetClick && !juce::exactlyEqual(value, defaultVal)) {
       value = defaultVal;
-      repaint();
-      if (onChange)
-        onChange(value);
+      changed();
     }
     dragStartX = e.position.x;
     dragStartY = e.position.y;
@@ -161,9 +202,7 @@ public:
     if (juce::exactlyEqual(v, value))
       return; // stepped knob hasn't crossed to the next step yet
     value = v;
-    repaint();
-    if (onChange)
-      onChange(value);
+    changed();
     if (onShowValue)
       onShowValue(*this, valueText());
   }
@@ -173,7 +212,50 @@ public:
       onHideValue();
   }
 
+  // To a screen reader the knob is a slider: it reads the value as the drag
+  // bubble shows it and can set it, snapped like a drag. The name is the
+  // control's label, set by ManifestUiComponent.
+  std::unique_ptr<juce::AccessibilityHandler>
+  createAccessibilityHandler() override {
+    struct Value : juce::AccessibilityValueInterface {
+      FilmstripKnob &knob;
+      explicit Value(FilmstripKnob &k) : knob(k) {}
+      bool isReadOnly() const override { return false; }
+      double getCurrentValue() const override { return knob.value; }
+      juce::String getCurrentValueAsString() const override {
+        return knob.valueText();
+      }
+      void setValue(double v) override {
+        const double nv = knob.snap(juce::jlimit(knob.minVal, knob.maxVal, v));
+        if (!juce::exactlyEqual(nv, knob.value)) {
+          knob.value = nv;
+          knob.changed();
+        }
+      }
+      AccessibleValueRange getRange() const override {
+        const double step =
+            knob.stepped ? 1.0 : (knob.maxVal - knob.minVal) / 100.0;
+        return {{knob.minVal, knob.maxVal}, step};
+      }
+      void setValueAsString(const juce::String &text) override {
+        setValue(text.getDoubleValue());
+      }
+    };
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this, juce::AccessibilityRole::slider, juce::AccessibilityActions{},
+        juce::AccessibilityHandler::Interfaces{std::make_unique<Value>(*this)});
+  }
+
 private:
+  // The value moved by the user: redraw, tell the owner, tell a screen reader.
+  void changed() {
+    repaint();
+    if (onChange)
+      onChange(value);
+    if (auto *h = getAccessibilityHandler())
+      h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
+  }
+
   juce::Image film;
   int frames;
   double minVal, maxVal, value{0.0};
@@ -192,8 +274,10 @@ private:
 // ---------------------------------------------------------------------------
 class ManifestUiComponent::ImageStateButton : public juce::Component {
 public:
-  ImageStateButton(std::vector<juce::Image> imgs, int initial)
-      : images(std::move(imgs)), state(initial) {}
+  ImageStateButton(std::vector<juce::Image> imgs, int initial,
+                   juce::StringArray namesOfStates = {})
+      : images(std::move(imgs)), stateNames(std::move(namesOfStates)),
+        state(initial) {}
 
   std::function<void(int)> onChange;
   std::function<void()> onRightClick; // context menu (MIDI Learn / Settings)
@@ -220,16 +304,51 @@ public:
         onRightClick();
       return;
     }
+    advance();
+  }
+
+  // To a screen reader the button is a button: pressing it does what a click
+  // does, and its value is the name of the state it is in. The name is set by
+  // ManifestUiComponent.
+  std::unique_ptr<juce::AccessibilityHandler>
+  createAccessibilityHandler() override {
+    return std::make_unique<juce::AccessibilityHandler>(
+        *this, juce::AccessibilityRole::button,
+        juce::AccessibilityActions().addAction(
+            juce::AccessibilityActionType::press, [this] { advance(); }),
+        juce::AccessibilityHandler::Interfaces{
+            std::make_unique<StateName>(*this)});
+  }
+
+  juce::String stateText() const {
+    return state >= 0 && state < stateNames.size() ? stateNames[state]
+                                                   : juce::String(state + 1);
+  }
+
+private:
+  struct StateName : juce::AccessibilityTextValueInterface {
+    ImageStateButton &button;
+    explicit StateName(ImageStateButton &b) : button(b) {}
+    bool isReadOnly() const override { return true; }
+    juce::String getCurrentValueAsString() const override {
+      return button.stateText();
+    }
+    void setValueAsString(const juce::String &) override {}
+  };
+
+  void advance() {
     if (images.size() < 2)
       return;
     state = (state + 1) % (int)images.size();
     repaint();
     if (onChange)
       onChange(state);
+    if (auto *h = getAccessibilityHandler())
+      h->notifyAccessibilityEvent(juce::AccessibilityEvent::valueChanged);
   }
 
-private:
   std::vector<juce::Image> images;
+  juce::StringArray stateNames; // as read out, e.g. "On" or "Mono"
   int state{0};
 };
 
@@ -368,6 +487,11 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
     registerId(im.id, registerWidget(std::move(w)));
   }
 
+  // Names already given on this tab, so a button whose derived name is taken
+  // (a "Reverb" button beside a "Reverb" knob) adds its states instead:
+  // "Reverb (Off / On)".
+  std::set<juce::String> namesInUse;
+
   for (int i = 0; i < tab.controls.size(); ++i) {
     auto &c = tab.controls.getReference(i);
     if (!c.skin.has_value())
@@ -399,6 +523,13 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
       if (valueBubble)
         valueBubble->setVisible(false);
     };
+    // The label is also the host's name for the parameter. Underscores, which
+    // many screen readers read aloud, become spaces: "envelope_attack" is
+    // read as "Envelope attack".
+    knob->setTitle(c.label.isNotEmpty() ? asWords(c.label)
+                                        : "Control " + juce::String(i + 1));
+    if (c.visible)
+      namesInUse.insert(knob->getTitle());
     addAndMakeVisible(knob);
     knob->setVisible(c.visible);
 
@@ -425,7 +556,13 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
     for (auto &st : b.states)
       imgs.push_back(provider ? provider(st.mainImage) : juce::Image());
 
-    auto *btn = new ImageStateButton(std::move(imgs), b.value.value_or(0));
+    auto words = buttonWords(b, i);
+    auto *btn = new ImageStateButton(std::move(imgs), b.value.value_or(0),
+                                     words.states);
+    if (namesInUse.count(words.name) != 0)
+      words.name += " (" + words.states.joinIntoString(" / ") + ")";
+    btn->setTitle(words.name);
+    namesInUse.insert(words.name);
     const Button *bp = &b;
     const int bi = i;
     btn->onChange = [this, bp, bi](int s) { handleButton(*bp, bi, s); };
@@ -458,6 +595,7 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
   for (int i = 0; i < tab.menus.size(); ++i) {
     auto &m = tab.menus.getReference(i);
     auto *combo = new juce::ComboBox();
+    combo->setTitle("Menu " + juce::String(i + 1));
     // Manifest-driven styling; defaults reproduce a transparent, left-aligned
     // overlay so a library that specifies no menu colours looks unstyled.
     auto argb = [](const juce::String &s) {

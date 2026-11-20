@@ -74,6 +74,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/AudioRegressionTests.cpp
         tests/SampleSourceTests.cpp
         tests/MissingSamplesTests.cpp
+        tests/AccessibilityTests.cpp
     )
 
     target_link_libraries(dmse_tests PRIVATE

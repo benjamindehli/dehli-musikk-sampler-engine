@@ -199,6 +199,22 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
     modeChooser.setVisible(true);
   }
 
+  // Names for screen readers on the editor's own controls. The instrument's
+  // knobs, buttons and menus are named by ManifestUiComponent.
+  masterSlider.setTitle("Output level");
+  modeSelector.setTitle("Mode");
+  pitchWheel.setTitle("Pitch bend");
+  modWheel.setTitle("Mod wheel");
+  pitchDriftWheel.setTitle("Pitch drift");
+  volDriftWheel.setTitle("Volume drift");
+  // The keyboard's two scroll arrows, made by JUCE, lower keys first.
+  {
+    int arrow = 0;
+    for (auto *child : keyboard.getChildren())
+      if (dynamic_cast<juce::Button *>(child) != nullptr)
+        child->setTitle(arrow++ == 0 ? "Show lower keys" : "Show higher keys");
+  }
+
   masterSlider.setSliderStyle(juce::Slider::LinearHorizontal);
   masterSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0,
                                0); // no inline number
