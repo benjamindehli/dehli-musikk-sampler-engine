@@ -154,9 +154,11 @@ void ManifestPluginProcessor::loadEmbeddedLibrary() {
     if (!packFile.existsAsFile())
       packFile = candidateIn(juce::File::commonApplicationDataDirectory);
   }
+  bool packUnreadable = false;
   if (packFile.existsAsFile()) {
     const auto indexFile = juce::File(packFile.getFullPathName() + ".json");
     if (!sampleSource->openPack(packFile, indexFile)) {
+      packUnreadable = true;
       DBG("ManifestPluginProcessor: sample pack present but failed to open: "
           << packFile.getFullPathName());
     }
@@ -188,6 +190,7 @@ void ManifestPluginProcessor::loadEmbeddedLibrary() {
     }
   }
 
+  int missing = 0;
   for (const auto &id : ids) {
     if (sampleSource->isRegistered(id))
       continue; // already provided by the memory-mapped pack
@@ -201,6 +204,27 @@ void ManifestPluginProcessor::loadEmbeddedLibrary() {
       }
     DBG("ManifestPluginProcessor: no asset for id " << id << " (" << filename
                                                     << ")");
+    ++missing;
+  }
+
+  // A sound that cannot be found plays silent, which looks like a broken
+  // plugin. Say so, and say where the samples belong: usually the installer
+  // did not put samples.pak in place, or it was moved or deleted.
+  if (missing > 0) {
+    const auto product =
+        assets.name.isNotEmpty() ? assets.name : juce::String("the plugin");
+    auto text = "Samples not found\n" + juce::String(missing) + " of " +
+                juce::String(ids.size()) +
+                " sounds could not be loaded and play silent. ";
+    if (packUnreadable)
+      text += packFile.getFullPathName() +
+              " is there but could not be read. Reinstall " + product + ".";
+    else if (packFile == juce::File())
+      text += "Reinstall " + product + ".";
+    else
+      text += "Reinstall " + product + ", or check that samples.pak is in " +
+              packFile.getParentDirectory().getFullPathName() + ".";
+    missingNotice = text;
   }
 
   // A library with no audio assets yet is still valid and must render its UI —

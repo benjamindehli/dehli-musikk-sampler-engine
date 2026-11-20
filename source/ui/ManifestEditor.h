@@ -106,6 +106,11 @@ public:
   virtual bool isLoading() const { return false; }
   virtual float loadProgress() const { return 1.0f; }
 
+  /** Set when some of the instrument's sounds could not be found, so they play
+      silent: a title line, then what is missing and where the samples should
+      be. Empty when everything loaded. The editor shows it as a notice. */
+  virtual juce::String missingSamplesNotice() const { return {}; }
+
   /** Called on the message thread each editor tick — lets the host do periodic
       message-thread housekeeping (e.g. free retired modes). */
   virtual void pollEngine() {}
@@ -286,6 +291,33 @@ private:
     }
   };
   LoadingOverlay loadingOverlay;
+
+  // Shown when some sounds could not be found (see
+  // ManifestEditorHost::missingSamplesNotice): the first line in bold, the
+  // rest wrapped below. Clicking it hides it for as long as the window is open.
+  struct MissingSamplesNotice : juce::Component {
+    juce::String text;
+    MissingSamplesNotice() { setTitle("Samples not found"); }
+    void paint(juce::Graphics &g) override {
+      const auto r = getLocalBounds().toFloat();
+      g.setColour(juce::Colour(0xff141516).withAlpha(0.94f));
+      g.fillRoundedRectangle(r, 6.0f);
+      g.setColour(juce::Colour(0xffd9643a));
+      g.drawRoundedRectangle(r.reduced(0.5f), 6.0f, 1.0f);
+      auto area = getLocalBounds().reduced(14, 10);
+      g.setColour(juce::Colour(0xffe8e9ea));
+      g.setFont(juce::Font(juce::FontOptions(15.0f, juce::Font::bold)));
+      g.drawText(text.upToFirstOccurrenceOf("\n", false, false),
+                 area.removeFromTop(20), juce::Justification::centredLeft);
+      g.setFont(juce::Font(juce::FontOptions(13.0f)));
+      g.setColour(juce::Colour(0xffc4c6c8));
+      g.drawFittedText(text.fromFirstOccurrenceOf("\n", false, false) +
+                           "  (Click to hide.)",
+                       area, juce::Justification::topLeft, 4, 1.0f);
+    }
+    void mouseUp(const juce::MouseEvent &) override { setVisible(false); }
+  };
+  MissingSamplesNotice missingNotice;
   WheelLookAndFeel wheelLnf;
   StandaloneWindowLookAndFeel standaloneLnf;
   juce::LookAndFeel_V4

@@ -186,6 +186,12 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
   addChildComponent(modeChooser);
   addChildComponent(instrumentOverlay); // shown per mode by layerOverlay() when
                                         // scope = instrument
+  // Added after the mode chooser so it sits in front of it.
+  missingNotice.text = host.missingSamplesNotice();
+  missingNotice.setDescription(missingNotice.text);
+  addChildComponent(missingNotice);
+  missingNotice.setVisible(missingNotice.text.isNotEmpty());
+
   if (host.needsModeChoice()) {
     auto *modeValue = host.getApvts().getRawParameterValue(params::id::mode);
     const int last = modeValue != nullptr ? (int)modeValue->load() : 0;
@@ -803,6 +809,10 @@ void ManifestEditor::resized() {
 
   learnBanner.setBounds(
       getLocalBounds().withSizeKeepingCentre(420, 26).withY(kTopStrip + 8));
+  missingNotice.setBounds(
+      getLocalBounds()
+          .withSizeKeepingCentre(juce::jmin(560, getWidth() - 24), 96)
+          .withY(kTopStrip + 8));
 
   if (settingsPanel != nullptr)
     settingsPanel->setBounds(getLocalBounds());

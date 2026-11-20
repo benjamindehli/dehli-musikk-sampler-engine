@@ -161,6 +161,7 @@ public:
     return false;
   }
   bool isLoading() const override { return engine.isLoading(); }
+  juce::String missingSamplesNotice() const override { return missingNotice; }
   float loadProgress() const override { return engine.loadProgress(); }
   juce::String strumSpeedText() const override {
     return engine.strumRateText();
@@ -233,6 +234,9 @@ private:
   std::unique_ptr<EmbeddedFlacSource> sampleSource;
   PresetLibrary library;
   bool loaded{false};
+  // See missingSamplesNotice(). Written once while the library loads, in the
+  // constructor, before any editor can read it.
+  juce::String missingNotice;
   std::unordered_map<std::string, juce::Image>
       imageCache; // decoded UI images by id (message thread)
 
