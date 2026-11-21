@@ -871,6 +871,11 @@ bool ManifestUiComponent::setValueById(const juce::String &idOrLabel,
   return true;
 }
 
+void ManifestUiComponent::setOverlayShown(bool shown) {
+  overlayShown = shown;
+  repaint();
+}
+
 void ManifestUiComponent::setWidgetValue(int widgetIdx, double value) {
   if (widgetIdx < 0 || widgetIdx >= (int)widgets.size())
     return;
@@ -975,7 +980,7 @@ void ManifestUiComponent::paintOverChildren(juce::Graphics &g) {
   // so it stays aligned at any size. When the overlay is scoped to also cover
   // the keyboard, the EDITOR paints it across that wider region instead, so
   // skip it here.
-  if (!overlay.isValid() || overlayInstrumentScope)
+  if (!overlay.isValid() || overlayInstrumentScope || !overlayShown)
     return;
 
   const int imgW = overlay.getWidth();

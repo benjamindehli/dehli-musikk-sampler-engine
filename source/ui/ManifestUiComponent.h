@@ -74,6 +74,12 @@ public:
      face into a known state, such as the screenshot renderer. */
   bool setValueById(const juce::String &idOrLabel, double value);
 
+  /** Whether the face draws its overlay over the controls. On by default. A
+     tool that pictures the controls alone, such as the screenshot renderer,
+     turns it off. An overlay scoped to the instrument is drawn by the editor
+     and is not affected. */
+  void setOverlayShown(bool shown);
+
   /** True when the overlay is present AND scoped to reach beyond the face (over
      the keyboard). In that case this component does NOT draw it — the editor
      paints it across the wider region instead — but exposes it via
@@ -157,6 +163,7 @@ private:
   juce::Image overlay; // optional, drawn over the background AND all controls
   bool overlayInstrumentScope{
       false};             // overlay reaches over the keyboard → editor draws it
+  bool overlayShown{true}; // setOverlayShown(false) leaves it out
   float bgCropFrac{0.0f}; // fraction of the background trimmed off the top
 
   // Per-plugin dropdown-popup styling (ui.menuPopup*). Assigned to the select

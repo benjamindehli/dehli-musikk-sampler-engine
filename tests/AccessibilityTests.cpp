@@ -150,6 +150,27 @@ public:
     expectWithinAbsoluteError(valueOf("chordOrder"), 1.0f, 1.0e-4f);
     expect(!face->setValueById("nothing_called_this", 1),
            "and an unknown name says so");
+
+    // The same tool can picture the controls without the overlay over them.
+    beginTest("setOverlayShown leaves the overlay out of the face");
+    dm::Ui overlaid;
+    overlaid.width = 20;
+    overlaid.height = 20;
+    overlaid.overlay = "overlay";
+    dm::ManifestUiComponent glass(overlaid, [](const juce::String &id) {
+      juce::Image image(juce::Image::ARGB, 4, 4, true);
+      if (id == "overlay")
+        image.clear(image.getBounds(), juce::Colours::red);
+      return image;
+    });
+    glass.setBounds(0, 0, 20, 20);
+    const auto middle = [&glass] {
+      return glass.createComponentSnapshot(glass.getLocalBounds())
+          .getPixelAt(10, 10);
+    };
+    expect(middle() == juce::Colours::red, "the overlay is drawn by default");
+    glass.setOverlayShown(false);
+    expect(middle() != juce::Colours::red, "and left out when asked");
     expect(names.count("Pitch bend") == 1 && names.count("Output level") == 1 &&
                names.count("Mode") == 1,
            "the editor names its own controls");
