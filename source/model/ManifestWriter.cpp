@@ -287,6 +287,7 @@ var writeControl(const Control &c) {
 var writeButton(const Button &b) {
   Obj o;
   o.setStr("id", b.id);
+  o.setStr("label", b.label);
   o.set("rect", writeRect(b.rect));
   o.setStr("style", b.style);
   o.setOpt("value", b.value);
@@ -367,6 +368,7 @@ var writeUi(const Ui &ui) {
       for (const auto &m : t.menus) {
         Obj mo;
         mo.setStr("id", m.id);
+        mo.setStr("label", m.label);
         mo.set("rect", writeRect(m.rect));
         mo.set("value", m.value);
         mo.setStr("textColor", m.textColor);

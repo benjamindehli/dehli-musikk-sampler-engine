@@ -403,6 +403,9 @@ createLayout(const PresetLibrary &lib) {
   // ids).
   StringArray btnOrder;
   std::map<juce::String, int> btnStates, btnDefault, btnNumber;
+  // The host's name for each: the first label any mode gives the button, else
+  // "Button <n>". Only the name, since the id comes from buttonParamId.
+  std::map<juce::String, juce::String> btnLabel;
   for (const auto &m : lib.modes)
     if (!m.ui.tabs.isEmpty()) {
       const auto &btns = m.ui.tabs.getReference(0).buttons;
@@ -411,18 +414,26 @@ createLayout(const PresetLibrary &lib) {
         const auto pid = buttonParamId(btn, i);
         if (!btnStates.count(pid)) {
           btnOrder.add(pid);
-          btnNumber[pid] = i + 1; // DAW display name stays "Button <n>"
+          btnNumber[pid] = i + 1; // "Button <n>" when no label names it
           btnDefault[pid] = btn.value.value_or(0);
           btnStates[pid] = 0;
         }
         btnStates[pid] = juce::jmax(btnStates[pid], btn.states.size());
+        if (btnLabel[pid].isEmpty() && btn.label.isNotEmpty()) {
+          // The same words a screen reader hears, see ManifestUiComponent.
+          const auto words = btn.label.replaceCharacter('_', ' ').trim();
+          btnLabel[pid] =
+              words.substring(0, 1).toUpperCase() + words.substring(1);
+        }
       }
     }
   for (const auto &pid : btnOrder)
     if (const int n = btnStates[pid]; n >= 2)
       p.push_back(std::make_unique<AudioParameterInt>(
-          ParameterID{pid, 1}, "Button " + String(btnNumber[pid]), 0, n - 1,
-          juce::jlimit(0, n - 1, btnDefault[pid])));
+          ParameterID{pid, 1},
+          btnLabel[pid].isNotEmpty() ? btnLabel[pid]
+                                     : "Button " + String(btnNumber[pid]),
+          0, n - 1, juce::jlimit(0, n - 1, btnDefault[pid])));
 
   // Chord-order menu (first dropdown found).
   auto chordOpts = firstMenuOptions(lib);

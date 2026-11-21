@@ -292,6 +292,10 @@ struct ButtonState {
 struct Button {
   juce::String id; // stable unique id (VISIBLE/OPACITY/VALUE/PATH targets
                    // resolve to this)
+  // What the button is called, for screen readers and the host's parameter
+  // name. Optional: empty means a name is made from what its state names
+  // share, or "Button <n>". Never part of the parameter id.
+  juce::String label;
   Rect rect;
   juce::String style; // image | ...
   std::optional<int> value;
@@ -327,6 +331,9 @@ struct MenuOption {
 struct Menu {
   juce::String
       id; // stable unique id (VISIBLE/OPACITY/VALUE targets resolve to this)
+  // What the menu is called, for screen readers. Optional: empty means
+  // "Menu <n>".
+  juce::String label;
   Rect rect;
   int value = 1; // selected option (1-based, as authored)
   juce::Array<MenuOption> options;

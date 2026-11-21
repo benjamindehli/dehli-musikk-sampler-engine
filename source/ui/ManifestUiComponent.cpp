@@ -40,8 +40,9 @@ ButtonWords buttonWords(const Button &b, int index) {
   shared = cut > 0 ? shared.substring(0, cut + 1) : juce::String();
 
   ButtonWords w;
-  w.name = shared.isNotEmpty() ? asWords(shared)
-                               : "Button " + juce::String(index + 1);
+  w.name = b.label.isNotEmpty()  ? asWords(b.label)
+           : shared.isNotEmpty() ? asWords(shared)
+                                 : "Button " + juce::String(index + 1);
   for (int i = 0; i < raw.size(); ++i) {
     auto state = asWords(raw[i].substring(shared.length()));
     w.states.add(state.isNotEmpty() ? state : juce::String(i + 1));
@@ -595,7 +596,8 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
   for (int i = 0; i < tab.menus.size(); ++i) {
     auto &m = tab.menus.getReference(i);
     auto *combo = new juce::ComboBox();
-    combo->setTitle("Menu " + juce::String(i + 1));
+    combo->setTitle(m.label.isNotEmpty() ? asWords(m.label)
+                                         : "Menu " + juce::String(i + 1));
     // Manifest-driven styling; defaults reproduce a transparent, left-aligned
     // overlay so a library that specifies no menu colours looks unstyled.
     auto argb = [](const juce::String &s) {

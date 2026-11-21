@@ -30,10 +30,14 @@ const char *kManifest = R"({
             { "id":"b2", "rect":{"x":150,"y":10,"width":30,"height":20},
               "states": [ {"name":"Off"}, {"name":"On"} ] },
             { "id":"b3", "rect":{"x":190,"y":10,"width":30,"height":20},
-              "states": [ {"name":"keyboard_mono"}, {"name":"keyboard_poly"} ] } ],
+              "states": [ {"name":"keyboard_mono"}, {"name":"keyboard_poly"} ] },
+            { "id":"b4", "label":"vibrato_depth", "rect":{"x":110,"y":40,"width":30,"height":20},
+              "states": [ {"name":"Light"}, {"name":"Deep"} ] } ],
           "menus": [
             { "id":"m1", "rect":{"x":230,"y":10,"width":80,"height":20},
-              "options": [ {"name":"Short"}, {"name":"Long"} ] } ] } ] } },
+              "options": [ {"name":"Short"}, {"name":"Long"} ] },
+            { "id":"m2", "label":"Chord order", "rect":{"x":230,"y":40,"width":80,"height":20},
+              "options": [ {"name":"Up"}, {"name":"Down"} ] } ] } ] } },
       { "name": "Two",
         "amp": { "attack":0, "decay":0, "sustain":1, "release":0, "volume":1, "velTrack":0 },
         "groups": [] } ]
@@ -102,6 +106,19 @@ public:
     expect(names.count("Button 2") == 1,
            "a button whose states share nothing takes its host name");
     expect(names.count("Menu 1") == 1, "a menu is named");
+    expect(names.count("Vibrato depth") == 1,
+           "a button's label names it, whatever its states share");
+    expect(names.count("Chord order") == 1, "and a menu's label names it");
+
+    // The host shows the same words for the button's parameter, and the id
+    // stays the one the button's id gives it.
+    bool hostName = false;
+    for (auto *param : p->getParameters())
+      if (auto *withId =
+              dynamic_cast<juce::AudioProcessorParameterWithID *>(param))
+        if (withId->getName(64) == "Vibrato depth")
+          hostName = !withId->paramID.containsIgnoreCase("vibrato");
+    expect(hostName, "the host names the button's parameter by its label too");
     expect(names.count("Pitch bend") == 1 && names.count("Output level") == 1 &&
                names.count("Mode") == 1,
            "the editor names its own controls");

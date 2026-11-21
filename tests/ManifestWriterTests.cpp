@@ -28,6 +28,44 @@ public:
                               "autostrum.json", "kitchensink.json"})
       roundTrip(fixtureName);
     testKeyPressureRoundTrip();
+    testLabelRoundTrip();
+  }
+
+  void testLabelRoundTrip() {
+    beginTest("button and menu labels survive write → load");
+
+    auto m1 = dm::loadManifestFromJson(R"({
+            "schema":1,
+            "modes":[{ "name":"A", "groups":[],
+              "ui":{ "width":100, "height":100, "tabs":[{ "name":"main",
+                "buttons":[{ "id":"b1", "label":"Vibrato",
+                             "rect":{"x":0,"y":0,"width":10,"height":10},
+                             "states":[{"name":"off"},{"name":"on"}] },
+                           { "id":"b2",
+                             "rect":{"x":20,"y":0,"width":10,"height":10},
+                             "states":[{"name":"off"},{"name":"on"}] }],
+                "menus":[{ "id":"m1", "label":"Chord order",
+                           "rect":{"x":0,"y":20,"width":40,"height":10},
+                           "options":[{"name":"Up"},{"name":"Down"}] }] }] } }]
+        })");
+    expect(m1.ok);
+    expect(m1.warnings.isEmpty(), m1.warnings.joinIntoString("; "));
+
+    const auto text = dm::writeManifestToJson(m1.library);
+    auto m2 = dm::loadManifestFromJson(text);
+    expect(m2.ok && !m2.library.modes.isEmpty() &&
+           !m2.library.modes[0].ui.tabs.isEmpty());
+    if (!m2.ok || m2.library.modes.isEmpty() ||
+        m2.library.modes[0].ui.tabs.isEmpty())
+      return;
+    const auto &tab = m2.library.modes.getReference(0).ui.tabs.getReference(0);
+    expectEquals(tab.buttons[0].label, juce::String("Vibrato"));
+    expectEquals(tab.menus[0].label, juce::String("Chord order"));
+    expect(tab.buttons[1].label.isEmpty(), "an unlabelled button stays so");
+    const juce::String key = "\"label\"";
+    expectEquals((text.length() - text.replace(key, "").length()) /
+                     key.length(),
+                 2, "only the two labelled ones write the key");
   }
 
   void testKeyPressureRoundTrip() {

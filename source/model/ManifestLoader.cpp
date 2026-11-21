@@ -392,10 +392,11 @@ Control parseControl(const var &v) {
 
 Button parseButton(const var &v) {
   Button b;
-  checkKeys(
-      v, "button",
-      {"id", "rect", "style", "value", "controlIndex", "visible", "states"});
+  checkKeys(v, "button",
+            {"id", "label", "rect", "style", "value", "controlIndex", "visible",
+             "states"});
   b.id = str(v, "id");
+  b.label = str(v, "label");
   b.rect = parseRect(get(v, "rect"));
   b.style = str(v, "style");
   b.value = optI(v, "value");
@@ -476,9 +477,11 @@ Ui parseUi(const var &v) {
         for (auto &e : *a) {
           Menu menu;
           checkKeys(e, "menu",
-                    {"id", "rect", "value", "textColor", "backgroundColor",
-                     "hAlign", "controlIndex", "visible", "options"});
+                    {"id", "label", "rect", "value", "textColor",
+                     "backgroundColor", "hAlign", "controlIndex", "visible",
+                     "options"});
           menu.id = str(e, "id");
+          menu.label = str(e, "label");
           menu.rect = parseRect(get(e, "rect"));
           menu.value = intg(e, "value", 1);
           menu.textColor = str(e, "textColor");
