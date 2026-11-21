@@ -252,17 +252,15 @@ static double buttonBindingValue(const Binding &b) {
 
 // ---------------------------------------------------------------------------
 
-static juce::StringArray firstMenuOptions(const PresetLibrary &lib) {
-  juce::StringArray names;
+// The first dropdown with options, in any mode: the one the chordOrder
+// parameter follows (see the editor's onMenuChanged). nullptr if none.
+static const Menu *firstMenu(const PresetLibrary &lib) {
   for (const auto &m : lib.modes)
     if (!m.ui.tabs.isEmpty())
       for (const auto &menu : m.ui.tabs.getReference(0).menus)
-        if (!menu.options.isEmpty()) {
-          for (const auto &o : menu.options)
-            names.add(o.name);
-          return names;
-        }
-  return names;
+        if (!menu.options.isEmpty())
+          return &menu;
+  return nullptr;
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -435,11 +433,21 @@ createLayout(const PresetLibrary &lib) {
                                      : "Button " + String(btnNumber[pid]),
           0, n - 1, juce::jlimit(0, n - 1, btnDefault[pid])));
 
-  // Chord-order menu (first dropdown found).
-  auto chordOpts = firstMenuOptions(lib);
-  if (!chordOpts.isEmpty())
+  // The first dropdown found. Its id is chordOrder, after the strum order menu
+  // it was made for, but it follows whatever that menu chooses: an amplifier
+  // or a patch in some instruments. So the host's name is the menu's label
+  // when it has one, and "Chord Order" otherwise.
+  if (const auto *menu = firstMenu(lib)) {
+    StringArray options;
+    for (const auto &o : menu->options)
+      options.add(o.name);
+    auto name = menu->label.replaceCharacter('_', ' ').trim();
+    name = name.isNotEmpty()
+               ? name.substring(0, 1).toUpperCase() + name.substring(1)
+               : String("Chord Order");
     p.push_back(std::make_unique<AudioParameterChoice>(
-        ParameterID{id::chordOrder, 1}, "Chord Order", chordOpts, 0));
+        ParameterID{id::chordOrder, 1}, name, options, 0));
+  }
 
   return {p.begin(), p.end()};
 }

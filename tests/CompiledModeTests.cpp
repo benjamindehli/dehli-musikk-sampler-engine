@@ -212,6 +212,7 @@ public:
            "id-resolved group-effect LEVEL should attenuate the gain slot");
 
     testModulatorGroupEffectById();
+    testFirstMenuName();
   }
 
   // The engine's LFO path resolves group-effect modulator targets separately
@@ -221,6 +222,36 @@ public:
   // from the id. If it fails, no groupFx target is built and the output is
   // constant; success means the LFO sweeps the gain, so the rendered level
   // varies block to block.
+  // The first menu's parameter has the id chordOrder, after the strum order
+  // menu it was made for, but it follows whatever that menu chooses. Its name
+  // comes from the menu's label, and is "Chord Order" without one.
+  void testFirstMenuName() {
+    beginTest("the first menu's parameter is named after its label");
+    const auto layoutName = [](const char *menuLabel) {
+      const juce::String label =
+          menuLabel != nullptr
+              ? juce::String(R"("label":")") + menuLabel + "\","
+              : juce::String();
+      auto parsed = dm::loadManifestFromJson(R"({"schema":1,"modes":[{
+          "name":"A","groups":[],"ui":{"width":100,"height":100,"tabs":[{
+          "name":"main","menus":[{"id":"m1",)" +
+                                             label + R"(
+          "rect":{"x":0,"y":0,"width":40,"height":10},
+          "options":[{"name":"Direct"},{"name":"British"}]}]}]}}]})");
+      DummyProcessor proc;
+      juce::AudioProcessorValueTreeState apvts(
+          proc, nullptr, "PARAMS", dm::params::createLayout(parsed.library));
+      auto *param = apvts.getParameter(dm::params::id::chordOrder);
+      return param != nullptr ? param->getName(64) : juce::String("(none)");
+    };
+    expectEquals(layoutName("Amplifier"), juce::String("Amplifier"),
+                 "a labelled first menu names the parameter");
+    expectEquals(layoutName("amp_type"), juce::String("Amp type"),
+                 "in the words a screen reader says");
+    expectEquals(layoutName(nullptr), juce::String("Chord Order"),
+                 "an unlabelled one keeps the old name");
+  }
+
   void testModulatorGroupEffectById() {
     beginTest("LFO modulator resolves a group-effect target by id");
 
