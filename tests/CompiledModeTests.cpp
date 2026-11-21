@@ -213,6 +213,7 @@ public:
 
     testModulatorGroupEffectById();
     testFirstMenuName();
+    testSharedButtonName();
   }
 
   // The engine's LFO path resolves group-effect modulator targets separately
@@ -250,6 +251,42 @@ public:
                  "in the words a screen reader says");
     expectEquals(layoutName(nullptr), juce::String("Chord Order"),
                  "an unlabelled one keeps the old name");
+  }
+
+  // One button id can be a different button in another mode, and all modes
+  // share its parameter, so the host's name lists each different label once.
+  void testSharedButtonName() {
+    beginTest("a button parameter lists each mode's different label once");
+    const auto mode = [](const char *modeName, const char *label0,
+                         const char *label1) {
+      const auto button = [](int i, const char *label) {
+        return juce::String(R"({"id":"btn_)") + juce::String(i) + "\"," +
+               (label != nullptr ? juce::String(R"("label":")") + label + "\","
+                                 : juce::String()) +
+               R"("rect":{"x":0,"y":0,"width":10,"height":10},
+                  "states":[{"name":"a"},{"name":"b"}]})";
+      };
+      return juce::String(R"({"name":")") + modeName +
+             R"(","groups":[],"ui":{"width":100,"height":100,"tabs":[{
+             "name":"main","buttons":[)" +
+             button(0, label0) + "," + button(1, label1) + "]}]}}";
+    };
+    auto parsed = dm::loadManifestFromJson(
+        R"({"schema":1,"modes":[)" + mode("Bass", "Effects", nullptr) + "," +
+        mode("Drums", "Velocity", "Effects") + "," +
+        mode("Chords", "Effects", nullptr) + "]}");
+    expect(parsed.ok, parsed.errors.joinIntoString("; "));
+    DummyProcessor proc;
+    juce::AudioProcessorValueTreeState apvts(
+        proc, nullptr, "PARAMS", dm::params::createLayout(parsed.library));
+    const auto nameOf = [&apvts](const char *id) {
+      auto *param = apvts.getParameter(id);
+      return param != nullptr ? param->getName(64) : juce::String("(none)");
+    };
+    expectEquals(nameOf("btn_0"), juce::String("Effects / Velocity"),
+                 "each different label once, in mode order");
+    expectEquals(nameOf("btn_1"), juce::String("Effects"),
+                 "a label from one mode names it alone");
   }
 
   void testModulatorGroupEffectById() {

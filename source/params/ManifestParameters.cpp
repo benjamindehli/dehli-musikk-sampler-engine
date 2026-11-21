@@ -401,9 +401,12 @@ createLayout(const PresetLibrary &lib) {
   // ids).
   StringArray btnOrder;
   std::map<juce::String, int> btnStates, btnDefault, btnNumber;
-  // The host's name for each: the first label any mode gives the button, else
-  // "Button <n>". Only the name, since the id comes from buttonParamId.
-  std::map<juce::String, juce::String> btnLabel;
+  // The host's name for each: the labels its modes give the button, each
+  // different one once in mode order and joined with " / ", since one id can be
+  // a different button in another mode (Omni-84's btn_0 is Effects, Velocity
+  // or Voices). Else "Button <n>". Only the name: the id comes from
+  // buttonParamId.
+  std::map<juce::String, StringArray> btnLabels;
   for (const auto &m : lib.modes)
     if (!m.ui.tabs.isEmpty()) {
       const auto &btns = m.ui.tabs.getReference(0).buttons;
@@ -417,11 +420,11 @@ createLayout(const PresetLibrary &lib) {
           btnStates[pid] = 0;
         }
         btnStates[pid] = juce::jmax(btnStates[pid], btn.states.size());
-        if (btnLabel[pid].isEmpty() && btn.label.isNotEmpty()) {
+        if (btn.label.isNotEmpty()) {
           // The same words a screen reader hears, see ManifestUiComponent.
           const auto words = btn.label.replaceCharacter('_', ' ').trim();
-          btnLabel[pid] =
-              words.substring(0, 1).toUpperCase() + words.substring(1);
+          btnLabels[pid].addIfNotAlreadyThere(
+              words.substring(0, 1).toUpperCase() + words.substring(1));
         }
       }
     }
@@ -429,8 +432,8 @@ createLayout(const PresetLibrary &lib) {
     if (const int n = btnStates[pid]; n >= 2)
       p.push_back(std::make_unique<AudioParameterInt>(
           ParameterID{pid, 1},
-          btnLabel[pid].isNotEmpty() ? btnLabel[pid]
-                                     : "Button " + String(btnNumber[pid]),
+          !btnLabels[pid].isEmpty() ? btnLabels[pid].joinIntoString(" / ")
+                                    : "Button " + String(btnNumber[pid]),
           0, n - 1, juce::jlimit(0, n - 1, btnDefault[pid])));
 
   // The first dropdown found. Its id is chordOrder, after the strum order menu
