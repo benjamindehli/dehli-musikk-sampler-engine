@@ -66,6 +66,14 @@ public:
      has no SEQ_PLAYBACK_RATE knob. */
   void setStrumSpeedSynced(bool synced);
 
+  /** Sets a knob, button or menu as if a person had: a knob to a value in its
+     own range, a button to a state index, a menu to an option index. Lights,
+     visibility, linked controls and the parameter all follow, as from a click.
+     `idOrLabel` is an element id (btn_0, menu_0, ctl_3) or a knob's label.
+     Returns false if nothing has that id or label. For tools that put the
+     face into a known state, such as the screenshot renderer. */
+  bool setValueById(const juce::String &idOrLabel, double value);
+
   /** True when the overlay is present AND scoped to reach beyond the face (over
      the keyboard). In that case this component does NOT draw it — the editor
      paints it across the wider region instead — but exposes it via

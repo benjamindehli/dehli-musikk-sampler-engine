@@ -845,6 +845,32 @@ void ManifestUiComponent::applyValueBindings(
     }
 }
 
+bool ManifestUiComponent::setValueById(const juce::String &idOrLabel,
+                                       double value) {
+  int index = -1;
+  if (const auto it = byId.find(idOrLabel); it != byId.end())
+    index = it->second;
+  else
+    for (size_t i = 0; i < widgets.size(); ++i)
+      if (widgets[i].kind == Widget::Kind::knob &&
+          widgets[i].control != nullptr &&
+          widgets[i].control->label == idOrLabel)
+        index = (int)i;
+  if (index < 0)
+    return false;
+  // A menu reports its change asynchronously when the face sets it, which a
+  // caller putting the face into a known state cannot wait for, so here it is
+  // reported at once. Knobs and buttons already are.
+  if (widgets[(size_t)index].kind == Widget::Kind::menu) {
+    auto *combo =
+        static_cast<juce::ComboBox *>(widgets[(size_t)index].comp.get());
+    combo->setSelectedId((int)value + 1, juce::sendNotificationSync);
+    return true;
+  }
+  setWidgetValue(index, value);
+  return true;
+}
+
 void ManifestUiComponent::setWidgetValue(int widgetIdx, double value) {
   if (widgetIdx < 0 || widgetIdx >= (int)widgets.size())
     return;
