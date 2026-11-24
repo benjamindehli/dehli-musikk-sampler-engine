@@ -205,7 +205,8 @@ private:
       const Menu &menu) const; // structural (Ui tree is copied in the renderer)
   void setParam(const char *paramId, float nativeValue);
   void openSettings();
-  void applyReadingOrder(); // the order a screen reader and Tab take
+  void applyReadingOrder();      // the order a screen reader and Tab take
+  void announceUpdateQuestion(); // send a screen reader to the question
   void showContextMenu(const juce::String &paramId,
                        juce::Component *target); // empty id → Settings only
   void shiftKeyboardOctave(int deltaOctaves);
@@ -345,6 +346,14 @@ private:
   struct UpdateQuestion : juce::Component {
     juce::String product;
     juce::TextButton yes{"Yes"}, notNow{"Not now"};
+    // Set when a screen reader has been sent to the question, so it is sent
+    // once each time the question shows.
+    bool announced = false;
+    juce::String explanation() const {
+      return "When the window opens, " + product +
+             " can check for a new version. It reads one small file from its "
+             "product page and sends nothing about you.";
+    }
     UpdateQuestion() {
       setTitle("Check for a new version?");
       yes.setTitle("Check for a new version");
@@ -365,12 +374,8 @@ private:
                  juce::Justification::centredLeft);
       g.setFont(juce::Font(juce::FontOptions(13.0f)));
       g.setColour(juce::Colour(0xffc4c6c8));
-      g.drawFittedText("When the window opens, " + product +
-                           " can check for a new version. It reads one small "
-                           "file from its product page and sends nothing "
-                           "about you.",
-                       area.withTrimmedBottom(30), juce::Justification::topLeft,
-                       3, 1.0f);
+      g.drawFittedText(explanation(), area.withTrimmedBottom(30),
+                       juce::Justification::topLeft, 3, 1.0f);
     }
     void resized() override {
       auto row = getLocalBounds().reduced(14, 10).removeFromBottom(26);

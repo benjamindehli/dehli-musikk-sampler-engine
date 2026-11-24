@@ -650,6 +650,7 @@ void ManifestEditor::refreshWidgets() {
 
 void ManifestEditor::timerCallback() {
   refreshWidgets();
+  announceUpdateQuestion();
   float peakL = 0.0f, peakR = 0.0f;
   host.readOutputPeaks(peakL, peakR);
   outputMeter.setLevels(peakL, peakR);
@@ -926,6 +927,25 @@ void ManifestEditor::resized() {
   instrumentOverlay.setBounds(
       getLocalBounds().withTrimmedTop(kTopStrip).withTrimmedBottom(
           kBottomStrip));
+}
+
+// A screen reader reads the window in an order of its own, which can put the
+// question after the face's first controls. Once the question is on screen,
+// the reader is moved to it, and reads its title and explanation. The card
+// takes no keyboard focus, so the computer keyboard keeps playing notes and
+// no key press answers the question by accident. Nothing is sent when no
+// screen reader is running.
+void ManifestEditor::announceUpdateQuestion() {
+  if (!updateQuestion.isShowing()) {
+    updateQuestion.announced = false;
+    return;
+  }
+  if (updateQuestion.announced)
+    return;
+  updateQuestion.announced = true;
+  updateQuestion.setDescription(updateQuestion.explanation());
+  if (auto *handler = updateQuestion.getAccessibilityHandler())
+    handler->grabFocus();
 }
 
 void ManifestEditor::maybeAskAboutUpdates() {
