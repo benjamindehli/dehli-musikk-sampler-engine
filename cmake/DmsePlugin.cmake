@@ -13,7 +13,7 @@
 #     folder the engine reads at runtime (keyed by product name):
 #         macOS:   ~/Library/Application Support/DehliMusikk/<product>/
 #         Windows: %APPDATA%/DehliMusikk/<product>/
-#         Linux:   ~/.local/share/DehliMusikk/<product>/
+#         Linux:   $XDG_DATA_HOME/DehliMusikk/<product>/, ~/.local/share unless set
 #   * the custom Standalone app (plugin/DehliStandaloneApp.cpp) so its .settings file
 #     nests under the DehliMusikk folder too
 #   * packaging identity metadata → ${CMAKE_BINARY_DIR}/dmse_plugins/<Target>.json
@@ -155,6 +155,8 @@ function(dmse_add_plugin target)
         set(_dmse_pack_dest "$ENV{HOME}/Library/Application Support/DehliMusikk/${ARG_PRODUCT_NAME}")
     elseif(WIN32)
         set(_dmse_pack_dest "$ENV{APPDATA}/DehliMusikk/${ARG_PRODUCT_NAME}")
+    elseif(IS_ABSOLUTE "$ENV{XDG_DATA_HOME}")
+        set(_dmse_pack_dest "$ENV{XDG_DATA_HOME}/DehliMusikk/${ARG_PRODUCT_NAME}")
     else()
         set(_dmse_pack_dest "$ENV{HOME}/.local/share/DehliMusikk/${ARG_PRODUCT_NAME}")
     endif()

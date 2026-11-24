@@ -5,6 +5,7 @@
 #include <ManifestPluginProcessor.h>
 #include <juce_audio_formats/juce_audio_formats.h>
 
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -79,6 +80,55 @@ public:
       auto p = processorWith({"a.flac", "b.flac"});
       expect(p->missingSamplesNotice().isEmpty(), p->missingSamplesNotice());
     }
+
+    // The last folder is the one the installer writes and the notice names.
+    beginTest("the pack is looked for in a DehliMusikk folder per product");
+    {
+      const auto folders =
+          dm::ManifestPluginProcessor::packFolders("Test Instrument");
+      expect(!folders.isEmpty());
+      for (const auto &f : folders) {
+        expectEquals(f.getFileName(), juce::String("Test Instrument"));
+        expectEquals(f.getParentDirectory().getFileName(),
+                     juce::String("DehliMusikk"));
+      }
+    }
+
+#if JUCE_LINUX || JUCE_BSD
+    // The tarball's install.sh copies the pack to the XDG data folder, so the
+    // engine must look there and nowhere a per-user install cannot write.
+    beginTest("on Linux the pack is looked for in the XDG data folder");
+    {
+      const auto saved =
+          juce::SystemStats::getEnvironmentVariable("XDG_DATA_HOME", {});
+      const auto home =
+          juce::File::getSpecialLocation(juce::File::userHomeDirectory);
+
+      unsetenv("XDG_DATA_HOME");
+      auto folders =
+          dm::ManifestPluginProcessor::packFolders("Test Instrument");
+      expectEquals(folders.size(), 1);
+      expectEquals(folders[0].getFullPathName(),
+                   home.getChildFile(".local/share/DehliMusikk/Test Instrument")
+                       .getFullPathName());
+
+      setenv("XDG_DATA_HOME", "/tmp/dmse-xdg-test", 1);
+      folders = dm::ManifestPluginProcessor::packFolders("Test Instrument");
+      expectEquals(
+          folders[0].getFullPathName(),
+          juce::String("/tmp/dmse-xdg-test/DehliMusikk/Test Instrument"));
+
+      // A relative value is not valid XDG and is ignored.
+      setenv("XDG_DATA_HOME", "relative/path", 1);
+      folders = dm::ManifestPluginProcessor::packFolders("Test Instrument");
+      expect(folders[0].isAChildOf(home), folders[0].getFullPathName());
+
+      if (saved.isNotEmpty())
+        setenv("XDG_DATA_HOME", saved.toRawUTF8(), 1);
+      else
+        unsetenv("XDG_DATA_HOME");
+    }
+#endif
   }
 };
 

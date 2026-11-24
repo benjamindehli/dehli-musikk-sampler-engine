@@ -63,6 +63,11 @@ public:
   explicit ManifestPluginProcessor(Assets assets);
   ~ManifestPluginProcessor() override;
 
+  /** The folders a product's samples.pak is looked for in, in order, when
+      Assets::packFile is not set. The last is where the installer puts it,
+      which the missing-samples notice names. */
+  static juce::Array<juce::File> packFolders(const juce::String &productName);
+
   // --- AudioProcessor ------------------------------------------------------
   void prepareToPlay(double sampleRate, int samplesPerBlock) override;
   void releaseResources() override;

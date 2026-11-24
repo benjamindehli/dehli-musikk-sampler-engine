@@ -6,6 +6,44 @@
 
 namespace dm {
 
+// The user folder first, where a dev build installs the pack (see
+// DmsePlugin.cmake), then the system folder the installers write, so every
+// user account finds the samples:
+//   macOS:   ~/Library/Application Support/DehliMusikk/<name>/ then
+//            /Library/Application Support/DehliMusikk/<name>/
+//   Windows: %APPDATA%/DehliMusikk/<name>/ then
+//            %PROGRAMDATA%/DehliMusikk/<name>/
+//   Linux:   $XDG_DATA_HOME/DehliMusikk/<name>/, which is
+//            ~/.local/share/DehliMusikk/<name>/ unless set. The tarball's
+//            install.sh is per user and needs no root, so there is no
+//            system folder.
+juce::Array<juce::File>
+ManifestPluginProcessor::packFolders(const juce::String &productName) {
+  juce::Array<juce::File> roots;
+#if JUCE_LINUX || JUCE_BSD
+  const auto xdg =
+      juce::SystemStats::getEnvironmentVariable("XDG_DATA_HOME", {});
+  roots.add(juce::File::isAbsolutePath(xdg)
+                ? juce::File(xdg)
+                : juce::File::getSpecialLocation(juce::File::userHomeDirectory)
+                      .getChildFile(".local/share"));
+#else
+  for (auto root : {juce::File::userApplicationDataDirectory,
+                    juce::File::commonApplicationDataDirectory}) {
+    auto dir = juce::File::getSpecialLocation(root);
+#if JUCE_MAC
+    dir = dir.getChildFile(
+        "Application Support"); // JUCE gives ~/Library and /Library on macOS
+#endif
+    roots.add(dir);
+  }
+#endif
+  juce::Array<juce::File> folders;
+  for (const auto &root : roots)
+    folders.add(root.getChildFile("DehliMusikk").getChildFile(productName));
+  return folders;
+}
+
 ManifestPluginProcessor::ManifestPluginProcessor(Assets a)
     : juce::AudioProcessor(BusesProperties().withOutput(
           "Output", juce::AudioChannelSet::stereo(), true)),
@@ -137,33 +175,18 @@ void ManifestPluginProcessor::loadEmbeddedLibrary() {
   sampleSource = std::make_unique<EmbeddedFlacSource>();
 
   // Samples ship as a memory-mapped pack (samples.pak + .json index) in a
-  // shared support folder rather than compiled into the binary — register those
+  // shared support folder rather than compiled into the binary. Register those
   // first; anything the pack doesn't cover (IRs, or a plugin built with
   // --no-pack-samples) falls back to embedded BinaryData below. A plugin may
-  // override the path via Assets::packFile; otherwise try the USER folder first
-  // (dev builds install there via CMake), then the SYSTEM folder (what the
-  // shipped installers write, so every user account finds the samples):
-  //   macOS:   ~/Library/Application Support/DehliMusikk/<name>/  then
-  //   /Library/Application Support/DehliMusikk/<name>/ Windows:
-  //   %APPDATA%/DehliMusikk/<name>/                      then
-  //   %PROGRAMDATA%/DehliMusikk/<name>/
-  // Missing pack → embedded fallback.
+  // override the path via Assets::packFile, otherwise packFolders() says where
+  // to look. Missing pack → embedded fallback.
   juce::File packFile = assets.packFile;
   if (packFile == juce::File() && assets.name.isNotEmpty()) {
-    auto candidateIn =
-        [this](juce::File::SpecialLocationType root) -> juce::File {
-      auto dir = juce::File::getSpecialLocation(root);
-#if JUCE_MAC
-      dir = dir.getChildFile(
-          "Application Support"); // JUCE gives ~/Library and /Library on macOS
-#endif
-      return dir.getChildFile("DehliMusikk")
-          .getChildFile(assets.name)
-          .getChildFile("samples.pak");
-    };
-    packFile = candidateIn(juce::File::userApplicationDataDirectory);
-    if (!packFile.existsAsFile())
-      packFile = candidateIn(juce::File::commonApplicationDataDirectory);
+    for (const auto &folder : packFolders(assets.name)) {
+      packFile = folder.getChildFile("samples.pak");
+      if (packFile.existsAsFile())
+        break;
+    }
   }
   bool packUnreadable = false;
   if (packFile.existsAsFile()) {
