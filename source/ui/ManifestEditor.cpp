@@ -440,6 +440,7 @@ void ManifestEditor::rebuildUi() {
   // face lands behind it after uiComponent->toBack().
   bottomPanel.toBack();
   uiComponent->toBack();
+  applyReadingOrder();
 
   keyboard.setColourRanges(ui.keyboardColors);
   keyboard.setKeyTints(ui.whiteKeyTint, ui.blackKeyTint);
@@ -487,6 +488,30 @@ void ManifestEditor::applyPreferredSize() {
         w, h); // standalone window follows its content
 }
 
+// The order a screen reader and the Tab key take through the editor. JUCE goes
+// top to bottom, then left to right, which reads a question shown over the
+// face after whatever lies above it, and reads the wheel strip as both
+// headers, then the four wheels, then the four captions. Anything that asks
+// for an answer comes first, then the top bar, the face, each wheel group with
+// a caption before its wheel, the keyboard and the bottom strip. A hidden part
+// is skipped, so a question is read first only while it shows.
+void ManifestEditor::applyReadingOrder() {
+  juce::Component *const order[] = {
+      &updateQuestion, &missingNotice,   &modeChooser,     settingsPanel.get(),
+      &learnBanner,    &modeLabel,       &modeSelector,    &settingsButton,
+      &meterLabel,     &masterSlider,    &outputMeter,     uiComponent.get(),
+      &leftGroupLabel, &pitchWheelLabel, &pitchWheel,      &modWheelLabel,
+      &modWheel,       &rightGroupLabel, &pitchDriftLabel, &pitchDriftWheel,
+      &volDriftLabel,  &volDriftWheel,   &keyboard,        &creditLabel,
+      &versionLabel,   &releaseLink};
+  int position = 1;
+  for (auto *c : order) {
+    if (c != nullptr)
+      c->setExplicitFocusOrder(position);
+    ++position;
+  }
+}
+
 void ManifestEditor::openSettings() {
   if (settingsPanel == nullptr) {
     settingsPanel = std::make_unique<SettingsPanel>(
@@ -500,6 +525,7 @@ void ManifestEditor::openSettings() {
     settingsPanel->setLookAndFeel(&stripLnf);
     settingsPanel->onClose = [this] { settingsPanel->setVisible(false); };
     addChildComponent(*settingsPanel);
+    applyReadingOrder();
   }
   if (host.getUpdateCheck() != nullptr)
     settingsPanel->setUpdateCheckState(

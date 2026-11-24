@@ -205,6 +205,7 @@ private:
       const Menu &menu) const; // structural (Ui tree is copied in the renderer)
   void setParam(const char *paramId, float nativeValue);
   void openSettings();
+  void applyReadingOrder(); // the order a screen reader and Tab take
   void showContextMenu(const juce::String &paramId,
                        juce::Component *target); // empty id → Settings only
   void shiftKeyboardOctave(int deltaOctaves);

@@ -122,6 +122,38 @@ public:
           hostName = !withId->paramID.containsIgnoreCase("vibrato");
     expect(hostName, "the host names the button's parameter by its label too");
 
+    // A screen reader takes the editor in reading order: the top bar before
+    // the face, and each wheel group as its header, then a caption before its
+    // wheel, rather than every header, then every wheel, then every caption.
+    beginTest("the editor is read in order, a wheel after its caption");
+    const auto order = juce::FocusTraverser().getAllComponents(editor.get());
+    const auto indexOf = [&order](const juce::String &name) {
+      for (size_t i = 0; i < order.size(); ++i) {
+        auto *c = order[i];
+        auto text = c->getTitle();
+        if (auto *label = dynamic_cast<juce::Label *>(c))
+          text = label->getText();
+        else if (auto *button = dynamic_cast<juce::Button *>(c);
+                 button != nullptr && text.isEmpty())
+          text = button->getButtonText();
+        if (text == name)
+          return (int)i;
+      }
+      return -1;
+    };
+    const juce::StringArray strip{
+        "Controls", "Bend",  "Pitch bend",  "Mod",    "Mod wheel",
+        "Drift",    "Pitch", "Pitch drift", "Volume", "Volume drift"};
+    int previous = -1;
+    for (const auto &name : strip) {
+      const int at = indexOf(name);
+      expect(at > previous, name + " is read after the one before it");
+      previous = juce::jmax(previous, at);
+    }
+    expect(indexOf("Settings") >= 0 &&
+               indexOf("Settings") < indexOf("Envelope attack"),
+           "the top bar is read before the face");
+
     // A tool can put the face into a known state as a person would, and the
     // parameters follow, as from a click.
     beginTest("setValueById sets a knob, a button and a menu as a click does");
