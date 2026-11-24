@@ -152,6 +152,11 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
     c.first->setColour(juce::Label::textColourId, juce::Colour(0xfffdfeff));
     c.first->setFont(juce::Font(juce::FontOptions().withHeight(10.0f)));
     c.first->setInterceptsMouseClicks(false, false);
+    // The wheels are named in full for screen readers (Pitch bend, Mod
+    // wheel, Pitch drift, Volume drift), so these words would only be read a
+    // second time, and out of step with the wheels when a reader goes by
+    // position: both headers first, then the wheels, then the captions.
+    c.first->setAccessible(false);
     addAndMakeVisible(*c.first);
   }
 

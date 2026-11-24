@@ -123,9 +123,9 @@ public:
     expect(hostName, "the host names the button's parameter by its label too");
 
     // A screen reader takes the editor in reading order: the top bar before
-    // the face, and each wheel group as its header, then a caption before its
-    // wheel, rather than every header, then every wheel, then every caption.
-    beginTest("the editor is read in order, a wheel after its caption");
+    // the face, then the four wheels left to right. The headers and captions
+    // around the wheels repeat the wheels' own names, so they are not read.
+    beginTest("the editor is read in order, the wheels by their own names");
     const auto order = juce::FocusTraverser().getAllComponents(editor.get());
     const auto indexOf = [&order](const juce::String &name) {
       for (size_t i = 0; i < order.size(); ++i) {
@@ -141,14 +141,19 @@ public:
       }
       return -1;
     };
-    const juce::StringArray strip{
-        "Controls", "Bend",  "Pitch bend",  "Mod",    "Mod wheel",
-        "Drift",    "Pitch", "Pitch drift", "Volume", "Volume drift"};
     int previous = -1;
-    for (const auto &name : strip) {
+    for (const auto &name :
+         {"Pitch bend", "Mod wheel", "Pitch drift", "Volume drift"}) {
       const int at = indexOf(name);
-      expect(at > previous, name + " is read after the one before it");
+      expect(at > previous,
+             juce::String(name) + " is read after the one before it");
       previous = juce::jmax(previous, at);
+    }
+    for (const auto &name :
+         {"Controls", "Drift", "Bend", "Mod", "Pitch", "Volume"}) {
+      const int at = indexOf(name);
+      expect(at >= 0 && !order[(size_t)at]->isAccessible(),
+             juce::String(name) + " is left to the wheel it names");
     }
     expect(indexOf("Settings") >= 0 &&
                indexOf("Settings") < indexOf("Envelope attack"),
