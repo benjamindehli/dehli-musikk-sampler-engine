@@ -335,8 +335,8 @@ void ManifestEditor::parentHierarchyChanged() {
       juce::MessageManager::callAsync([self] {
         if (self != nullptr)
           if (auto *w = self->themedWindow.getComponent())
-            w->setContentComponentSize(self->preferredWidth(),
-                                       self->preferredHeight());
+            w->setContentComponentSize(self->windowSize().getWidth(),
+                                       self->windowSize().getHeight());
       });
     }
   }
@@ -485,12 +485,21 @@ void ManifestEditor::applyPreferredSize() {
   // height (per-mode cropTop), so this runs on every mode switch. No-op during
   // construction (not yet parented); the plugin editor sets the initial size
   // itself.
-  const int w = preferredWidth(), h = preferredHeight();
-  if (auto *parent = getParentComponent()) // the AudioProcessorEditor
-    parent->setSize(w, h);
+  if (onPreferredSizeChanged)
+    onPreferredSizeChanged(); // the window around keeps its own scale
+  else if (auto *parent = getParentComponent())
+    parent->setSize(preferredWidth(), preferredHeight());
   if (themedWindow != nullptr && host.manageTopLevelWindow())
     themedWindow->setContentComponentSize(
-        w, h); // standalone window follows its content
+        windowSize().getWidth(),
+        windowSize().getHeight()); // standalone window follows its content
+}
+
+juce::Rectangle<int> ManifestEditor::windowSize() const {
+  // The size of the plugin's window, which may be scaled from the editor's.
+  if (auto *parent = getParentComponent())
+    return parent->getLocalBounds();
+  return {preferredWidth(), preferredHeight()};
 }
 
 // The order a screen reader and the Tab key take through the editor. JUCE goes

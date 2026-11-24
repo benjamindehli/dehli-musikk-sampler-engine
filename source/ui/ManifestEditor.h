@@ -149,6 +149,10 @@ public:
   /** Natural size for this library (manifest ui dimensions + the top strip). */
   int preferredWidth() const;
   int preferredHeight() const;
+  /// Called when the active mode's size changes, so the window around the
+  /// editor can follow at its own scale. Without it the parent is resized to
+  /// the preferred size.
+  std::function<void()> onPreferredSizeChanged;
 
   bool handleKey(const juce::KeyPress
                      &key); // Z / X octave shift (host wrapper forwards too)
@@ -207,6 +211,7 @@ private:
   void openSettings();
   void applyReadingOrder();      // the order a screen reader and Tab take
   void announceUpdateQuestion(); // send a screen reader to the question
+  juce::Rectangle<int> windowSize() const; // the plugin window's, scaled
   void showContextMenu(const juce::String &paramId,
                        juce::Component *target); // empty id → Settings only
   void shiftKeyboardOctave(int deltaOctaves);
@@ -511,15 +516,34 @@ private:
 
 /** Thin AudioProcessorEditor that simply hosts a ManifestEditor. A product's
     createEditor can return one of these directly. */
+/// The plugin's window. The editor inside is laid out at the active mode's own
+/// size and scaled to fill the window, which can be dragged by its
+/// bottom-right corner from that size to twice it, keeping its shape. The
+/// scale is kept with the session.
 class ManifestPluginEditor : public juce::AudioProcessorEditor {
 public:
-  ManifestPluginEditor(juce::AudioProcessor &proc, ManifestEditorHost &host)
-      : juce::AudioProcessorEditor(proc), editor(host) {
+  static constexpr float kLargestScale = 2.0f;
+  static inline const juce::Identifier kScaleProperty{"uiScale"};
+
+  ManifestPluginEditor(juce::AudioProcessor &proc, ManifestEditorHost &h)
+      : juce::AudioProcessorEditor(proc), host(h), editor(h) {
+    setLookAndFeel(&cornerLook);
     addAndMakeVisible(editor);
-    setSize(editor.preferredWidth(), editor.preferredHeight());
+    editor.onPreferredSizeChanged = [this] { fitToEditor(); };
+    fitToEditor();
+    setResizable(true, true);
   }
 
-  void resized() override { editor.setBounds(getLocalBounds()); }
+  ~ManifestPluginEditor() override { setLookAndFeel(nullptr); }
+
+  void resized() override {
+    const int w = editor.preferredWidth(), h = editor.preferredHeight();
+    const auto scale =
+        juce::jlimit(1.0f, kLargestScale, (float)getWidth() / (float)w);
+    editor.setBounds(0, 0, w, h);
+    editor.setTransform(juce::AffineTransform::scale(scale));
+    host.getApvts().state.setProperty(kScaleProperty, scale, nullptr);
+  }
   bool keyPressed(const juce::KeyPress &key) override {
     return editor.handleKeyOrPlayNote(key);
   }
@@ -528,6 +552,30 @@ public:
   }
 
 private:
+  // The resize corner draws nothing: it is there to drag, without JUCE's
+  // diagonal lines over the instrument.
+  struct CornerLook : juce::LookAndFeel_V4 {
+    void drawCornerResizer(juce::Graphics &, int, int, bool, bool) override {}
+  };
+
+  // The window takes the active mode's shape, at the scale kept with the
+  // session, and may be dragged from that size to twice it.
+  void fitToEditor() {
+    const int w = editor.preferredWidth(), h = editor.preferredHeight();
+    const auto saved =
+        (float)(double)host.getApvts().state.getProperty(kScaleProperty, 1.0);
+    const auto scale = juce::jlimit(1.0f, kLargestScale, saved);
+    shape.setFixedAspectRatio((double)w / (double)h);
+    shape.setSizeLimits(w, h, juce::roundToInt((float)w * kLargestScale),
+                        juce::roundToInt((float)h * kLargestScale));
+    setConstrainer(&shape);
+    setSize(juce::roundToInt((float)w * scale),
+            juce::roundToInt((float)h * scale));
+  }
+
+  ManifestEditorHost &host;
+  CornerLook cornerLook; // before the editor, so it outlives the corner
+  juce::ComponentBoundsConstrainer shape;
   ManifestEditor editor;
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ManifestPluginEditor)
 };
