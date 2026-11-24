@@ -32,6 +32,7 @@ class ManifestPluginProcessor
     : public juce::AudioProcessor,
       public ManifestEditorHost,
       private juce::AudioProcessorValueTreeState::Listener,
+      private juce::AudioProcessorListener,
       private juce::AsyncUpdater {
 public:
   /** Everything a product brings to the shared processor. */
@@ -154,6 +155,15 @@ public:
     triggerAsyncUpdate(); // build even when the param value didn't change (mode
                           // 0)
   }
+  // The edit history: what a person did in the window, and nothing else. Each
+  // edit is one step, recorded from the host gestures the window opens around
+  // it, so automation and the host restoring a session never enter it. A
+  // restored session clears it. Message thread only.
+  void undo() override;
+  void redo() override;
+  bool canUndo() override;
+  bool canRedo() override;
+
   bool hasAirSupply() const override { return engine.hasAirSupply(); }
   bool hasKeyPressure() const override { return engine.hasKeyPressure(); }
   // Per-note pitch bend + pressure from MPE controllers (the engine detects
@@ -225,6 +235,31 @@ protected:
   bool isLoaded() const noexcept { return loaded; }
 
 private:
+  // See undo(). Not given to the value tree, since a tree with an undo manager
+  // records every write, automation included.
+  juce::UndoManager undoManager{4 * 1024 * 1024};
+  std::vector<float> editBaseline; // every parameter's value at a step's start
+  int openGestures = 0;
+  bool replaying = false; // an undo or redo is writing its values
+  // Set when the host restores a session from another thread, and acted on by
+  // the next call on the message thread.
+  std::atomic<bool> forgetEditsPending{false};
+  void beginEdit();
+  void endEdit();
+  void forgetEdits();
+  void forgetPendingEdits();
+
+  // juce::AudioProcessorListener, for this processor's own gestures.
+  void audioProcessorParameterChanged(juce::AudioProcessor *, int,
+                                      float) override {}
+  void audioProcessorChanged(
+      juce::AudioProcessor *,
+      const juce::AudioProcessorListener::ChangeDetails &) override {}
+  void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor *,
+                                                 int) override;
+  void audioProcessorParameterChangeGestureEnd(juce::AudioProcessor *,
+                                               int) override;
+
   void loadEmbeddedLibrary();
   void setMidiMapping(int cc, const juce::String &paramId); // message thread
   void rebuildCcTargets();                                  // message thread

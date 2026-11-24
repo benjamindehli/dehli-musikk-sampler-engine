@@ -165,6 +165,12 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
   // nothing.
   settingsButton.onClick = [this] { openSettings(); };
   addAndMakeVisible(settingsButton);
+  undoButton.onClick = [this] { host.undo(); };
+  redoButton.onClick = [this] { host.redo(); };
+  undoButton.setTooltip("Undo (Cmd+Z)");
+  redoButton.setTooltip("Redo (Shift+Cmd+Z)");
+  addAndMakeVisible(undoButton);
+  addAndMakeVisible(redoButton);
 
   // MIDI-learn banner: shown while learn is armed (the timer tracks the host's
   // state); clicking it cancels, as does Esc.
@@ -272,6 +278,8 @@ ManifestEditor::ManifestEditor(ManifestEditorHost &h)
   stripLnf.setColourScheme(grayscale);
   for (juce::Component *c : {static_cast<juce::Component *>(&modeSelector),
                              static_cast<juce::Component *>(&settingsButton),
+                             static_cast<juce::Component *>(&undoButton),
+                             static_cast<juce::Component *>(&redoButton),
                              static_cast<juce::Component *>(&masterSlider)})
     c->setLookAndFeel(&stripLnf);
 
@@ -307,6 +315,12 @@ ManifestEditor::~ManifestEditor() {
   volDriftWheel.setLookAndFeel(nullptr);
   modeSelector.setLookAndFeel(nullptr);
   settingsButton.setLookAndFeel(nullptr);
+  undoButton.setLookAndFeel(nullptr);
+  redoButton.setLookAndFeel(nullptr);
+  // An edit still open as the window closes, such as a drag cut short, ends
+  // here, so the host's gestures and the history close too.
+  while (editDepth > 0)
+    endEdit();
   if (settingsPanel != nullptr)
     settingsPanel->setLookAndFeel(nullptr);
   modeChooser.setLookAndFeel(nullptr);
@@ -362,6 +376,9 @@ int ManifestEditor::preferredHeight() const {
 }
 
 void ManifestEditor::rebuildUi() {
+  // A drag on the old face never sees its release, so its edit ends here.
+  while (editDepth > 0)
+    endEdit();
   uiComponent.reset();
 
   // New mode = new control set → the refresh caches' Control* keys / button
@@ -436,6 +453,8 @@ void ManifestEditor::rebuildUi() {
                                            juce::Component &w) {
     showContextMenu(params::buttonParamId(b, idx), &w);
   };
+  uiComponent->onEditBegin = [this] { beginEdit(); };
+  uiComponent->onEditEnd = [this] { endEdit(); };
   uiComponent->onBackgroundRightClick = [this] {
     showContextMenu({}, nullptr);
   };
@@ -511,13 +530,13 @@ juce::Rectangle<int> ManifestEditor::windowSize() const {
 // is skipped, so a question is read first only while it shows.
 void ManifestEditor::applyReadingOrder() {
   juce::Component *const order[] = {
-      &updateQuestion, &missingNotice,   &modeChooser,     settingsPanel.get(),
-      &learnBanner,    &modeLabel,       &modeSelector,    &settingsButton,
-      &meterLabel,     &masterSlider,    &outputMeter,     uiComponent.get(),
-      &leftGroupLabel, &pitchWheelLabel, &pitchWheel,      &modWheelLabel,
-      &modWheel,       &rightGroupLabel, &pitchDriftLabel, &pitchDriftWheel,
-      &volDriftLabel,  &volDriftWheel,   &keyboard,        &creditLabel,
-      &versionLabel,   &releaseLink};
+      &updateQuestion,  &missingNotice,    &modeChooser,    settingsPanel.get(),
+      &learnBanner,     &modeLabel,        &modeSelector,   &settingsButton,
+      &undoButton,      &redoButton,       &meterLabel,     &masterSlider,
+      &outputMeter,     uiComponent.get(), &leftGroupLabel, &pitchWheelLabel,
+      &pitchWheel,      &modWheelLabel,    &modWheel,       &rightGroupLabel,
+      &pitchDriftLabel, &pitchDriftWheel,  &volDriftLabel,  &volDriftWheel,
+      &keyboard,        &creditLabel,      &versionLabel,   &releaseLink};
   int position = 1;
   for (auto *c : order) {
     if (c != nullptr)
@@ -582,8 +601,31 @@ void ManifestEditor::showContextMenu(const juce::String &paramId,
 }
 
 void ManifestEditor::setParam(const char *paramId, float nativeValue) {
-  if (auto *p = host.getApvts().getParameter(paramId))
-    p->setValueNotifyingHost(p->convertTo0to1(nativeValue));
+  auto *p = host.getApvts().getParameter(paramId);
+  if (p == nullptr)
+    return;
+  // A change outside a marked edit, such as one from a screen reader, is an
+  // edit of its own.
+  const bool alone = editDepth == 0;
+  if (alone)
+    beginEdit();
+  if (std::find(gesturing.begin(), gesturing.end(), p) == gesturing.end()) {
+    p->beginChangeGesture();
+    gesturing.push_back(p);
+  }
+  p->setValueNotifyingHost(p->convertTo0to1(nativeValue));
+  if (alone)
+    endEdit();
+}
+
+void ManifestEditor::beginEdit() { ++editDepth; }
+
+void ManifestEditor::endEdit() {
+  if (editDepth == 0 || --editDepth > 0)
+    return;
+  for (auto *p : gesturing)
+    p->endChangeGesture();
+  gesturing.clear();
 }
 
 bool ManifestEditor::isFirstMenu(const Menu &menu) const {
@@ -659,6 +701,8 @@ void ManifestEditor::refreshWidgets() {
 
 void ManifestEditor::timerCallback() {
   refreshWidgets();
+  undoButton.setEnabled(host.canUndo());
+  redoButton.setEnabled(host.canRedo());
   announceUpdateQuestion();
   float peakL = 0.0f, peakR = 0.0f;
   host.readOutputPeaks(peakL, peakR);
@@ -710,6 +754,15 @@ void ManifestEditor::timerCallback() {
 }
 
 bool ManifestEditor::handleKey(const juce::KeyPress &key) {
+  // Cmd+Z and Shift+Cmd+Z (Ctrl elsewhere), ahead of Z for the octave.
+  if (key.getModifiers().isCommandDown() &&
+      (key.getKeyCode() == 'Z' || key.getKeyCode() == 'z')) {
+    if (key.getModifiers().isShiftDown())
+      host.redo();
+    else
+      host.undo();
+    return true;
+  }
   if (key == juce::KeyPress::escapeKey && host.isMidiLearnActive()) {
     host.cancelMidiLearn();
     learnBanner.setVisible(false);
@@ -813,6 +866,10 @@ void ManifestEditor::resized() {
   }
   settingsButton.setBounds(
       top.removeFromLeft(84).withSizeKeepingCentre(76, kCtrlH));
+  undoButton.setBounds(
+      top.removeFromLeft(60).withSizeKeepingCentre(56, kCtrlH));
+  redoButton.setBounds(
+      top.removeFromLeft(60).withSizeKeepingCentre(56, kCtrlH));
 
   // Top-right group laid out left→right — "Out" label · master fader · level
   // meter.

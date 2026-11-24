@@ -45,6 +45,10 @@ public:
   std::function<void(const Button &, int buttonIndex, juce::Component &)>
       onButtonRightClick;
   std::function<void()> onBackgroundRightClick;
+  /** A person's edit starts and ends: a knob drag, a button press with all it
+     sets off, a menu choice with the values it sets. Everything changed in
+     between belongs to that one edit. */
+  std::function<void()> onEditBegin, onEditEnd;
 
   /** Push externally-held values (e.g. host automation / restored params) into
      the widgets WITHOUT firing the change callbacks. Each callback is asked,
@@ -97,6 +101,19 @@ public:
       override; // background right-click → context menu
 
 private:
+  // Marks one edit for as long as it lives.
+  struct EditScope {
+    ManifestUiComponent &ui;
+    explicit EditScope(ManifestUiComponent &u) : ui(u) {
+      if (ui.onEditBegin)
+        ui.onEditBegin();
+    }
+    ~EditScope() {
+      if (ui.onEditEnd)
+        ui.onEditEnd();
+    }
+  };
+
   class FilmstripKnob;
   class ImageStateButton;
   class SwappableImage;
@@ -162,9 +179,9 @@ private:
   juce::Image background;
   juce::Image overlay; // optional, drawn over the background AND all controls
   bool overlayInstrumentScope{
-      false};             // overlay reaches over the keyboard → editor draws it
+      false}; // overlay reaches over the keyboard → editor draws it
   bool overlayShown{true}; // setOverlayShown(false) leaves it out
-  float bgCropFrac{0.0f}; // fraction of the background trimmed off the top
+  float bgCropFrac{0.0f};  // fraction of the background trimmed off the top
 
   // Per-plugin dropdown-popup styling (ui.menuPopup*). Assigned to the select
   // ComboBoxes so their popup list uses these PopupMenu colours; the

@@ -1,5 +1,7 @@
 #include "ManifestPluginProcessor.h"
 
+#include <utility>
+
 #include <cmath>
 
 namespace dm {
@@ -67,9 +69,13 @@ ManifestPluginProcessor::ManifestPluginProcessor(Assets a)
       params::id::airSupply); // null unless declared
   prmKeyPressure = apvts->getRawParameterValue(
       params::id::keyPressure); // null unless declared
+
+  // Listens to its own gestures to tell a person's edits from automation.
+  addListener(this);
 }
 
 ManifestPluginProcessor::~ManifestPluginProcessor() {
+  removeListener(this);
   if (apvts != nullptr) {
     apvts->removeParameterListener(params::id::mode, this);
     apvts->removeParameterListener(params::id::chordOrder, this);
@@ -560,6 +566,12 @@ void ManifestPluginProcessor::setStateInformation(const void *data,
 
       apvts->replaceState(tree);
       rebuildCcTargets(); // user MIDI mappings ride along in the state tree
+      // The steps before belong to another session. Cleared now on the
+      // message thread, or by the next call that reads the history.
+      if (juce::MessageManager::existsAndIsCurrentThread())
+        forgetEdits();
+      else
+        forgetEditsPending.store(true);
       // A DAW session restore names the mode — load it without the chooser.
       // The Standalone restores state on every launch, but launching the app
       // is a fresh session in spirit: keep the chooser (last mode preselected).
@@ -567,6 +579,142 @@ void ManifestPluginProcessor::setStateInformation(const void *data,
         modeChoicePending = false;
       triggerAsyncUpdate(); // restore active mode to match the Mode param
     }
+}
+
+// ---- The edit history -------------------------------------------------------
+
+namespace {
+// One step in the history: the normalised values of everything that moved in
+// one edit.
+class ParameterEdit final : public juce::UndoableAction {
+public:
+  struct Change {
+    juce::RangedAudioParameter *param;
+    float before, after;
+  };
+
+  explicit ParameterEdit(std::vector<Change> movedIn)
+      : moved(std::move(movedIn)) {}
+
+  // Nothing the first time, since a step is pushed after its change has
+  // already happened. A redo writes the values.
+  bool perform() override {
+    if (std::exchange(pushed, true))
+      apply(&Change::after);
+    return true;
+  }
+
+  bool undo() override {
+    apply(&Change::before);
+    return true;
+  }
+
+  int getSizeInUnits() override { return (int)(moved.size() * sizeof(Change)); }
+
+private:
+  // Each value inside a gesture of its own, so a host that records automation
+  // sees an edit, as it would from the control.
+  void apply(float Change::*which) {
+    for (const auto &change : moved) {
+      change.param->beginChangeGesture();
+      change.param->setValueNotifyingHost(change.*which);
+      change.param->endChangeGesture();
+    }
+  }
+
+  std::vector<Change> moved;
+  bool pushed = false;
+};
+} // namespace
+
+void ManifestPluginProcessor::beginEdit() {
+  forgetPendingEdits();
+  editBaseline.clear();
+  for (const auto *param : getParameters())
+    editBaseline.push_back(param->getValue());
+}
+
+void ManifestPluginProcessor::endEdit() {
+  const auto &params = getParameters();
+  if (editBaseline.size() != (size_t)params.size()) {
+    editBaseline.clear();
+    return;
+  }
+  std::vector<ParameterEdit::Change> moved;
+  for (int i = 0; i < params.size(); ++i) {
+    const auto before = editBaseline[(size_t)i];
+    const auto after = params[i]->getValue();
+    // Exactly, not within a tolerance: these are stored values, so a control
+    // moved and moved back holds its original bits. Two comparisons so a
+    // float-equality warning does not fire.
+    if (!(before < after) && !(after < before))
+      continue;
+    if (auto *ranged = dynamic_cast<juce::RangedAudioParameter *>(params[i]))
+      moved.push_back({ranged, before, after});
+  }
+  editBaseline.clear();
+  if (moved.empty())
+    return;
+  // Its own transaction, so one edit is one step.
+  undoManager.beginNewTransaction();
+  undoManager.perform(new ParameterEdit(std::move(moved)));
+}
+
+void ManifestPluginProcessor::forgetEdits() {
+  undoManager.clearUndoHistory();
+  openGestures = 0;
+  editBaseline.clear();
+}
+
+void ManifestPluginProcessor::forgetPendingEdits() {
+  if (forgetEditsPending.exchange(false))
+    forgetEdits();
+}
+
+void ManifestPluginProcessor::undo() {
+  forgetPendingEdits();
+  // An edit still open would take its baseline before the step undone.
+  if (openGestures == 0) {
+    // The step opens gestures for the host, which are not a new edit.
+    const juce::ScopedValueSetter<bool> guard(replaying, true);
+    undoManager.undo();
+  }
+}
+
+void ManifestPluginProcessor::redo() {
+  forgetPendingEdits();
+  if (openGestures == 0) {
+    const juce::ScopedValueSetter<bool> guard(replaying, true);
+    undoManager.redo();
+  }
+}
+
+bool ManifestPluginProcessor::canUndo() {
+  forgetPendingEdits();
+  return undoManager.canUndo();
+}
+
+bool ManifestPluginProcessor::canRedo() {
+  forgetPendingEdits();
+  return undoManager.canRedo();
+}
+
+void ManifestPluginProcessor::audioProcessorParameterChangeGestureBegin(
+    juce::AudioProcessor *, int) {
+  // Only on the message thread. A host may open a gesture from the audio
+  // thread, and taking a baseline there would allocate.
+  if (replaying || !juce::MessageManager::existsAndIsCurrentThread())
+    return;
+  if (openGestures++ == 0)
+    beginEdit();
+}
+
+void ManifestPluginProcessor::audioProcessorParameterChangeGestureEnd(
+    juce::AudioProcessor *, int) {
+  if (replaying || !juce::MessageManager::existsAndIsCurrentThread())
+    return;
+  if (openGestures > 0 && --openGestures == 0)
+    endEdit();
 }
 
 } // namespace dm

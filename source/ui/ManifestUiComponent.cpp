@@ -4,6 +4,7 @@
 #include <model/NoteValues.h> // note-value table for the tempo-synced StrumSpeed detents
 #include <model/TableEval.h> // shared evalTableLinear (VISIBLE step tables / OPACITY ramps)
 #include <set>
+#include <utility>
 #include <vector>
 
 namespace dm {
@@ -98,6 +99,8 @@ public:
       onShowValue; // live value readout
   std::function<void()> onHideValue;
   std::function<void()> onRightClick; // context menu (MIDI Learn / Settings)
+  // A drag, from the press to the release, is one edit.
+  std::function<void()> onDragStart, onDragEnd;
 
   double getValue() const noexcept { return value; }
 
@@ -165,6 +168,10 @@ public:
       return;
     }
 
+    dragging = true;
+    if (onDragStart)
+      onDragStart();
+
     // Option (macOS) / Ctrl (Windows) + click resets to the manifest default
     // value.
 #if JUCE_MAC
@@ -211,6 +218,8 @@ public:
   void mouseUp(const juce::MouseEvent &) override {
     if (onHideValue)
       onHideValue();
+    if (std::exchange(dragging, false) && onDragEnd)
+      onDragEnd();
   }
 
   // To a screen reader the knob is a slider: it reads the value as the drag
@@ -268,6 +277,7 @@ private:
   std::map<int, juce::String> labels;
   float dragStartX{0.0f}, dragStartY{0.0f};
   double dragStartVal{0.0};
+  bool dragging = false; // a press that started an edit
 };
 
 // ---------------------------------------------------------------------------
@@ -513,6 +523,14 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
         onControlChanged(*cp, v);
       applyVisibilityBindings(*cp, v); // drive any LED segment images
     };
+    knob->onDragStart = [this] {
+      if (onEditBegin)
+        onEditBegin();
+    };
+    knob->onDragEnd = [this] {
+      if (onEditEnd)
+        onEditEnd();
+    };
     knob->onShowValue = [this](juce::Component &k, const juce::String &t) {
       showValueBubble(k, t);
     };
@@ -566,7 +584,10 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
     namesInUse.insert(words.name);
     const Button *bp = &b;
     const int bi = i;
-    btn->onChange = [this, bp, bi](int s) { handleButton(*bp, bi, s); };
+    btn->onChange = [this, bp, bi](int s) {
+      const EditScope edit(*this); // the press and all it sets off
+      handleButton(*bp, bi, s);
+    };
     btn->onRightClick = [this, bp, bi, btn] {
       if (onButtonRightClick)
         onButtonRightClick(*bp, bi, *btn);
@@ -627,6 +648,7 @@ ManifestUiComponent::ManifestUiComponent(const Ui &ui,
         juce::dontSendNotification);
     const Menu *mp = &m;
     combo->onChange = [this, mp, combo] {
+      const EditScope edit(*this); // the choice and the values it sets
       const int idx = combo->getSelectedId() - 1;
       if (onMenuChanged)
         onMenuChanged(*mp, idx);

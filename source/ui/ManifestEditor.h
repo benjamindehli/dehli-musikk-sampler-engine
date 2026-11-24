@@ -93,6 +93,12 @@ public:
   virtual bool needsModeChoice() const { return false; }
   virtual void confirmModeChoice(int /*index*/) {}
 
+  // ── Undo and Redo: what a person changed in the window ─────────────────
+  virtual void undo() {}
+  virtual void redo() {}
+  virtual bool canUndo() { return false; }
+  virtual bool canRedo() { return false; }
+
   // ── MIDI learn (right-click a controller) ───────────────────────────────
   // startMidiLearn arms capture: the next incoming CC (on the audio thread)
   // maps to `paramId` and learn ends. isMidiLearnActive turns false on
@@ -411,7 +417,15 @@ private:
       stripLnf; // grayscale scheme for the top-strip combo/steppers
   juce::Component::SafePointer<juce::DocumentWindow>
       themedWindow; // standalone window we styled (if any)
-  juce::TextButton settingsButton{"Settings"};  // opens the settings overlay
+  juce::TextButton settingsButton{"Settings"}; // opens the settings overlay
+  juce::TextButton undoButton{"Undo"}, redoButton{"Redo"};
+  // A person's edit in progress: how deep the edits that mark it are nested,
+  // and the parameters it has opened a host gesture on. They all close when
+  // the outermost edit ends, so the host and the history see one edit.
+  int editDepth = 0;
+  std::vector<juce::RangedAudioParameter *> gesturing;
+  void beginEdit();
+  void endEdit();
   std::unique_ptr<SettingsPanel> settingsPanel; // created lazily on first open
   juce::TextButton learnBanner; // "MIDI Learn armed" banner; click = cancel
 

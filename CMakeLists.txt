@@ -110,6 +110,7 @@ if(DMSE_BUILD_TESTS AND COMMAND juce_add_console_app)
         tests/StateRestoreTests.cpp
         tests/UpdateCheckTests.cpp
         tests/EditorScaleTests.cpp
+        tests/UndoTests.cpp
     )
 
     # The tests and the engine they link, built with the address and undefined
