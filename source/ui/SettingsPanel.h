@@ -190,6 +190,43 @@ public:
 
   std::function<void()> onClose;
 
+  /** Adds the Window size row, for an editor inside the scaling plugin window.
+      onChosen gets the chosen size in percent. */
+  void showWindowSize(std::function<void(int)> onChosen) {
+    if (hasWindowSize)
+      return;
+    hasWindowSize = true;
+    onWindowSizeChosen = std::move(onChosen);
+    windowSizeLabel.setText("Window size", juce::dontSendNotification);
+    windowSizeLabel.setColour(juce::Label::textColourId,
+                              juce::Colour(0xffe8e9ea));
+    windowSizeLabel.setFont(juce::Font(juce::FontOptions(13.0f)));
+    addAndMakeVisible(windowSizeLabel);
+    for (const int percent : kWindowSizes)
+      windowSizeBox.addItem(juce::String(percent) + "%", percent);
+    windowSizeBox.setTitle("Window size");
+    windowSizeBox.setTooltip(
+        "The size of the plugin window. Dragging its bottom-right corner "
+        "sets any size between these.");
+    windowSizeBox.onChange = [this] {
+      if (const int percent = windowSizeBox.getSelectedId();
+          percent > 0 && onWindowSizeChosen)
+        onWindowSizeChosen(percent);
+    };
+    addAndMakeVisible(windowSizeBox);
+    resized();
+  }
+
+  /** Shows the window's size, which a dragged corner may have set between the
+      listed ones. */
+  void setWindowSize(int percent) {
+    if (windowSizeBox.indexOfItemId(percent) >= 0)
+      windowSizeBox.setSelectedId(percent, juce::dontSendNotification);
+    else
+      windowSizeBox.setText(juce::String(percent) + "%",
+                            juce::dontSendNotification);
+  }
+
   /** The update check setting, shown when the panel was made with
       showUpdateCheck. */
   std::function<void(bool)> onUpdateCheckToggled;
@@ -208,7 +245,7 @@ public:
   void resized() override {
     const int rowH = 30, labelW = 130, pad = 14;
     const int rows = 7 + (hasAirSupply ? 1 : 0) + (hasKeyPressure ? 1 : 0) +
-                     (hasUpdateCheck ? 1 : 0) +
+                     (hasWindowSize ? 1 : 0) + (hasUpdateCheck ? 1 : 0) +
                      (hasSequencer ? 5 : 0); // + title row; seq adds header + 4
     const int panelW = 330, panelH = pad * 2 + rowH * (rows + 1);
     panelRect = getLocalBounds().withSizeKeepingCentre(panelW, panelH);
@@ -235,6 +272,8 @@ public:
       row(airLabel, airToggle);
     if (hasKeyPressure)
       row(keyPressureLabel, keyPressureToggle);
+    if (hasWindowSize)
+      row(windowSizeLabel, windowSizeBox);
     if (hasUpdateCheck)
       row(updateLabel, updateToggle);
     if (hasSequencer) {
@@ -273,6 +312,11 @@ private:
   const bool hasAirSupply;
   const bool hasKeyPressure;
   const bool hasUpdateCheck;
+  bool hasWindowSize = false;
+  static constexpr int kWindowSizes[] = {100, 125, 150, 175, 200};
+  std::function<void(int)> onWindowSizeChosen;
+  juce::Label windowSizeLabel;
+  juce::ComboBox windowSizeBox;
   const bool
       standalone; // from the processor's wrapperType (the reliable source)
   juce::Rectangle<int> panelRect;

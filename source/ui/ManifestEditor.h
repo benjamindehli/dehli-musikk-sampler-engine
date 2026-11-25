@@ -159,6 +159,11 @@ public:
   /// editor can follow at its own scale. Without it the parent is resized to
   /// the preferred size.
   std::function<void()> onPreferredSizeChanged;
+  /// When set, Settings offers a choice of window sizes and calls this with
+  /// the chosen scale, 1 being the preferred size.
+  std::function<void(float)> onWindowScaleChosen;
+  /// The window around was resized, so a shown size is brought up to date.
+  void windowScaleChanged();
 
   bool handleKey(const juce::KeyPress
                      &key); // Z / X octave shift (host wrapper forwards too)
@@ -536,7 +541,10 @@ private:
 /// scale is kept with the session.
 ///
 /// The corner is the editor's own rather than JUCE's, which is a fixed 18
-/// pixels and easy to miss since it draws nothing.
+/// pixels and easy to miss since it draws nothing. Settings also offers a
+/// choice of sizes, since a host may not let its own window resize the plugin:
+/// Logic resizes its window around an AU, and JUCE's AU wrapper sets the
+/// editor back to its own size.
 class ManifestPluginEditor : public juce::AudioProcessorEditor {
 public:
   static constexpr float kLargestScale = 2.0f;
@@ -550,6 +558,10 @@ public:
     corner.setAlwaysOnTop(true);
     addAndMakeVisible(corner);
     editor.onPreferredSizeChanged = [this] { fitToEditor(); };
+    editor.onWindowScaleChosen = [this](float scale) {
+      setSize(juce::roundToInt((float)editor.preferredWidth() * scale),
+              juce::roundToInt((float)editor.preferredHeight() * scale));
+    };
     fitToEditor();
     setResizable(true, false); // the host may resize, the corner is ours
   }
@@ -566,6 +578,7 @@ public:
     corner.setBounds(getLocalBounds()
                          .removeFromBottom(kCornerSize)
                          .removeFromRight(kCornerSize));
+    editor.windowScaleChanged();
   }
   bool keyPressed(const juce::KeyPress &key) override {
     return editor.handleKeyOrPlayNote(key);

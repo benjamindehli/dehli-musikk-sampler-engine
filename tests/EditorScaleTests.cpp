@@ -6,6 +6,7 @@
 #include <ui/ManifestEditor.h>
 
 #include <cstring>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -84,6 +85,43 @@ public:
                    juce::Rectangle<int>(window->getWidth() - size,
                                         window->getHeight() - size, size, size),
                corner->getBounds().toString());
+      }
+    }
+
+    beginTest("Settings offers window sizes and shows the dragged one");
+    {
+      std::function<void(juce::Component &)> collect;
+      juce::Array<juce::Component *> all;
+      collect = [&](juce::Component &c) {
+        for (auto *child : c.getChildren()) {
+          all.add(child);
+          collect(*child);
+        }
+      };
+      collect(*window);
+      for (auto *c : all)
+        if (auto *b = dynamic_cast<juce::TextButton *>(c))
+          if (b->getButtonText() == "Settings" && b->onClick)
+            b->onClick();
+      all.clear();
+      collect(*window);
+      juce::ComboBox *sizes = nullptr;
+      for (auto *c : all)
+        if (auto *box = dynamic_cast<juce::ComboBox *>(c))
+          if (box->getTitle() == "Window size")
+            sizes = box;
+      expect(sizes != nullptr, "Settings has a Window size choice");
+      if (sizes != nullptr) {
+        expectEquals(sizes->getText(), juce::String("150%"),
+                     "the dragged size is shown");
+        sizes->setSelectedId(200, juce::sendNotificationSync);
+        expectEquals(window->getWidth(), w * 2, "choosing 200% resizes");
+        expectEquals(window->getHeight(), h * 2);
+        window->setSize(w * 137 / 100, h * 137 / 100);
+        expectEquals(sizes->getText(), juce::String("137%"),
+                     "a size between the listed ones is shown as it is");
+        sizes->setSelectedId(150, juce::sendNotificationSync);
+        expectEquals(window->getWidth(), w * 3 / 2);
       }
     }
 

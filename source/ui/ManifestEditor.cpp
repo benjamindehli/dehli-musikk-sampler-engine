@@ -514,6 +514,12 @@ void ManifestEditor::applyPreferredSize() {
         windowSize().getHeight()); // standalone window follows its content
 }
 
+void ManifestEditor::windowScaleChanged() {
+  if (settingsPanel != nullptr && onWindowScaleChosen)
+    settingsPanel->setWindowSize(juce::roundToInt(
+        100.0f * (float)windowSize().getWidth() / (float)preferredWidth()));
+}
+
 juce::Rectangle<int> ManifestEditor::windowSize() const {
   // The size of the plugin's window, which may be scaled from the editor's.
   if (auto *parent = getParentComponent())
@@ -555,11 +561,17 @@ void ManifestEditor::openSettings() {
       UpdateSettings(host.getPluginName()).setOffered(true);
       setUpdateCheckAllowed(allowed);
     };
+    if (onWindowScaleChosen)
+      settingsPanel->showWindowSize([this](int percent) {
+        if (onWindowScaleChosen)
+          onWindowScaleChosen((float)percent / 100.0f);
+      });
     settingsPanel->setLookAndFeel(&stripLnf);
     settingsPanel->onClose = [this] { settingsPanel->setVisible(false); };
     addChildComponent(*settingsPanel);
     applyReadingOrder();
   }
+  windowScaleChanged();
   if (host.getUpdateCheck() != nullptr)
     settingsPanel->setUpdateCheckState(
         UpdateSettings(host.getPluginName()).allowed());
