@@ -26,7 +26,7 @@ bool SamplerEngine::strumSynced() const {
 }
 
 juce::String SamplerEngine::getVersion() {
-  return "dehli-musikk-sampler-engine 1.1.0";
+  return "dehli-musikk-sampler-engine 1.2.0";
 }
 
 SamplerEngine::ModeRender *
