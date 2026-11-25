@@ -69,6 +69,24 @@ public:
         (float)(double)p->getApvts().state.getProperty("uiScale", 1.0), 1.5f,
         1.0e-4f);
 
+    beginTest("one resize corner, larger than JUCE's, in the bottom right");
+    {
+      juce::Array<juce::Component *> corners;
+      for (auto *child : window->getChildren())
+        if (dynamic_cast<juce::ResizableCornerComponent *>(child) != nullptr)
+          corners.add(child);
+      expectEquals(corners.size(), 1, "JUCE's own corner is not added too");
+      if (auto *corner = corners.getFirst()) {
+        const auto size = dm::ManifestPluginEditor::kCornerSize;
+        expect(size > 18, "larger than JUCE's 18 pixels");
+        expect(corner->isVisible() && corner->isAlwaysOnTop());
+        expect(corner->getBounds() ==
+                   juce::Rectangle<int>(window->getWidth() - size,
+                                        window->getHeight() - size, size, size),
+               corner->getBounds().toString());
+      }
+    }
+
     beginTest("a window opened later comes back at the kept scale");
     window.reset();
     std::unique_ptr<juce::AudioProcessorEditor> again(p->createEditor());

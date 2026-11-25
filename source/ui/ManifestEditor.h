@@ -534,18 +534,24 @@ private:
 /// size and scaled to fill the window, which can be dragged by its
 /// bottom-right corner from that size to twice it, keeping its shape. The
 /// scale is kept with the session.
+///
+/// The corner is the editor's own rather than JUCE's, which is a fixed 18
+/// pixels and easy to miss since it draws nothing.
 class ManifestPluginEditor : public juce::AudioProcessorEditor {
 public:
   static constexpr float kLargestScale = 2.0f;
+  static constexpr int kCornerSize = 24;
   static inline const juce::Identifier kScaleProperty{"uiScale"};
 
   ManifestPluginEditor(juce::AudioProcessor &proc, ManifestEditorHost &h)
       : juce::AudioProcessorEditor(proc), host(h), editor(h) {
     setLookAndFeel(&cornerLook);
     addAndMakeVisible(editor);
+    corner.setAlwaysOnTop(true);
+    addAndMakeVisible(corner);
     editor.onPreferredSizeChanged = [this] { fitToEditor(); };
     fitToEditor();
-    setResizable(true, true);
+    setResizable(true, false); // the host may resize, the corner is ours
   }
 
   ~ManifestPluginEditor() override { setLookAndFeel(nullptr); }
@@ -557,6 +563,9 @@ public:
     editor.setBounds(0, 0, w, h);
     editor.setTransform(juce::AffineTransform::scale(scale));
     host.getApvts().state.setProperty(kScaleProperty, scale, nullptr);
+    corner.setBounds(getLocalBounds()
+                         .removeFromBottom(kCornerSize)
+                         .removeFromRight(kCornerSize));
   }
   bool keyPressed(const juce::KeyPress &key) override {
     return editor.handleKeyOrPlayNote(key);
@@ -591,6 +600,7 @@ private:
   CornerLook cornerLook; // before the editor, so it outlives the corner
   juce::ComponentBoundsConstrainer shape;
   ManifestEditor editor;
+  juce::ResizableCornerComponent corner{this, &shape};
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(ManifestPluginEditor)
 };
 
